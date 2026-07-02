@@ -36,9 +36,9 @@ impl<'a> ParseCtx<'a> {
   lifetimes — `parse` takes `&ParseCtx`, returns owned data).
 
 ## Acceptance criteria
-- [ ] `ParseCtx` implemented; unit test with layers `[eth, ipv4, gre, ipv4, tcp]` asserts
+- [x] `ParseCtx` implemented; unit test with layers `[eth, ipv4, gre, ipv4, tcp]` asserts
       `layer("ipv4")` returns the record at index 3 (innermost) and `prev()` from a
       hypothetical next parse sees `tcp`.
-- [ ] `field()` returns `None` (not panic/error) for absent protocol or field.
-- [ ] Lifetime design proven: a plugin cannot retain `&LayerRecord` beyond `parse` (compile-
+- [x] `field()` returns `None` (not panic/error) for absent protocol or field.
+- [x] Lifetime design proven: a plugin cannot retain `&LayerRecord` beyond `parse` (compile-
       fail doctest or documented by construction).

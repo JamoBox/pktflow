@@ -12,7 +12,7 @@ used unchanged by every later task.
 - [x] [01.1 Metadata values & field maps](01-metadata-values.md) — `Value`, `FieldMap` (FR-18)
 - [x] [01.2 Layers & stacks](02-layers-and-stacks.md) — `LayerRecord`, `PacketView` (FR-10)
 - [x] [01.3 Extraction depth](03-extraction-depth.md) — four levels + flow-key floor (FR-16)
-- [ ] [01.4 Parse context](04-parse-context.md) — cross-layer lookup, innermost-wins (FR-17)
+- [x] [01.4 Parse context](04-parse-context.md) — cross-layer lookup, innermost-wins (FR-17)
 
 ## Definition of done
 
