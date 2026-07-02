@@ -43,9 +43,9 @@ impl FieldMap {
   layer already scopes it).
 
 ## Acceptance criteria
-- [ ] `Value` and `FieldMap` implemented with the bounds above; unit tests for replace-on-
+- [x] `Value` and `FieldMap` implemented with the bounds above; unit tests for replace-on-
       duplicate, ordering stability, and `Hash` consistency across equal values.
-- [ ] No heap allocation for a `Bytes` value of ≤16 bytes (asserted via a test or documented
+- [x] No heap allocation for a `Bytes` value of ≤16 bytes (asserted via a test or documented
       by the chosen SmallVec bound).
-- [ ] `serde::Serialize` implemented (behind a `serde` feature) producing stable JSON:
+- [x] `serde::Serialize` implemented (behind a `serde` feature) producing stable JSON:
       `Bytes` as lowercase hex string, others as native JSON types.

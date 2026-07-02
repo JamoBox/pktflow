@@ -6,6 +6,15 @@ edition.workspace = true
 
 [dependencies]
 thiserror.workspace = true
+smallvec.workspace = true
+compact_str.workspace = true
+serde = { workspace = true, optional = true }
+
+[features]
+serde = ["dep:serde"]
+
+[dev-dependencies]
+serde_json.workspace = true
 
 [lints]
 workspace = true

@@ -8,10 +8,10 @@ fmt:
     cargo fmt --all --check
 
 clippy:
-    cargo clippy --workspace --all-targets -- -D warnings
+    cargo clippy --workspace --all-targets --all-features -- -D warnings
 
 boundaries:
     ./scripts/check-boundaries.sh
 
 test:
-    cargo test --workspace
+    cargo test --workspace --all-features

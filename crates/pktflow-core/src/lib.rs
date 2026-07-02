@@ -6,7 +6,9 @@
 pub mod bytes;
 pub mod error;
 pub mod route;
+pub mod value;
 
 pub use bytes::{ByteReader, Truncated};
 pub use error::{ParseError, StopReason};
 pub use route::RouteId;
+pub use value::{FieldMap, FieldName, SmallBytes, Value};

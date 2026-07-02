@@ -20,7 +20,7 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y libpcap-dev
       - uses: Swatinem/rust-cache@v2
       - run: cargo fmt --all --check
-      - run: cargo clippy --workspace --all-targets -- -D warnings
+      - run: cargo clippy --workspace --all-targets --all-features -- -D warnings
 
   boundaries:
     name: Crate boundary check
@@ -61,4 +61,4 @@ jobs:
         shell: pwsh
         run: Add-Content $env:GITHUB_ENV "LIB=C:\npcap-sdk\Lib\x64"
       - uses: Swatinem/rust-cache@v2
-      - run: cargo test --workspace
+      - run: cargo test --workspace --all-features
