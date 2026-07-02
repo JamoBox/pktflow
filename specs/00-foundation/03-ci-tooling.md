@@ -24,7 +24,7 @@ Local tooling: `rust-toolchain.toml` pinning stable; `justfile` (or `cargo xtask
 `just ci` reproducing the full gate locally.
 
 ## Acceptance criteria
-- [ ] CI green on a clean checkout for both OSes.
-- [ ] A deliberately introduced `clippy::unwrap_used` violation fails CI.
-- [ ] Boundary-check script fails if `pktflow-flows` gains a `pktflow-plugins` dependency.
-- [ ] `just ci` (or equivalent) runs the same gates locally.
+- [x] CI green on a clean checkout for both OSes.
+- [x] A deliberately introduced `clippy::unwrap_used` violation fails CI.
+- [x] Boundary-check script fails if `pktflow-flows` gains a `pktflow-plugins` dependency.
+- [x] `just ci` (or equivalent) runs the same gates locally.
