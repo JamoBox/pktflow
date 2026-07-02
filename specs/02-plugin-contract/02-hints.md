@@ -43,6 +43,6 @@ Semantics (router behavior in 03.x, restated here as the plugin-facing contract)
   next-protocol field is a plugin bug the review checklist (06) catches.
 
 ## Acceptance criteria
-- [ ] `Hint` implemented; `SmallVec` keeps `Candidates` allocation-free for ≤4 entries.
-- [ ] Table above encoded as doc comments on each variant (the plugin author's reference).
-- [ ] Exhaustive-match test ensures adding a variant forces conscious router updates.
+- [x] `Hint` implemented; `SmallVec` keeps `Candidates` allocation-free for ≤4 entries.
+- [x] Table above encoded as doc comments on each variant (the plugin author's reference).
+- [x] Exhaustive-match test ensures adding a variant forces conscious router updates.

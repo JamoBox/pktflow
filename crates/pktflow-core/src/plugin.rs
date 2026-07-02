@@ -232,6 +232,58 @@ mod tests {
     }
 
     #[test]
+    fn candidates_stay_inline_up_to_four() {
+        // FR-11's ranked-candidates case must not allocate on the hot
+        // path: UDP's worst case is [dst_port, src_port] plus a couple of
+        // protocol-specific guesses — 4 covers it inline.
+        let four = SmallVec::<[RouteId; 4]>::from_slice(&[
+            RouteId::UdpPort(53),
+            RouteId::UdpPort(5353),
+            RouteId::TcpPort(53),
+            RouteId::IpProtocol(17),
+        ]);
+        assert!(!four.spilled());
+        let hint = Hint::Candidates(four);
+        assert!(matches!(hint, Hint::Candidates(ref c) if !c.spilled()));
+
+        let five = SmallVec::<[RouteId; 4]>::from_vec(vec![RouteId::UdpPort(0); 5]);
+        assert!(five.spilled());
+    }
+
+    #[test]
+    fn hint_matching_is_exhaustive() {
+        // No wildcard arm: adding a Hint variant must fail to compile here,
+        // forcing a conscious router update (the 03.4 decision table).
+        fn router_action(hint: &Hint) -> &'static str {
+            match hint {
+                Hint::Route(_) => "lookup; unclaimed => stop (gated)",
+                Hint::Candidates(_) => "try in order; all unclaimed => stop",
+                Hint::ByProtocol(_) => "dispatch by name; unknown => stop",
+                Hint::Unknown => "heuristic fallback may score",
+                Hint::Terminal => "dissection ends",
+            }
+        }
+
+        assert_eq!(
+            router_action(&Hint::Route(RouteId::EtherType(0x0800))),
+            "lookup; unclaimed => stop (gated)"
+        );
+        assert_eq!(
+            router_action(&Hint::Candidates(SmallVec::new())),
+            "try in order; all unclaimed => stop"
+        );
+        assert_eq!(
+            router_action(&Hint::ByProtocol("ethernet")),
+            "dispatch by name; unknown => stop"
+        );
+        assert_eq!(
+            router_action(&Hint::Unknown),
+            "heuristic fallback may score"
+        );
+        assert_eq!(router_action(&Hint::Terminal), "dissection ends");
+    }
+
+    #[test]
     fn confidence_is_clamped_to_100() {
         assert_eq!(Confidence::new(100).get(), 100);
         assert_eq!(Confidence::new(255).get(), 100);
