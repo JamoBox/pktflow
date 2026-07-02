@@ -23,7 +23,10 @@ pub enum RouteId {
     TcpPort(u16),
     /// Escape hatch for plugin-defined spaces (e.g. a custom mux protocol
     /// can mint its own space without touching core).
-    Custom { space: &'static str, id: u64 },
+    Custom {
+        space: &'static str,
+        id: u64,
+    },
 }
 
 impl fmt::Display for RouteId {
