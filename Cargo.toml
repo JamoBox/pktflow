@@ -1,0 +1,26 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/pktflow-core",
+    "crates/pktflow-flows",
+    "crates/pktflow-plugins",
+    "crates/pktflow-capture",
+    "crates/pktflow-cli",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+
+[workspace.dependencies]
+pktflow-core = { path = "crates/pktflow-core" }
+pktflow-flows = { path = "crates/pktflow-flows" }
+pktflow-plugins = { path = "crates/pktflow-plugins" }
+pktflow-capture = { path = "crates/pktflow-capture" }
+pcap = "2"
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[workspace.lints.clippy]
+unwrap_used = "deny"

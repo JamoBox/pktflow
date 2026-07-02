@@ -1,0 +1,10 @@
+[package]
+name = "pktflow-core"
+description = "Values, layers, plugin trait, router, lazy parser — the protocol-free dissection substrate"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+
+[lints]
+workspace = true

@@ -1,0 +1,11 @@
+[package]
+name = "pktflow-capture"
+description = "pcap-backed capture sources and interface listing"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+pcap.workspace = true
+
+[lints]
+workspace = true

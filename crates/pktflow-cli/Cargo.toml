@@ -1,0 +1,17 @@
+[package]
+name = "pktflow-cli"
+description = "The pktflow binary: streams view, drill-down, packet mode, JSON output"
+version.workspace = true
+edition.workspace = true
+
+[[bin]]
+name = "pktflow"
+path = "src/main.rs"
+
+[dependencies]
+pktflow-flows.workspace = true
+pktflow-plugins.workspace = true
+pktflow-capture.workspace = true
+
+[lints]
+workspace = true

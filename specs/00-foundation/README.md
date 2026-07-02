@@ -8,7 +8,7 @@ needed so every later task lands in the right place and holds to the same qualit
 
 ## Sub-tasks
 
-- [ ] [00.1 Workspace layout](01-workspace.md) — five crates, dependency direction enforced
+- [x] [00.1 Workspace layout](01-workspace.md) — five crates, dependency direction enforced
 - [ ] [00.2 Errors & robustness](02-errors-robustness.md) — no-panic policy, error taxonomy
 - [ ] [00.3 CI & tooling](03-ci-tooling.md) — fmt/clippy/test matrix on Linux + Windows
 
