@@ -12,6 +12,7 @@ path = "src/main.rs"
 pktflow-flows.workspace = true
 pktflow-plugins.workspace = true
 pktflow-capture.workspace = true
+thiserror.workspace = true
 
 [lints]
 workspace = true

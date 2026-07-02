@@ -6,6 +6,7 @@ edition.workspace = true
 
 [dependencies]
 pcap.workspace = true
+thiserror.workspace = true
 
 [lints]
 workspace = true

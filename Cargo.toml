@@ -18,6 +18,7 @@ pktflow-flows = { path = "crates/pktflow-flows" }
 pktflow-plugins = { path = "crates/pktflow-plugins" }
 pktflow-capture = { path = "crates/pktflow-capture" }
 pcap = "2"
+thiserror = "2"
 
 [workspace.lints.rust]
 unsafe_code = "forbid"
