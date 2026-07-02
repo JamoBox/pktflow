@@ -4,12 +4,14 @@
 //! knowledge, no capture dependency, and no OS conditionals.
 
 pub mod bytes;
+pub mod depth;
 pub mod error;
 pub mod packet;
 pub mod route;
 pub mod value;
 
 pub use bytes::{ByteReader, Truncated};
+pub use depth::{Depth, ParseOpts};
 pub use error::{ParseError, StopReason};
 pub use packet::{DissectedPacket, LayerRecord, LinkType, PacketMeta, ProtocolName};
 pub use route::RouteId;
