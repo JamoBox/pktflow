@@ -44,8 +44,8 @@ pub struct DissectedPacket {
 - `opaque_len` feeds D9's per-stream opaque-byte accounting.
 
 ## Acceptance criteria
-- [ ] Types implemented; `DissectedPacket` is `Send` and self-contained (no borrows of the
+- [x] Types implemented; `DissectedPacket` is `Send` and self-contained (no borrows of the
       capture buffer), so it can cross the channel to the aggregation thread (D5).
-- [ ] Unit test: constructing a 3-layer stack preserves order and offsets are monotonic.
-- [ ] Size check documented: `LayerRecord` stays lean (target ≤ 64 bytes + fields) — noted in
+- [x] Unit test: constructing a 3-layer stack preserves order and offsets are monotonic.
+- [x] Size check documented: `LayerRecord` stays lean (target ≤ 64 bytes + fields) — noted in
       code comment only if a constraint forces a layout choice.
