@@ -121,9 +121,10 @@ fn packet(layers: Vec<LayerRecord>, ms: u64) -> DissectedPacket {
 /// Walks a root-to-leaf chain asserting one child at each level, returning
 /// the protocol path.
 fn single_chain(agg: &Aggregator) -> Vec<ProtocolName> {
-    assert_eq!(agg.roots().len(), 1, "one root");
+    let root_ids: Vec<StreamId> = agg.roots().map(|r| r.id).collect();
+    assert_eq!(root_ids.len(), 1, "one root");
     let mut path = Vec::new();
-    let mut cursor: Option<StreamId> = agg.roots().first().copied();
+    let mut cursor: Option<StreamId> = root_ids.first().copied();
     while let Some(id) = cursor {
         let stream = agg.get(id).expect("chain node exists");
         path.push(stream.protocol);
@@ -269,7 +270,7 @@ proptest! {
             match stream.parent {
                 None => {
                     prop_assert!(
-                        agg.roots().contains(&stream.id),
+                        agg.roots().any(|r| r.id == stream.id),
                         "rootless non-child {:?}", stream.id
                     );
                 }

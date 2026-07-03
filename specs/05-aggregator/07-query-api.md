@@ -43,9 +43,9 @@ impl Aggregator {
   filter paths.
 
 ## Acceptance criteria
-- [ ] All methods implemented; determinism test: two identical runs produce identical
+- [x] All methods implemented; determinism test: two identical runs produce identical
       `at_layer` orderings and identical serialized snapshots.
-- [ ] Merged-view test over the 05.3 "same IP pair, two MAC parents" fixture: one merged
+- [x] Merged-view test over the 05.3 "same IP pair, two MAC parents" fixture: one merged
       row, two node back-references, summed stats.
-- [ ] `snapshot()` is deep: mutating the aggregator afterward does not alter the snapshot
+- [x] `snapshot()` is deep: mutating the aggregator afterward does not alter the snapshot
       (asserted), and the snapshot is `Send + Sync`.

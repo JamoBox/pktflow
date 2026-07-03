@@ -17,7 +17,7 @@ everything after presents it.
 - [x] [05.4 Metadata rollups](04-rollups.md) — accumulate/sample/series (FR-5)
 - [x] [05.5 Lifecycle state](05-lifecycle.md) — plugin-defined session state (FR-6)
 - [x] [05.6 Memory & eviction](06-memory-eviction.md) — D2 policy, sinks (PRD §7)
-- [ ] [05.7 Query API](07-query-api.md) — list/get/traverse/snapshot (FR-7)
+- [x] [05.7 Query API](07-query-api.md) — list/get/traverse/snapshot (FR-7)
 
 ## Definition of done
 

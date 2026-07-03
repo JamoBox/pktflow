@@ -11,7 +11,7 @@ use std::time::{Duration, SystemTime};
 
 use pktflow_core::{
     DissectedPacket, Engine, FieldMap, FlowKey, PacketDirection, ProtocolName, StateName,
-    StreamIdentity,
+    StopClass, StreamIdentity,
 };
 
 use crate::key::flow_key;
@@ -86,7 +86,7 @@ pub struct DirStats {
 }
 
 /// One conversation node (D10: unique per parent + protocol + key).
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct Stream {
     pub id: StreamId,
     pub protocol: ProtocolName,
@@ -127,6 +127,74 @@ pub fn dir_index(dir: PacketDirection) -> usize {
     }
 }
 
+/// Fixed reporting order for stop classes (05.7 summary).
+pub const STOP_CLASSES: [StopClass; 4] = [
+    StopClass::Clean,
+    StopClass::UnknownPayload,
+    StopClass::Malformed,
+    StopClass::Suspicious,
+];
+
+fn stop_class_index(class: StopClass) -> usize {
+    match class {
+        StopClass::Clean => 0,
+        StopClass::UnknownPayload => 1,
+        StopClass::Malformed => 2,
+        StopClass::Suspicious => 3,
+    }
+}
+
+/// D10 merged view row (05.7): same-key nodes folded across parents.
+/// Rollups are not merged in v1 — drill down through `nodes`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MergedStreamView {
+    pub protocol: ProtocolName,
+    pub key: FlowKey,
+    /// Display fields from the first node (identical canonical endpoints
+    /// by construction — same key).
+    pub key_fields: FieldMap,
+    /// Summed per-direction stats across nodes.
+    pub stats: [DirStats; 2],
+    pub first_seen: SystemTime,
+    pub last_seen: SystemTime,
+    /// Back-references, creation order.
+    pub nodes: Vec<StreamId>,
+}
+
+/// Per-protocol stream counts for the summary (FR-27).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct ProtocolCounts {
+    pub protocol: ProtocolName,
+    pub ever: u64,
+    pub live: u64,
+}
+
+/// Global counters (FR-27); eviction cannot distort these.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct AggregateSummary {
+    pub packets: u64,
+    pub bytes: u64,
+    pub streams_created: u64,
+    pub streams_live: u64,
+    pub key_errors: u64,
+    /// Sorted by protocol name (deterministic).
+    pub per_protocol: Vec<ProtocolCounts>,
+    /// Packet counts in [`STOP_CLASSES`] order.
+    pub stop_classes: [(StopClass, u64); 4],
+}
+
+/// Deep, immutable copy for cross-thread reads (D5): the aggregation
+/// thread owns the `Aggregator`; UI threads consume snapshots.
+#[derive(Clone, Debug)]
+pub struct AggregatorSnapshot {
+    /// Every live stream, `created_seq` order.
+    pub streams: Vec<Stream>,
+    /// Root ids, creation order.
+    pub roots: Vec<StreamId>,
+    pub summary: AggregateSummary,
+    pub clock: SystemTime,
+}
+
 struct Slot {
     generation: u32,
     stream: Option<Stream>,
@@ -156,6 +224,10 @@ pub struct Aggregator {
     /// Packet-time clock: max seen timestamp (05.6 determinism).
     clock: SystemTime,
     next_seq: u64,
+    /// D9 reporting: packets by stop class (04.3), in StopClass order.
+    stop_classes: [u64; 4],
+    /// Streams ever created per protocol (survives eviction, FR-27).
+    created_per_protocol: DetHashMap<ProtocolName, u64>,
     /// Lazy expiry min-heap (05.6): entries carry the deadline known at
     /// push time; a popped entry whose stream has a later actual deadline
     /// is re-pushed, making the sweep O(evicted), not O(streams).
@@ -176,6 +248,8 @@ impl Aggregator {
             totals: Totals::default(),
             clock: SystemTime::UNIX_EPOCH,
             next_seq: 0,
+            stop_classes: [0; 4],
+            created_per_protocol: DetHashMap::default(),
             expiry: BinaryHeap::new(),
             free: Vec::new(),
             live_count: 0,
@@ -189,6 +263,7 @@ impl Aggregator {
         self.clock = self.clock.max(ts);
         self.totals.packets += 1;
         self.totals.bytes += pkt.meta.origlen as u64;
+        self.stop_classes[stop_class_index(pkt.stop.class())] += 1;
 
         // Amortized timeout sweep (05.6): packet time only, no wall clock.
         self.sweep();
@@ -320,6 +395,7 @@ impl Aggregator {
         };
         self.next_seq += 1;
         self.totals.streams_created += 1;
+        *self.created_per_protocol.entry(protocol).or_insert(0) += 1;
         self.live_count += 1;
         match self.slots.get_mut(index as usize) {
             Some(slot) => slot.stream = Some(stream),
@@ -512,9 +588,9 @@ impl Aggregator {
         slot.stream.as_mut()
     }
 
-    /// Root streams (no parent), creation order.
-    pub fn roots(&self) -> &[StreamId] {
-        &self.roots
+    /// Root streams (no parent), creation order (05.7).
+    pub fn roots(&self) -> impl Iterator<Item = &Stream> {
+        self.roots.iter().filter_map(|&id| self.get(id))
     }
 
     /// Live streams, arena order (queries sort explicitly, 05.7).
@@ -529,6 +605,105 @@ impl Aggregator {
 
     pub fn is_empty(&self) -> bool {
         self.streams().next().is_none()
+    }
+
+    /// Spec-named lookup (05.7); alias of [`Aggregator::get`].
+    pub fn stream(&self, id: StreamId) -> Option<&Stream> {
+        self.get(id)
+    }
+
+    /// A stream's children, creation order (05.7).
+    pub fn children(&self, id: StreamId) -> impl Iterator<Item = &Stream> {
+        self.get(id)
+            .map(|s| s.children.as_slice())
+            .unwrap_or(&[])
+            .iter()
+            .filter_map(|&child| self.get(child))
+    }
+
+    /// All stream nodes of one protocol (FR-24's data source), sorted by
+    /// `created_seq` — never hash-map order (PRD §7).
+    pub fn at_layer(&self, protocol: &str) -> Vec<&Stream> {
+        let mut nodes: Vec<&Stream> = self.streams().filter(|s| s.protocol == protocol).collect();
+        nodes.sort_by_key(|s| s.created_seq);
+        nodes
+    }
+
+    /// D10 merged view (05.7): same-key nodes folded across parents,
+    /// stats summed lazily; row order = first node's creation order.
+    pub fn at_layer_merged(&self, protocol: &str) -> Vec<MergedStreamView> {
+        let mut rows: Vec<MergedStreamView> = Vec::new();
+        for node in self.at_layer(protocol) {
+            match rows.iter_mut().find(|row| row.key == node.key) {
+                Some(row) => {
+                    for d in 0..2 {
+                        row.stats[d].packets += node.stats[d].packets;
+                        row.stats[d].bytes += node.stats[d].bytes;
+                    }
+                    row.first_seen = row.first_seen.min(node.first_seen);
+                    row.last_seen = row.last_seen.max(node.last_seen);
+                    row.nodes.push(node.id);
+                }
+                None => rows.push(MergedStreamView {
+                    protocol: node.protocol,
+                    key: node.key.clone(),
+                    key_fields: node.key_fields.clone(),
+                    stats: node.stats,
+                    first_seen: node.first_seen,
+                    last_seen: node.last_seen,
+                    nodes: vec![node.id],
+                }),
+            }
+        }
+        rows
+    }
+
+    /// Global counters (FR-27), deterministic ordering throughout.
+    pub fn summary(&self) -> AggregateSummary {
+        let mut per_protocol: Vec<ProtocolCounts> = self
+            .created_per_protocol
+            .iter()
+            .map(|(&protocol, &ever)| ProtocolCounts {
+                protocol,
+                ever,
+                live: 0,
+            })
+            .collect();
+        per_protocol.sort_by_key(|c| c.protocol);
+        for stream in self.streams() {
+            if let Some(counts) = per_protocol
+                .iter_mut()
+                .find(|c| c.protocol == stream.protocol)
+            {
+                counts.live += 1;
+            }
+        }
+        let mut stop_classes = [(StopClass::Clean, 0); 4];
+        for (slot, &class) in stop_classes.iter_mut().zip(STOP_CLASSES.iter()) {
+            *slot = (class, self.stop_classes[stop_class_index(class)]);
+        }
+        AggregateSummary {
+            packets: self.totals.packets,
+            bytes: self.totals.bytes,
+            streams_created: self.totals.streams_created,
+            streams_live: self.live_count as u64,
+            key_errors: self.totals.key_errors,
+            per_protocol,
+            stop_classes,
+        }
+    }
+
+    /// Deep, immutable copy for cross-thread reads (05.7, D5). Cost is
+    /// bounded by `max_streams`; measured in 09.4.
+    pub fn snapshot(&self) -> AggregatorSnapshot {
+        let mut streams: Vec<Stream> = self.streams().cloned().collect();
+        streams.sort_by_key(|s| s.created_seq);
+        AggregatorSnapshot {
+            streams,
+            roots: self.roots.clone(),
+            summary: self.summary(),
+            clock: self.clock,
+        }
     }
 
     /// Aggregate counters (survive eviction, FR-27).
@@ -705,7 +880,8 @@ mod tests {
         assert_eq!(eth.parent, None);
         assert_eq!(ip.parent, Some(eth.id), "ip parented to eth across vlan");
         assert_eq!(eth.children, vec![ip.id]);
-        assert_eq!(agg.roots(), [eth.id]);
+        let root_ids: Vec<_> = agg.roots().map(|r| r.id).collect();
+        assert_eq!(root_ids, [eth.id]);
     }
 
     #[test]
