@@ -33,9 +33,9 @@ QinQ: two stacked vlan layers parse as two `LayerRecord`s; cross-layer `layer("v
 returns the inner one (01.4 innermost-wins — this is the spec's stacked-repeat test case).
 
 ## Acceptance criteria
-- [ ] Real-frame fixtures parse with exact expected fields; truncation tests at 13 and
+- [x] Real-frame fixtures parse with exact expected fields; truncation tests at 13 and
       17 bytes (mid-tag).
-- [ ] MAC conversation forms with folded directions on an A↔B fixture (FR-21 item 1).
+- [x] MAC conversation forms with folded directions on an A↔B fixture (FR-21 item 1).
 - [ ] eth ▸ vlan ▸ ipv4 packet: IP stream's parent is the **eth** stream (identity-less
       bridge, 05.2 criterion).
-- [ ] QinQ fixture: both tags parsed, innermost-wins lookup verified.
+- [x] QinQ fixture: both tags parsed, innermost-wins lookup verified.
