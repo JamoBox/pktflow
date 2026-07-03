@@ -41,13 +41,28 @@ pub enum StepOutcome {
 
 /// Maps a declined explicit `Route` parse per the 03.4 table: truncation
 /// is reported as such, anything else is the plugin declining/lying.
-fn route_failure(err: ParseError) -> StopReason {
+pub(crate) fn route_failure(err: ParseError) -> StopReason {
     match err {
         ParseError::Truncated(Truncated { needed, have }) => StopReason::Truncated {
             needed: u16::try_from(needed).unwrap_or(u16::MAX),
             have: u16::try_from(have).unwrap_or(u16::MAX),
         },
         _ => StopReason::PluginError,
+    }
+}
+
+/// Explicit-tier dispatch: parse via `p`, verifying rule 3, mapping
+/// failures per the `Route` row (truncation reported as such). Shared by
+/// `resolve_next` and entry resolution (04.2).
+pub(crate) fn dispatch_explicit(p: &dyn LayerPlugin, bytes: &[u8], ctx: &ParseCtx) -> StepOutcome {
+    match p.parse(bytes, ctx) {
+        Ok(parsed) if parsed.header_len_ok(bytes.len()) => StepOutcome::Layer {
+            protocol: p.name(),
+            parsed,
+            via_heuristic: false,
+        },
+        Ok(_) => StepOutcome::Stop(StopReason::PluginError),
+        Err(e) => StepOutcome::Stop(route_failure(e)),
     }
 }
 
@@ -68,17 +83,9 @@ impl Engine {
             Hint::Route(id) => match self.plugin_for_route(*id) {
                 // The gate: named but unclaimed → stop, heuristics forbidden.
                 None => StepOutcome::Stop(StopReason::UnclaimedRoute(*id)),
-                Some(p) => match p.parse(bytes, ctx) {
-                    Ok(parsed) if parsed.header_len_ok(bytes.len()) => StepOutcome::Layer {
-                        protocol: p.name(),
-                        parsed,
-                        via_heuristic: false,
-                    },
-                    // Explicit route + failed parse = malformed/truncated,
-                    // not unknown: no fallback.
-                    Ok(_) => StepOutcome::Stop(StopReason::PluginError),
-                    Err(e) => StepOutcome::Stop(route_failure(e)),
-                },
+                // Explicit route + failed parse = malformed/truncated, not
+                // unknown: no fallback (handled inside dispatch_explicit).
+                Some(p) => dispatch_explicit(p, bytes, ctx),
             },
 
             Hint::Candidates(ids) => {

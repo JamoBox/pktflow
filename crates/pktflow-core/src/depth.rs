@@ -37,6 +37,15 @@ pub struct ParseOpts {
     /// Runaway guard — a hostile packet + a buggy plugin could
     /// self-encapsulate forever; hitting the cap is `StopReason::DepthCap`.
     pub max_layers: usize,
+    /// Forced entry (04.2 tier 1): "these bytes start at this protocol"
+    /// (tooling, tests, tunnel re-entry). Beats the link-type route. An
+    /// unknown name is a caller bug surfaced at `layers()` call time.
+    pub entry: Option<crate::packet::ProtocolName>,
+    /// Opt-in for heuristic first-layer identification when no link-type
+    /// route exists (04.2 tier 3). Default **false**: an unclaimed link
+    /// type is a configuration gap the user should see, not silently
+    /// guess around.
+    pub allow_entry_heuristics: bool,
 }
 
 impl Default for ParseOpts {
@@ -45,6 +54,8 @@ impl Default for ParseOpts {
             depth: Depth::Full,
             aggregation: true,
             max_layers: 32,
+            entry: None,
+            allow_entry_heuristics: false,
         }
     }
 }
@@ -117,5 +128,7 @@ mod tests {
         assert_eq!(opts.depth, Depth::Full);
         assert!(opts.aggregation);
         assert_eq!(opts.max_layers, 32);
+        assert_eq!(opts.entry, None);
+        assert!(!opts.allow_entry_heuristics);
     }
 }

@@ -51,9 +51,9 @@ step with advanced payload slice.
   internal. Revisit only if 09.4 shows this clone on the profile.)
 
 ## Acceptance criteria
-- [ ] `LayerIter` implemented; a fixture eth/ipv4/tcp packet yields exactly 3 steps with
+- [x] `LayerIter` implemented; a fixture eth/ipv4/tcp packet yields exactly 3 steps with
       correct offsets, payload slices, and final `stop_reason() == Some(Complete)`.
-- [ ] Pulling only 1 step provably skips inner parsing (instrumented test plugin counts
+- [x] Pulling only 1 step provably skips inner parsing (instrumented test plugin counts
       `parse` calls — laziness verified, not assumed).
-- [ ] `max_layers` cap test with a self-recursing test plugin → `DepthCap`, no hang.
-- [ ] Depth clamp: `aggregation: true` + `Depth::None` ⇒ plugins observe `Keys` (01.3).
+- [x] `max_layers` cap test with a self-recursing test plugin → `DepthCap`, no hang.
+- [x] Depth clamp: `aggregation: true` + `Depth::None` ⇒ plugins observe `Keys` (01.3).
