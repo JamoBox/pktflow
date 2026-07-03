@@ -44,4 +44,4 @@ Plus workspace-level fuzz targets (`cargo-fuzz`, run in scheduled CI, not per-PR
 - [ ] Kit implemented; all 15 reference plugins have a `ConformanceCase` and pass.
 - [ ] Kit failures produce actionable messages naming plugin, rule, and byte offset.
 - [ ] Fuzz targets build and run clean for a 10-minute smoke locally; scheduled CI job wired.
-- [ ] Template plugin's tests (06.1) use the kit, so every copied plugin starts conformant.
+- [x] Template plugin's tests (06.1) use the kit, so every copied plugin starts conformant.
