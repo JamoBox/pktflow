@@ -40,8 +40,8 @@ implementation, two surfaces). `DissectedPacket.opaque_len` = remaining payload 
 stop; 0 on `Complete`.
 
 ## Acceptance criteria
-- [ ] Every `StopReason` variant reachable by at least one unit test (table in 03.4 provides
+- [x] Every `StopReason` variant reachable by at least one unit test (table in 03.4 provides
       the recipes) and carries the right values (`Truncated` needed/have, `UnclaimedRoute` id).
-- [ ] `dissect` and manual iterator drain produce identical `DissectedPacket`s on all 09.2
+- [x] `dissect` and manual iterator drain produce identical `DissectedPacket`s on all 09.2
       fixtures (property: one implementation path).
-- [ ] `StopClass` mapping implemented and snapshot-tested (it is user-facing wording's anchor).
+- [x] `StopClass` mapping implemented and snapshot-tested (it is user-facing wording's anchor).

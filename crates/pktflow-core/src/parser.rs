@@ -73,6 +73,18 @@ impl Engine {
         }
     }
 
+    /// Eager walk to completion (04.3): the aggregation pipeline's input
+    /// producer. By construction `dissect` is `layers(...)` drained +
+    /// `into_packet` — one implementation, two surfaces, identical
+    /// semantics.
+    ///
+    /// # Panics
+    ///
+    /// Same as [`Engine::layers`]: an unknown forced-entry name.
+    pub fn dissect(&self, bytes: &[u8], meta: PacketMeta, opts: ParseOpts) -> DissectedPacket {
+        self.layers(bytes, &meta, opts).into_packet(meta)
+    }
+
     /// Entry precedence (04.2): forced entry, then the link-type route,
     /// then — strictly opt-in — heuristic first-layer identification.
     /// The entry is the one place heuristics may run without a preceding
@@ -687,5 +699,167 @@ mod tests {
             StopReason::UnclaimedRoute(RouteId::UdpPort(4433))
         );
         assert_eq!(packet.opaque_len, 8, "payload attributed, not parsed");
+    }
+
+    // ---- 04.3: dissect(), stop-reason reachability, one-path property ----
+
+    /// A plugin that hints `Unknown` after one byte, for `UnknownHint`.
+    struct Vague;
+
+    impl LayerPlugin for Vague {
+        fn name(&self) -> ProtocolName {
+            "vague"
+        }
+
+        fn parse(&self, bytes: &[u8], _ctx: &ParseCtx) -> Result<ParsedLayer, ParseError> {
+            let mut r = ByteReader::new(bytes);
+            let _b = r.u8()?;
+            Ok(ParsedLayer {
+                header_len: 1,
+                fields: FieldMap::new(),
+                hint: Hint::Unknown,
+            })
+        }
+
+        fn claims(&self) -> &'static [RouteId] {
+            &[RouteId::LinkType(200)]
+        }
+    }
+
+    /// A rule-3 violator claiming more bytes than exist, for `PluginError`.
+    struct Liar;
+
+    impl LayerPlugin for Liar {
+        fn name(&self) -> ProtocolName {
+            "liar"
+        }
+
+        fn parse(&self, _bytes: &[u8], _ctx: &ParseCtx) -> Result<ParsedLayer, ParseError> {
+            Ok(ParsedLayer {
+                header_len: 4096,
+                fields: FieldMap::new(),
+                hint: Hint::Terminal,
+            })
+        }
+
+        fn claims(&self) -> &'static [RouteId] {
+            &[RouteId::LinkType(201)]
+        }
+    }
+
+    /// Every `StopReason` variant reachable, carrying the right values
+    /// (recipes from the 03.4 table).
+    #[test]
+    fn every_stop_reason_variant_is_reachable() {
+        let engine = Engine::builder()
+            .plugin(Eth)
+            .plugin(Ipv4::new())
+            .plugin(Tcp {
+                parse_calls: Arc::new(AtomicUsize::new(0)),
+            })
+            .plugin(Recurse)
+            .plugin(Vague)
+            .plugin(Liar)
+            .build()
+            .expect("valid registry");
+        let dissect = |bytes: &[u8], link: LinkType, opts: ParseOpts| {
+            engine.dissect(bytes, meta(link, bytes.len()), opts)
+        };
+        let defaults = ParseOpts::default;
+
+        // Complete: payload exhausted after the last layer.
+        let pkt = eth_ipv4_tcp();
+        assert_eq!(
+            dissect(&pkt, LinkType::ETHERNET, defaults()).stop,
+            StopReason::Complete
+        );
+
+        // Terminal: tcp hints Terminal and bytes remain after it.
+        let mut with_payload = eth_ipv4_tcp();
+        with_payload.extend_from_slice(&[1, 2, 3]);
+        let packet = dissect(&with_payload, LinkType::ETHERNET, defaults());
+        assert_eq!(packet.stop, StopReason::Terminal);
+        assert_eq!(packet.opaque_len, 3);
+
+        // UnclaimedRoute carries the exact id (the gate).
+        let mut unclaimed = vec![0xAA; 12];
+        unclaimed.extend_from_slice(&[0x86, 0xDD, 0x00]);
+        assert_eq!(
+            dissect(&unclaimed, LinkType::ETHERNET, defaults()).stop,
+            StopReason::UnclaimedRoute(RouteId::EtherType(0x86DD))
+        );
+
+        // UnknownHint: Hint::Unknown with an empty fallback pool.
+        let vague_pkt = [0x01, 0x02];
+        assert_eq!(
+            dissect(&vague_pkt, LinkType(200), defaults()).stop,
+            StopReason::UnknownHint
+        );
+
+        // Truncated carries the plugin's needed/have counts: the eth
+        // header names ipv4, whose fixed header runs out of bytes.
+        let mut short = vec![0xAA; 12];
+        short.extend_from_slice(&[0x08, 0x00]);
+        short.push(0x45); // one lonely ipv4 byte
+        let packet = dissect(&short, LinkType::ETHERNET, defaults());
+        assert_eq!(packet.stop, StopReason::Truncated { needed: 8, have: 0 });
+
+        // PluginError: a lying plugin caught by the rule-3 check.
+        assert_eq!(
+            dissect(&[0u8; 16], LinkType(201), defaults()).stop,
+            StopReason::PluginError
+        );
+
+        // DepthCap: self-encapsulation hits max_layers.
+        let opts = ParseOpts {
+            max_layers: 3,
+            ..ParseOpts::default()
+        };
+        assert_eq!(
+            dissect(&[0u8; 32], LinkType(147), opts).stop,
+            StopReason::DepthCap
+        );
+    }
+
+    /// One implementation path: `dissect` and a manual iterator drain
+    /// agree layer-for-layer on every fixture in this suite.
+    #[test]
+    fn dissect_equals_manual_drain_on_all_fixtures() {
+        let (engine, _, _) = full_engine();
+
+        let mut terminal_payload = eth_ipv4_tcp();
+        terminal_payload.extend_from_slice(&[9, 9]);
+        let mut unclaimed = vec![0xAA; 12];
+        unclaimed.extend_from_slice(&[0x86, 0xDD, 0x00, 0x01]);
+        let mut truncated = vec![0xAA; 12];
+        truncated.extend_from_slice(&[0x08, 0x00, 0x45]);
+
+        let fixtures: Vec<(Vec<u8>, LinkType)> = vec![
+            (eth_ipv4_tcp(), LinkType::ETHERNET),
+            (terminal_payload, LinkType::ETHERNET),
+            (unclaimed, LinkType::ETHERNET),
+            (truncated, LinkType::ETHERNET),
+            (Vec::new(), LinkType::ETHERNET),
+            (eth_ipv4_tcp(), LinkType(250)), // unclaimed link type
+        ];
+
+        for (bytes, link) in fixtures {
+            let m = meta(link, bytes.len());
+
+            let eager = engine.dissect(&bytes, m, ParseOpts::default());
+
+            let mut iter = engine.layers(&bytes, &m, ParseOpts::default());
+            let mut drained: Vec<LayerRecord> = Vec::new();
+            for step in iter.by_ref() {
+                drained.push(step.record);
+            }
+            let manual = iter.into_packet(m);
+
+            assert_eq!(eager, manual, "one implementation path");
+            assert_eq!(eager.layers, drained, "steps match the packaged stack");
+            if eager.stop == StopReason::Complete {
+                assert_eq!(eager.opaque_len, 0, "Complete means nothing left");
+            }
+        }
     }
 }

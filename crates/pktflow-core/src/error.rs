@@ -39,6 +39,34 @@ pub enum StopReason {
     DepthCap,
 }
 
+/// Semantic grouping of stop reasons for reporting (04.3, 08, D9).
+///
+/// The CLI and JSON never re-derive this mapping — it is the anchor for
+/// all user-facing wording about how a packet's dissection ended.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum StopClass {
+    /// `Complete | Terminal` — the packet parsed as far as it goes.
+    Clean,
+    /// `UnclaimedRoute | UnknownHint` — bytes we chose not to guess about.
+    UnknownPayload,
+    /// `Truncated | PluginError` — the data (or a plugin) is broken.
+    Malformed,
+    /// `DepthCap` — packet structure deep enough to look hostile.
+    Suspicious,
+}
+
+impl StopReason {
+    /// The 04.3 semantic grouping (see [`StopClass`]).
+    pub fn class(self) -> StopClass {
+        match self {
+            StopReason::Complete | StopReason::Terminal => StopClass::Clean,
+            StopReason::UnclaimedRoute(_) | StopReason::UnknownHint => StopClass::UnknownPayload,
+            StopReason::Truncated { .. } | StopReason::PluginError => StopClass::Malformed,
+            StopReason::DepthCap => StopClass::Suspicious,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -69,5 +97,29 @@ mod tests {
         let stop = StopReason::UnclaimedRoute(RouteId::IpProtocol(99));
         assert_eq!(stop, StopReason::UnclaimedRoute(RouteId::IpProtocol(99)));
         assert_ne!(stop, StopReason::UnclaimedRoute(RouteId::UdpPort(99)));
+    }
+
+    #[test]
+    fn stop_class_snapshot() {
+        // The full mapping, variant by variant, no wildcard on the reason
+        // side: adding a StopReason forces a conscious classification.
+        let table = [
+            (StopReason::Complete, StopClass::Clean),
+            (StopReason::Terminal, StopClass::Clean),
+            (
+                StopReason::UnclaimedRoute(RouteId::UdpPort(4433)),
+                StopClass::UnknownPayload,
+            ),
+            (StopReason::UnknownHint, StopClass::UnknownPayload),
+            (
+                StopReason::Truncated { needed: 4, have: 1 },
+                StopClass::Malformed,
+            ),
+            (StopReason::PluginError, StopClass::Malformed),
+            (StopReason::DepthCap, StopClass::Suspicious),
+        ];
+        for (reason, class) in table {
+            assert_eq!(reason.class(), class, "{reason:?}");
+        }
     }
 }

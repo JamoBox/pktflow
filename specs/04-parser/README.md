@@ -11,7 +11,7 @@ parser is the pump between capture (07) and aggregation (05).
 
 - [x] [04.1 Lazy iterator](01-lazy-iterator.md) — `LayerIter`, one layer per `next()` (FR-13)
 - [x] [04.2 Entry resolution](02-entry-resolution.md) — link-type route or heuristic first layer
-- [ ] [04.3 Stop reasons & dissect()](03-stop-reasons.md) — the eager convenience + D9 surface
+- [x] [04.3 Stop reasons & dissect()](03-stop-reasons.md) — the eager convenience + D9 surface
 
 ## Definition of done
 
