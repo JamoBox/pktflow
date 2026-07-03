@@ -12,6 +12,7 @@ smallvec.workspace = true
 # Test-only (09.1 kit: flow-key involution checks). The runtime dependency
 # direction stays cli -> {flows, plugins} -> core; flows never sees plugins.
 pktflow-flows.workspace = true
+proptest.workspace = true
 
 [lints]
 workspace = true

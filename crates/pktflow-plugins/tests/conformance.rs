@@ -10,7 +10,9 @@ use pktflow_plugins::icmpv4::Icmpv4;
 use pktflow_plugins::igmp::Igmp;
 use pktflow_plugins::ipv4::{internet_checksum, Ipv4};
 use pktflow_plugins::ipv6::Ipv6;
+use pktflow_plugins::tcp::Tcp;
 use pktflow_plugins::template::Template;
+use pktflow_plugins::udp::Udp;
 use pktflow_plugins::vlan::Vlan;
 
 use kit::{run_conformance, ConformanceCase, GoodPacket};
@@ -280,6 +282,86 @@ fn igmp_conforms() {
                 ("group_addr", Value::from(&[0, 0, 0, 0][..])),
             ],
             expected_hint: Hint::Terminal,
+        }],
+        outer_ctx: Vec::new(),
+    });
+}
+
+#[test]
+fn tcp_conforms() {
+    // SYN, 20-byte header, no payload: terminal until data flows.
+    let syn = vec![
+        0x87, 0x07, 0x01, 0xBB, // 34567 -> 443
+        0x00, 0x00, 0x01, 0x00, // seq 256
+        0x00, 0x00, 0x00, 0x00, // ack
+        0x50, 0x02, // doff 5, SYN
+        0xFF, 0xFF, 0x00, 0x00, 0x00, 0x00, // window, ck, urg
+    ];
+    // PSH|ACK data segment with 4 payload bytes: candidate ports.
+    let mut data = syn.clone();
+    data[13] = 0x18; // PSH|ACK
+    data.extend_from_slice(&[0xDE, 0xAD, 0xBE, 0xEF]);
+
+    let base_fields = |flags: u64| {
+        vec![
+            ("src_port", Value::U64(34567)),
+            ("dst_port", Value::U64(443)),
+            ("flags", Value::U64(flags)),
+            ("seq", Value::U64(256)),
+            ("ack", Value::U64(0)),
+            ("window", Value::U64(0xFFFF)),
+            ("data_offset", Value::U64(5)),
+            ("checksum", Value::U64(0)),
+            ("urgent", Value::U64(0)),
+        ]
+    };
+
+    run_conformance(&ConformanceCase {
+        plugin: Box::new(Tcp),
+        good: vec![
+            GoodPacket {
+                bytes: syn,
+                expected_header_len: 20,
+                expected_full_fields: base_fields(0x02),
+                expected_hint: Hint::Terminal,
+            },
+            GoodPacket {
+                bytes: data,
+                expected_header_len: 20,
+                expected_full_fields: base_fields(0x18),
+                expected_hint: Hint::Candidates(smallvec::SmallVec::from_slice(&[
+                    RouteId::TcpPort(443),
+                    RouteId::TcpPort(34567),
+                ])),
+            },
+        ],
+        outer_ctx: Vec::new(),
+    });
+}
+
+#[test]
+fn udp_conforms() {
+    // DNS-reply-shaped datagram: 53 -> 34567 with 4 payload bytes.
+    let bytes = vec![
+        0x00, 0x35, 0x87, 0x07, // 53 -> 34567
+        0x00, 0x0C, 0x00, 0x00, // length 12, checksum 0
+        0x12, 0x34, 0x56, 0x78,
+    ];
+    run_conformance(&ConformanceCase {
+        plugin: Box::new(Udp),
+        good: vec![GoodPacket {
+            bytes,
+            expected_header_len: 8,
+            expected_full_fields: vec![
+                ("src_port", Value::U64(53)),
+                ("dst_port", Value::U64(34567)),
+                ("length", Value::U64(12)),
+                ("checksum", Value::U64(0)),
+            ],
+            expected_hint: Hint::Candidates(smallvec::SmallVec::from_slice(&[
+                RouteId::UdpPort(34567),
+                RouteId::UdpPort(53),
+            ])),
         }],
         outer_ctx: Vec::new(),
     });

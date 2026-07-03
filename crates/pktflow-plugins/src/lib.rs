@@ -11,7 +11,9 @@ pub mod icmpv4;
 pub mod igmp;
 pub mod ipv4;
 pub mod ipv6;
+pub mod tcp;
 pub mod template;
+pub mod udp;
 pub mod vlan;
 
 /// The one registration list (PRD §8): adding a protocol end-to-end is a
@@ -26,6 +28,8 @@ pub fn default_engine() -> Engine {
         .plugin(arp::Arp)
         .plugin(icmpv4::Icmpv4)
         .plugin(igmp::Igmp)
+        .plugin(tcp::Tcp)
+        .plugin(udp::Udp)
         .build()
         // Not input-derived: a collision here is a bug in this very list,
         // caught by the registry's build-time validation (03.2).

@@ -47,10 +47,10 @@ state machine (no reassembly, D7). Unrecognized transitions keep current state (
 | Identity | key `[{src_port, dst_port}]`, `EndpointSort` → **UDP stream**; no lifecycle |
 
 ## Acceptance criteria
-- [ ] Full lifecycle walk on a real handshake+teardown fixture hits every named state;
+- [x] Full lifecycle walk on a real handshake+teardown fixture hits every named state;
       midstream fixture lands `established_midstream`; RST fixture lands `reset`.
-- [ ] Closed TCP session becomes close-eligible in the aggregator (05.5 integration).
-- [ ] `Candidates` ordering test: DNS reply (src 53 → dst 34567) routes via `TcpPort(src)`
+- [x] Closed TCP session becomes close-eligible in the aggregator (05.5 integration).
+- [x] `Candidates` ordering test: DNS reply (src 53 → dst 34567) routes via `TcpPort(src)`
       second candidate. Same for UDP.
-- [ ] FR-21 items: TCP session with lifecycle ✔, UDP stream ✔, both direction-folded with
+- [x] FR-21 items: TCP session with lifecycle ✔, UDP stream ✔, both direction-folded with
       correct per-direction stats.

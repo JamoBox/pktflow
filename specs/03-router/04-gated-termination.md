@@ -38,8 +38,8 @@ Invariants:
    an unclaimed port route ⇒ dissection ends at UDP, exactly one UDP stream, zero TCP streams.
 
 ## Acceptance criteria
-- [ ] Decision table implemented in one place (single `resolve_next` function — not spread
+- [x] Decision table implemented in one place (single `resolve_next` function — not spread
       across the parser) and unit-tested row by row.
-- [ ] `encrypted_udp_no_phantom` fixture test passes.
-- [ ] Property test (proptest): random bytes through a full reference-plugin engine never
+- [x] `encrypted_udp_no_phantom` fixture test passes.
+- [x] Property test (proptest): random bytes through a full reference-plugin engine never
       panic and never yield a layer whose plugin's own `parse` would decline those bytes.
