@@ -44,11 +44,11 @@ Mechanics:
   offline mode for the final report; live mode drops them post-sink).
 
 ## Acceptance criteria
-- [ ] All four `CloseReason` paths reachable in tests with synthetic timestamped packets
+- [x] All four `CloseReason` paths reachable in tests with synthetic timestamped packets
       (no sleeps — packet-time clock makes eviction tests instant).
-- [ ] Leaf-first constraint verified: parent with one live child survives idle timeout;
+- [x] Leaf-first constraint verified: parent with one live child survives idle timeout;
       falls after the child does.
-- [ ] `max_streams` cap: inserting cap+k streams evicts exactly k least-recently-updated
+- [x] `max_streams` cap: inserting cap+k streams evicts exactly k least-recently-updated
       leaves, sink observes each with `LruEvicted`.
-- [ ] Post-eviction key recurrence creates a fresh stream; stale `StreamId` handles fail
+- [x] Post-eviction key recurrence creates a fresh stream; stale `StreamId` handles fail
       generation checks (no ABA).

@@ -2,8 +2,9 @@
 //! stream records, the lookup index, baseline stats, and the per-packet
 //! ingest path. This is the aggregator's hot loop.
 
+use std::cmp::Reverse;
 use std::collections::hash_map::DefaultHasher;
-use std::collections::HashMap;
+use std::collections::{BinaryHeap, HashMap};
 use std::hash::BuildHasherDefault;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
@@ -85,6 +86,7 @@ pub struct DirStats {
 }
 
 /// One conversation node (D10: unique per parent + protocol + key).
+#[derive(Clone)]
 pub struct Stream {
     pub id: StreamId,
     pub protocol: ProtocolName,
@@ -109,6 +111,9 @@ pub struct Stream {
     pub closed: Option<CloseReason>,
     /// Entered a `closed_states` state; D2's linger applies (05.6).
     pub close_eligible: bool,
+    /// Packet time of entry into a closed state — the linger deadline's
+    /// anchor. Stragglers update stats without moving it (05.5/05.6).
+    pub close_eligible_since: Option<SystemTime>,
     /// Insertion order for deterministic query sorting (05.7) — not a
     /// global ordering guarantee (keeps D5's sharding door open).
     pub created_seq: u64,
@@ -151,6 +156,13 @@ pub struct Aggregator {
     /// Packet-time clock: max seen timestamp (05.6 determinism).
     clock: SystemTime,
     next_seq: u64,
+    /// Lazy expiry min-heap (05.6): entries carry the deadline known at
+    /// push time; a popped entry whose stream has a later actual deadline
+    /// is re-pushed, making the sweep O(evicted), not O(streams).
+    expiry: BinaryHeap<Reverse<(SystemTime, u32, u32)>>,
+    /// Recyclable slot indices (generation already bumped at evict).
+    free: Vec<u32>,
+    live_count: usize,
 }
 
 impl Aggregator {
@@ -164,6 +176,9 @@ impl Aggregator {
             totals: Totals::default(),
             clock: SystemTime::UNIX_EPOCH,
             next_seq: 0,
+            expiry: BinaryHeap::new(),
+            free: Vec::new(),
+            live_count: 0,
         }
     }
 
@@ -174,6 +189,9 @@ impl Aggregator {
         self.clock = self.clock.max(ts);
         self.totals.packets += 1;
         self.totals.bytes += pkt.meta.origlen as u64;
+
+        // Amortized timeout sweep (05.6): packet time only, no wall clock.
+        self.sweep();
 
         // Local handle so plugin/identity borrows don't pin `self`.
         let engine = Arc::clone(&self.engine);
@@ -199,6 +217,7 @@ impl Aggregator {
             };
 
             let id = self.get_or_insert(parent, key, identity, layer, dir, ts);
+            let mut became_eligible = false;
             if let Some(stream) = self.get_mut(id) {
                 stream.last_seen = ts;
                 let slot = &mut stream.stats[dir_index(dir)];
@@ -209,10 +228,27 @@ impl Aggregator {
                 if let (Some(spec), Some(current)) = (identity.lifecycle, stream.state) {
                     let next = (spec.advance)(&layer.fields, current, dir);
                     stream.state = Some(next);
-                    stream.close_eligible = spec.closed_states.contains(&next);
+                    let eligible = spec.closed_states.contains(&next);
+                    if eligible && !stream.close_eligible {
+                        // Linger anchors at closed-state entry (D2);
+                        // stragglers won't move it.
+                        stream.close_eligible_since = Some(ts);
+                        became_eligible = true;
+                    } else if !eligible {
+                        stream.close_eligible_since = None;
+                    }
+                    stream.close_eligible = eligible;
                 }
 
                 stream.rollups.apply(&layer.fields, ts, dir);
+            }
+            // The linger deadline can undercut the standing idle entry, so
+            // arm it eagerly; the lazy heap discards stale entries on pop.
+            if became_eligible {
+                if let EvictionPolicy::Live { close_linger, .. } = self.config.eviction {
+                    self.expiry
+                        .push(Reverse((ts + close_linger, id.index, id.generation)));
+                }
             }
             parent = Some(id);
         }
@@ -223,6 +259,9 @@ impl Aggregator {
                 stream.opaque_bytes += pkt.opaque_len as u64;
             }
         }
+
+        // Hard LRU cap (D2): evict least-recently-updated leaves.
+        self.enforce_max_streams();
     }
 
     fn get_or_insert(
@@ -249,11 +288,17 @@ impl Aggregator {
             }
         }
 
-        let index = u32::try_from(self.slots.len()).unwrap_or(u32::MAX);
-        let id = StreamId {
-            index,
-            generation: 0,
+        // Recycle an evicted slot (generation already bumped) or grow.
+        let (index, generation) = match self.free.pop() {
+            Some(index) => (
+                index,
+                self.slots
+                    .get(index as usize)
+                    .map_or(0, |slot| slot.generation),
+            ),
+            None => (u32::try_from(self.slots.len()).unwrap_or(u32::MAX), 0),
         };
+        let id = StreamId { index, generation };
         let stream = Stream {
             id,
             protocol,
@@ -270,21 +315,183 @@ impl Aggregator {
             rollups: RollupSet::new(identity.rollups, self.config.rollup_series_default_cap),
             closed: None,
             close_eligible: false,
+            close_eligible_since: None,
             created_seq: self.next_seq,
         };
         self.next_seq += 1;
         self.totals.streams_created += 1;
-        self.slots.push(Slot {
-            generation: 0,
-            stream: Some(stream),
-        });
+        self.live_count += 1;
+        match self.slots.get_mut(index as usize) {
+            Some(slot) => slot.stream = Some(stream),
+            None => self.slots.push(Slot {
+                generation: 0,
+                stream: Some(stream),
+            }),
+        }
         self.index.insert((parent, protocol, key), id);
 
         match parent.and_then(|p| self.get_mut(p)) {
             Some(parent_stream) => parent_stream.children.push(id),
             None => self.roots.push(id),
         }
+        if let EvictionPolicy::Live { idle_timeout, .. } = self.config.eviction {
+            self.expiry
+                .push(Reverse((ts + idle_timeout, id.index, id.generation)));
+        }
         id
+    }
+
+    /// A live stream's current expiry deadline under the Live policy:
+    /// the earlier of `last_seen + idle` and `closed-entry + linger`.
+    fn deadline_of(&self, id: StreamId) -> Option<SystemTime> {
+        let EvictionPolicy::Live {
+            idle_timeout,
+            close_linger,
+            ..
+        } = self.config.eviction
+        else {
+            return None;
+        };
+        let stream = self.get(id)?;
+        let idle = stream.last_seen + idle_timeout;
+        Some(match stream.close_eligible_since {
+            Some(entered) => idle.min(entered + close_linger),
+            None => idle,
+        })
+    }
+
+    /// Pops due expiry entries, evicting streams whose *actual* deadline
+    /// has passed (packet time). Lazy heap: stale entries are re-pushed
+    /// with the stream's real deadline, so work is O(evicted + stale
+    /// pops), never O(streams). Parents with live children are skipped and
+    /// re-armed by their last child's eviction (D2's leaf-first rule).
+    fn sweep(&mut self) {
+        let EvictionPolicy::Live { close_linger, .. } = self.config.eviction else {
+            return;
+        };
+        let now = self.clock;
+        while let Some(&Reverse((entry_deadline, index, generation))) = self.expiry.peek() {
+            if entry_deadline > now {
+                break;
+            }
+            self.expiry.pop();
+            let id = StreamId { index, generation };
+            let Some(actual) = self.deadline_of(id) else {
+                continue; // evicted or recycled since this entry was pushed
+            };
+            if actual > now {
+                self.expiry.push(Reverse((actual, index, generation)));
+                continue;
+            }
+            let Some(stream) = self.get(id) else {
+                continue;
+            };
+            if !stream.children.is_empty() {
+                // Not a leaf: skipped, re-armed when its last child goes.
+                continue;
+            }
+            let reason = match stream.close_eligible_since {
+                Some(entered) if entered + close_linger <= now => CloseReason::ProtocolClose,
+                _ => CloseReason::IdleTimeout,
+            };
+            self.evict(id, reason);
+        }
+    }
+
+    /// D2's hard cap: while over `max_streams`, evict the
+    /// least-recently-updated leaf (creation order breaks ties
+    /// deterministically).
+    fn enforce_max_streams(&mut self) {
+        let EvictionPolicy::Live { max_streams, .. } = self.config.eviction else {
+            return;
+        };
+        while self.live_count > max_streams {
+            let lru = self
+                .streams()
+                .filter(|s| s.children.is_empty())
+                .min_by_key(|s| (s.last_seen, s.created_seq))
+                .map(|s| s.id);
+            let Some(id) = lru else {
+                return; // no leaves — cannot shrink further
+            };
+            self.evict(id, CloseReason::LruEvicted);
+        }
+    }
+
+    /// Removes one live leaf: index entry gone (recurrence of the key
+    /// creates a fresh stream), slot generation bumped (stale handles fail,
+    /// no ABA), parent unlinked and re-armed for expiry, sink notified.
+    fn evict(&mut self, id: StreamId, reason: CloseReason) {
+        let Some(slot) = self.slots.get_mut(id.index as usize) else {
+            return;
+        };
+        if slot.generation != id.generation {
+            return;
+        }
+        let Some(mut stream) = slot.stream.take() else {
+            return;
+        };
+        slot.generation = slot.generation.wrapping_add(1);
+        self.free.push(id.index);
+        self.live_count -= 1;
+
+        self.index
+            .remove(&(stream.parent, stream.protocol, stream.key.clone()));
+        match stream.parent {
+            Some(parent_id) => {
+                if let Some(parent) = self.get_mut(parent_id) {
+                    parent.children.retain(|c| *c != id);
+                }
+                // The parent may have just become an evictable leaf.
+                if let Some(deadline) = self.deadline_of(parent_id) {
+                    self.expiry
+                        .push(Reverse((deadline, parent_id.index, parent_id.generation)));
+                }
+            }
+            None => self.roots.retain(|r| *r != id),
+        }
+
+        stream.closed = Some(reason);
+        if let Some(sink) = &mut self.config.sink {
+            sink(EvictedStream { stream, reason });
+        }
+    }
+
+    /// Explicit end-of-capture (05.6): closes every remaining stream with
+    /// `CaptureEnd`, children before parents, through the sink. Offline
+    /// (`EvictionPolicy::None`) retains the closed streams for the final
+    /// report; live mode drops them post-sink.
+    pub fn finish(&mut self) {
+        // Bottom-up: deeper nodes first, creation order within a depth.
+        let mut order: Vec<(usize, u64, StreamId)> = self
+            .streams()
+            .map(|s| {
+                let mut depth = 0;
+                let mut cursor = s.parent;
+                while let Some(pid) = cursor {
+                    depth += 1;
+                    cursor = self.get(pid).and_then(|p| p.parent);
+                }
+                (depth, s.created_seq, s.id)
+            })
+            .collect();
+        order.sort_by_key(|&(depth, seq, _)| (Reverse(depth), seq));
+
+        let live = matches!(self.config.eviction, EvictionPolicy::Live { .. });
+        for (_, _, id) in order {
+            if live {
+                self.evict(id, CloseReason::CaptureEnd);
+            } else if let Some(stream) = self.get_mut(id) {
+                stream.closed = Some(CloseReason::CaptureEnd);
+                let copy = stream.clone();
+                if let Some(sink) = &mut self.config.sink {
+                    sink(EvictedStream {
+                        stream: copy,
+                        reason: CloseReason::CaptureEnd,
+                    });
+                }
+            }
+        }
     }
 
     /// Generation-checked lookup: a stale handle returns `None`, never a
