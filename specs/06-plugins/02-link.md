@@ -36,6 +36,6 @@ returns the inner one (01.4 innermost-wins — this is the spec's stacked-repeat
 - [x] Real-frame fixtures parse with exact expected fields; truncation tests at 13 and
       17 bytes (mid-tag).
 - [x] MAC conversation forms with folded directions on an A↔B fixture (FR-21 item 1).
-- [ ] eth ▸ vlan ▸ ipv4 packet: IP stream's parent is the **eth** stream (identity-less
+- [x] eth ▸ vlan ▸ ipv4 packet: IP stream's parent is the **eth** stream (identity-less
       bridge, 05.2 criterion).
 - [x] QinQ fixture: both tags parsed, innermost-wins lookup verified.

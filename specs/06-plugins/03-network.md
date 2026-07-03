@@ -44,9 +44,9 @@ parsing quoted packets is v2). Identity: **None**; the parent IP conversation ca
 `Terminal`. Identity: None.
 
 ## Acceptance criteria
-- [ ] Fixture packets for all five parse exactly; ipv4 options and ipv6 ext-header chains
+- [x] Fixture packets for all five parse exactly; ipv4 options and ipv6 ext-header chains
       covered including the chain bound (9th ext header → `PluginError`, no loop).
-- [ ] IP conversation folding verified for v4 and v6 (FR-21 item 2).
-- [ ] Fragment handling: offset>0 fragments are `Terminal`, still counted into the IP
+- [x] IP conversation folding verified for v4 and v6 (FR-21 item 2).
+- [x] Fragment handling: offset>0 fragments are `Terminal`, still counted into the IP
       conversation (no phantom transport stream from fragment payloads).
-- [ ] ipv4 probe honesty: random bytes score `None`/low; checksum-broken header scores low.
+- [x] ipv4 probe honesty: random bytes score `None`/low; checksum-broken header scores low.

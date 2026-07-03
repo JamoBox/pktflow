@@ -63,12 +63,12 @@ fn qinq_parses_both_tags_and_innermost_wins() {
     let engine = Arc::new(default_engine());
 
     // eth (0x88A8) ▸ vlan s-tag vid=10 (inner 0x8100) ▸ vlan c-tag vid=100
-    // (inner 0x0800, unclaimed for now) — two stacked vlan LayerRecords.
+    // (inner 0x9999, unclaimed) — two stacked vlan LayerRecords.
     let mut pkt = eth_frame(MAC_B, MAC_A, 0x88A8);
     pkt.extend_from_slice(&[0x20, 0x0A, 0x81, 0x00]); // s-tag: vid 10
-    pkt.extend_from_slice(&[0xA0, 0x64, 0x08, 0x00]); // c-tag: vid 100
-    pkt.extend_from_slice(&[0x45, 0x00, 0x00, 0x14]); // ip-ish payload: the
-                                                      // named-but-unclaimed route must gate, not guess
+    pkt.extend_from_slice(&[0xA0, 0x64, 0x99, 0x99]); // c-tag: vid 100,
+                                                      // inner 0x9999 unclaimed: must gate, not guess
+    pkt.extend_from_slice(&[0xDE, 0xAD, 0xBE, 0xEF]); // opaque payload
 
     let m = meta(pkt.len(), 0);
     let packet = engine.dissect(&pkt, m, ParseOpts::default());
@@ -76,7 +76,7 @@ fn qinq_parses_both_tags_and_innermost_wins() {
     assert_eq!(protocols, ["ethernet", "vlan", "vlan"]);
     assert_eq!(
         packet.stop,
-        StopReason::UnclaimedRoute(RouteId::EtherType(0x0800))
+        StopReason::UnclaimedRoute(RouteId::EtherType(0x9999))
     );
     assert_eq!(
         packet.layers[1].fields.get("vlan_id"),

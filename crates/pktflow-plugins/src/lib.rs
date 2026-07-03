@@ -5,7 +5,12 @@
 
 use pktflow_core::Engine;
 
+pub mod arp;
 pub mod ethernet;
+pub mod icmpv4;
+pub mod igmp;
+pub mod ipv4;
+pub mod ipv6;
 pub mod template;
 pub mod vlan;
 
@@ -16,6 +21,11 @@ pub fn default_engine() -> Engine {
         .plugin(template::Template)
         .plugin(ethernet::Ethernet)
         .plugin(vlan::Vlan)
+        .plugin(ipv4::Ipv4)
+        .plugin(ipv6::Ipv6)
+        .plugin(arp::Arp)
+        .plugin(icmpv4::Icmpv4)
+        .plugin(igmp::Igmp)
         .build()
         // Not input-derived: a collision here is a bug in this very list,
         // caught by the registry's build-time validation (03.2).
