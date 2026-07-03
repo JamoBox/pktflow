@@ -488,6 +488,59 @@ mod tests {
     }
 
     #[test]
+    fn stream_identity_round_trips_without_engine_side_protocol_knowledge() {
+        // 02.4: a 2-field endpoint key + Sample rollup, declared by the
+        // plugin, read back generically — nothing below mentions the
+        // protocol; the engine only ever sees the declaration types.
+        static KEY: &[KeyField] = &[
+            KeyField {
+                a: "src_addr",
+                b: Some("dst_addr"),
+            },
+            KeyField {
+                a: "src_qual",
+                b: Some("dst_qual"),
+            },
+        ];
+        static ROLLUPS: &[RollupSpec] = &[RollupSpec {
+            field: "label",
+            kind: RollupKind::Sample,
+        }];
+
+        let mut p = Fake::new("pair_proto", &[]);
+        p.identity = Some(StreamIdentity {
+            key: KEY,
+            canonicalize: Canonicalize::EndpointSort,
+            lifecycle: None,
+            rollups: ROLLUPS,
+        });
+        let engine = Engine::builder().plugin(p).build().expect("valid identity");
+
+        // What the (future) aggregator will do per layer: fetch the plugin
+        // by the layer's protocol name, read its declaration, and key on it.
+        let plugin = engine.plugin_by_name("pair_proto").expect("registered");
+        let identity = plugin.stream_identity().expect("declared");
+
+        let pairs: Vec<_> = identity.key.iter().map(|kf| (kf.a, kf.b)).collect();
+        assert_eq!(
+            pairs,
+            [
+                ("src_addr", Some("dst_addr")),
+                ("src_qual", Some("dst_qual"))
+            ]
+        );
+        assert!(matches!(identity.canonicalize, Canonicalize::EndpointSort));
+        assert!(identity.lifecycle.is_none());
+        assert_eq!(
+            identity.rollups,
+            [RollupSpec {
+                field: "label",
+                kind: RollupKind::Sample
+            }]
+        );
+    }
+
+    #[test]
     fn registration_order_does_not_change_the_route_table() {
         const ID_A: RouteId = RouteId::EtherType(0x0800);
         const ID_B: RouteId = RouteId::IpProtocol(17);
