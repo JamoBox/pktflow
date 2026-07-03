@@ -7,5 +7,8 @@ edition.workspace = true
 [dependencies]
 pktflow-core.workspace = true
 
+[dev-dependencies]
+proptest.workspace = true
+
 [lints]
 workspace = true
