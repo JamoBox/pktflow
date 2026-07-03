@@ -9,8 +9,8 @@ prior, and the safety gate that stops rather than misidentifies.
 
 ## Sub-tasks
 
-- [ ] [03.1 Route identifiers](01-route-ids.md) — namespaced ids so EtherType 6 ≠ IP proto 6
-- [ ] [03.2 Registry & builder](02-router-builder.md) — claims auto-install, overrides, pool (FR-12)
+- [x] [03.1 Route identifiers](01-route-ids.md) — namespaced ids so EtherType 6 ≠ IP proto 6
+- [x] [03.2 Registry & builder](02-router-builder.md) — claims auto-install, overrides, pool (FR-12)
 - [ ] [03.3 Heuristic fallback](03-heuristic-fallback.md) — probe scoring + prior + determinism (FR-14)
 - [ ] [03.4 Gated termination](04-gated-termination.md) — the no-phantom-streams gate (FR-15)
 

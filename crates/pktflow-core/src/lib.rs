@@ -6,6 +6,7 @@
 pub mod bytes;
 pub mod context;
 pub mod depth;
+pub mod engine;
 pub mod error;
 pub mod packet;
 pub mod plugin;
@@ -16,6 +17,7 @@ pub mod value;
 pub use bytes::{ByteReader, Truncated};
 pub use context::ParseCtx;
 pub use depth::{Depth, ParseOpts};
+pub use engine::{Engine, EngineBuilder, RegistryError};
 pub use error::{ParseError, StopReason};
 pub use packet::{DissectedPacket, LayerRecord, LinkType, PacketMeta, ProtocolName};
 pub use plugin::{Confidence, Hint, LayerPlugin, ParsedLayer};

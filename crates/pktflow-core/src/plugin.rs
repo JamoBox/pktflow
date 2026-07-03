@@ -118,6 +118,14 @@ pub trait LayerPlugin: Send + Sync {
         &[]
     }
 
+    /// Whether this plugin participates in heuristic fallback (03.2).
+    /// Override to `true` alongside [`LayerPlugin::probe`] — the registry
+    /// enrolls the fallback pool from this flag at build time (probing
+    /// zero bytes to detect a probe is not acceptable).
+    fn has_probe(&self) -> bool {
+        false
+    }
+
     /// Self-scored confidence for heuristic fallback (02.3). `None`
     /// (default) = "never consider me heuristically". Probes must be cheap
     /// (bounded work, no allocation) and honest.

@@ -12,7 +12,7 @@ product's extensibility promise — get it right and the engine never changes ag
 
 - [x] [02.1 `LayerPlugin` trait](01-plugin-trait.md) — name + parse, the required core
 - [x] [02.2 Next-layer hints](02-hints.md) — all five hint kinds (FR-11)
-- [ ] [02.3 Routing metadata](03-routing-metadata.md) — claims, predecessors, probe
+- [x] [02.3 Routing metadata](03-routing-metadata.md) — claims, predecessors, probe
 - [ ] [02.4 Stream identity](04-stream-identity.md) — flow key, canonicalization, state, rollups
 
 ## Definition of done
