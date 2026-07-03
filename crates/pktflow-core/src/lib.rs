@@ -11,6 +11,7 @@ pub mod error;
 pub mod packet;
 pub mod plugin;
 pub mod route;
+pub mod router;
 pub mod stream;
 pub mod value;
 
@@ -22,6 +23,7 @@ pub use error::{ParseError, StopReason};
 pub use packet::{DissectedPacket, LayerRecord, LinkType, PacketMeta, ProtocolName};
 pub use plugin::{Confidence, Hint, LayerPlugin, ParsedLayer};
 pub use route::RouteId;
+pub use router::{StepOutcome, MIN_CONFIDENCE, PRIOR_BOOST};
 pub use stream::{
     Canonicalize, FlowKey, KeyError, KeyField, LifecycleSpec, PacketDirection, RollupKind,
     RollupSpec, StateName, StreamIdentity,
