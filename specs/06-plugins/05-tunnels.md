@@ -40,10 +40,10 @@ The inner ethernet layer entering via `ByProtocol` (not link type) exercises 02.
 path end-to-end.
 
 ## Acceptance criteria
-- [ ] Both fixture hierarchies asserted node-by-node (FR-8, FR-21 item 5).
-- [ ] GRE flag-dependent header length: all 8 C/K/S combinations length-tested; truncation
+- [x] Both fixture hierarchies asserted node-by-node (FR-8, FR-21 item 5).
+- [x] GRE flag-dependent header length: all 8 C/K/S combinations length-tested; truncation
       inside optional words handled.
-- [ ] Two VNIs over one outer UDP stream → two sibling vxlan streams (shared-qualifier key
+- [x] Two VNIs over one outer UDP stream → two sibling vxlan streams (shared-qualifier key
       semantics verified).
-- [ ] Inner streams' `PacketDirection` remains canonical per their own keys even when outer
+- [x] Inner streams' `PacketDirection` remains canonical per their own keys even when outer
       and inner directions disagree (return traffic on an asymmetric tunnel fixture).

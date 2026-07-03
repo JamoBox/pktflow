@@ -6,6 +6,7 @@ mod kit;
 use pktflow_core::{Hint, RouteId, Value};
 use pktflow_plugins::arp::Arp;
 use pktflow_plugins::ethernet::Ethernet;
+use pktflow_plugins::gre::Gre;
 use pktflow_plugins::icmpv4::Icmpv4;
 use pktflow_plugins::igmp::Igmp;
 use pktflow_plugins::ipv4::{internet_checksum, Ipv4};
@@ -14,6 +15,7 @@ use pktflow_plugins::tcp::Tcp;
 use pktflow_plugins::template::Template;
 use pktflow_plugins::udp::Udp;
 use pktflow_plugins::vlan::Vlan;
+use pktflow_plugins::vxlan::Vxlan;
 
 use kit::{run_conformance, ConformanceCase, GoodPacket};
 
@@ -362,6 +364,62 @@ fn udp_conforms() {
                 RouteId::UdpPort(34567),
                 RouteId::UdpPort(53),
             ])),
+        }],
+        outer_ctx: Vec::new(),
+    });
+}
+
+#[test]
+fn gre_conforms() {
+    run_conformance(&ConformanceCase {
+        plugin: Box::new(Gre),
+        good: vec![
+            // Bare RFC 2784 header: no options, IPv4 inside.
+            GoodPacket {
+                bytes: vec![0x00, 0x00, 0x08, 0x00],
+                expected_header_len: 4,
+                expected_full_fields: vec![
+                    ("key", Value::U64(0)),
+                    ("flags", Value::U64(0)),
+                    ("protocol", Value::U64(0x0800)),
+                    ("version", Value::U64(0)),
+                ],
+                expected_hint: Hint::Route(RouteId::EtherType(0x0800)),
+            },
+            // RFC 2890 with C, K, and S words present.
+            GoodPacket {
+                bytes: vec![
+                    0xB0, 0x00, 0x08, 0x00, // C|K|S, proto ipv4
+                    0xAB, 0xCD, 0x00, 0x00, // checksum + reserved
+                    0x00, 0x00, 0x00, 0x07, // key
+                    0x00, 0x00, 0x00, 0x2A, // sequence
+                ],
+                expected_header_len: 16,
+                expected_full_fields: vec![
+                    ("key", Value::U64(7)),
+                    ("flags", Value::U64(0xB)),
+                    ("protocol", Value::U64(0x0800)),
+                    ("version", Value::U64(0)),
+                    ("checksum", Value::U64(0xABCD)),
+                    ("sequence", Value::U64(42)),
+                ],
+                expected_hint: Hint::Route(RouteId::EtherType(0x0800)),
+            },
+        ],
+        outer_ctx: Vec::new(),
+    });
+}
+
+#[test]
+fn vxlan_conforms() {
+    run_conformance(&ConformanceCase {
+        plugin: Box::new(Vxlan),
+        good: vec![GoodPacket {
+            // RFC 7348: I flag, VNI 5001.
+            bytes: vec![0x08, 0x00, 0x00, 0x00, 0x00, 0x13, 0x89, 0x00],
+            expected_header_len: 8,
+            expected_full_fields: vec![("vni", Value::U64(5001)), ("flags", Value::U64(8))],
+            expected_hint: Hint::ByProtocol("ethernet"),
         }],
         outer_ctx: Vec::new(),
     });

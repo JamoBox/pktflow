@@ -7,6 +7,7 @@ use pktflow_core::Engine;
 
 pub mod arp;
 pub mod ethernet;
+pub mod gre;
 pub mod icmpv4;
 pub mod igmp;
 pub mod ipv4;
@@ -15,6 +16,7 @@ pub mod tcp;
 pub mod template;
 pub mod udp;
 pub mod vlan;
+pub mod vxlan;
 
 /// The one registration list (PRD §8): adding a protocol end-to-end is a
 /// new file plus one `.plugin(...)` line here.
@@ -30,6 +32,8 @@ pub fn default_engine() -> Engine {
         .plugin(igmp::Igmp)
         .plugin(tcp::Tcp)
         .plugin(udp::Udp)
+        .plugin(gre::Gre)
+        .plugin(vxlan::Vxlan)
         .build()
         // Not input-derived: a collision here is a bug in this very list,
         // caught by the registry's build-time validation (03.2).
