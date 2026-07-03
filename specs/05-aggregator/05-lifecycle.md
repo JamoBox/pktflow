@@ -38,9 +38,9 @@ pub struct LifecycleSpec {
   `closed_states` list.
 
 ## Acceptance criteria
-- [ ] Lifecycle execution wired into ingest; synthetic 3-way-handshake fixture drives a test
+- [x] Lifecycle execution wired into ingest; synthetic 3-way-handshake fixture drives a test
       plugin through `new → half_open → established` with per-direction inputs honored.
-- [ ] `closed_states` marking verified: teardown fixture flips close-eligibility; a
+- [x] `closed_states` marking verified: teardown fixture flips close-eligibility; a
       mid-linger packet still updates stats.
-- [ ] No-lifecycle plugins: `state == None` throughout, zero overhead on the ingest path
+- [x] No-lifecycle plugins: `state == None` throughout, zero overhead on the ingest path
       (branch, not allocation).

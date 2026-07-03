@@ -30,8 +30,8 @@ layer order.
 - Depth is naturally bounded by `max_layers` (04.1); no separate hierarchy depth limit.
 
 ## Acceptance criteria
-- [ ] GRE and VXLAN fixtures produce the exact nested chains above (FR-8), asserted
+- [x] GRE and VXLAN fixtures produce the exact nested chains above (FR-8), asserted
       node-by-node via the query API.
-- [ ] Consequence tests 1 and 2 pass as described.
-- [ ] Hierarchy integrity property (proptest over random synthetic captures): every
+- [x] Consequence tests 1 and 2 pass as described.
+- [x] Hierarchy integrity property (proptest over random synthetic captures): every
       non-root's parent exists, parent/child links are mutually consistent, no cycles.
