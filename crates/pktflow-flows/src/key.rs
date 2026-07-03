@@ -8,6 +8,11 @@
 use pktflow_core::{
     Canonicalize, FieldMap, FlowKey, KeyError, PacketDirection, StreamIdentity, Value,
 };
+use smallvec::SmallVec;
+
+/// Encoding scratch buffer: inline for every common key shape (an IPv6
+/// pair side is 19 bytes), so the per-packet path allocates nothing.
+type KeyBuf = SmallVec<[u8; 40]>;
 
 /// Canonical key + direction for one layer.
 ///
@@ -26,9 +31,9 @@ pub fn flow_key(
     match identity.canonicalize {
         Canonicalize::Custom(f) => f(fields),
         Canonicalize::EndpointSort => {
-            let mut shared = Vec::new();
-            let mut side_a = Vec::new();
-            let mut side_b = Vec::new();
+            let mut shared = KeyBuf::new();
+            let mut side_a = KeyBuf::new();
+            let mut side_b = KeyBuf::new();
 
             for kf in identity.key {
                 let va = fields.get(kf.a).ok_or(KeyError::MissingField(kf.a))?;
@@ -74,14 +79,14 @@ const TAG_STR: u8 = 4;
 const TAG_LIST: u8 = 5;
 const TAG_OTHER: u8 = 255;
 
-fn encode_len_prefixed(tag: u8, payload: &[u8], out: &mut Vec<u8>) {
+fn encode_len_prefixed(tag: u8, payload: &[u8], out: &mut KeyBuf) {
     let len = u16::try_from(payload.len()).unwrap_or(u16::MAX);
     out.push(tag);
     out.extend_from_slice(&len.to_be_bytes());
     out.extend_from_slice(payload.get(..usize::from(len)).unwrap_or(payload));
 }
 
-fn encode_value(v: &Value, out: &mut Vec<u8>) {
+fn encode_value(v: &Value, out: &mut KeyBuf) {
     match v {
         Value::Bytes(b) => encode_len_prefixed(TAG_BYTES, b, out),
         Value::U64(n) => {
@@ -168,8 +173,8 @@ mod tests {
         m
     }
 
-    fn encoded(v: &Value) -> Vec<u8> {
-        let mut out = Vec::new();
+    fn encoded(v: &Value) -> KeyBuf {
+        let mut out = KeyBuf::new();
         encode_value(v, &mut out);
         out
     }

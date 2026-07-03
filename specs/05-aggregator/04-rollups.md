@@ -43,9 +43,9 @@ only on queries).
   `Series` (the DORA sequence is order-sensitive).
 
 ## Acceptance criteria
-- [ ] Three kinds implemented with cap/flag semantics unit-tested at the boundaries
+- [x] Three kinds implemented with cap/flag semantics unit-tested at the boundaries
       (cap-1, cap, cap+1).
-- [ ] Determinism: same packet sequence ⇒ identical rollup contents including set order
+- [x] Determinism: same packet sequence ⇒ identical rollup contents including set order
       (insertion-ordered set, PRD §7).
-- [ ] Depth interaction test: at `Depth::Keys`, a `Structural`-only field simply never
+- [x] Depth interaction test: at `Depth::Keys`, a `Structural`-only field simply never
       arrives → rollup stays empty, no error (documented behavior, not a bug).

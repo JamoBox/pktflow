@@ -45,4 +45,4 @@ the stream's first packet as `initiator: PacketDirection` at stream creation.
       random field values including empty bytes/strings and lists.
 - [x] MAC-pair, IPv6-pair, and port-pair keys stay within the SmallVec inline capacity
       (no heap) — asserted in tests.
-- [ ] `MissingField` path: layer skipped, parents still updated, diagnostic counter bumped.
+- [x] `MissingField` path: layer skipped, parents still updated, diagnostic counter bumped.

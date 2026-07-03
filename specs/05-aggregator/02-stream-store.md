@@ -70,10 +70,10 @@ Decisions:
   sorting in queries — not exposed as a global ordering guarantee (keeps D5's sharding door open).
 
 ## Acceptance criteria
-- [ ] Ingest implemented; a 2-packet A→B / B→A fixture yields one stream, `stats[AtoB] =
+- [x] Ingest implemented; a 2-packet A→B / B→A fixture yields one stream, `stats[AtoB] =
       stats[BtoA] = (1, len)`, `initiator = AtoB`.
-- [ ] Identity-less middle layer (VLAN) correctly bridges: eth stream → ip stream parented
+- [x] Identity-less middle layer (VLAN) correctly bridges: eth stream → ip stream parented
       to eth (VLAN skipped, parent chain intact).
-- [ ] `opaque_bytes` lands on the innermost stream only.
-- [ ] Ingest of 100k synthetic packets across 10k streams stays allocation-sane (no per-
+- [x] `opaque_bytes` lands on the innermost stream only.
+- [x] Ingest of 100k synthetic packets across 10k streams stays allocation-sane (no per-
       packet key heap allocation for common protocols — ties to 05.1 SmallVec criterion).
