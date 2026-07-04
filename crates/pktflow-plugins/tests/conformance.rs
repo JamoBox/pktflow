@@ -3,14 +3,18 @@
 
 mod kit;
 
+use pktflow_core::{Canonicalize, FieldMap, KeyField, LayerRecord, StreamIdentity};
 use pktflow_core::{Hint, RouteId, Value};
 use pktflow_plugins::arp::Arp;
+use pktflow_plugins::dhcp::Dhcp;
+use pktflow_plugins::dns::Dns;
 use pktflow_plugins::ethernet::Ethernet;
 use pktflow_plugins::gre::Gre;
 use pktflow_plugins::icmpv4::Icmpv4;
 use pktflow_plugins::igmp::Igmp;
 use pktflow_plugins::ipv4::{internet_checksum, Ipv4};
 use pktflow_plugins::ipv6::Ipv6;
+use pktflow_plugins::ntp::Ntp;
 use pktflow_plugins::tcp::Tcp;
 use pktflow_plugins::template::Template;
 use pktflow_plugins::udp::Udp;
@@ -420,6 +424,155 @@ fn vxlan_conforms() {
             expected_header_len: 8,
             expected_full_fields: vec![("vni", Value::U64(5001)), ("flags", Value::U64(8))],
             expected_hint: Hint::ByProtocol("ethernet"),
+        }],
+        outer_ctx: Vec::new(),
+    });
+}
+
+/// RFC 1035 standard query for example.com (A, IN), RD set.
+fn dns_query_bytes() -> Vec<u8> {
+    let mut m = vec![0x12, 0x34, 0x01, 0x00, 0, 1, 0, 0, 0, 0, 0, 0];
+    m.extend_from_slice(&[7]);
+    m.extend_from_slice(b"example");
+    m.extend_from_slice(&[3]);
+    m.extend_from_slice(b"com");
+    m.extend_from_slice(&[0, 0, 1, 0, 1]);
+    m
+}
+
+fn dns_query_fields() -> Vec<(&'static str, Value)> {
+    vec![
+        ("app", Value::from("dns")),
+        ("id", Value::U64(0x1234)),
+        ("is_response", Value::Bool(false)),
+        ("opcode", Value::U64(0)),
+        ("rcode", Value::U64(0)),
+        ("qname", Value::from("example.com")),
+        ("qtype", Value::U64(1)),
+        ("answers", Value::List(vec![])),
+        ("qdcount", Value::U64(1)),
+        ("ancount", Value::U64(0)),
+        ("nscount", Value::U64(0)),
+        ("arcount", Value::U64(0)),
+    ]
+}
+
+#[test]
+fn dns_conforms_over_udp() {
+    run_conformance(&ConformanceCase {
+        plugin: Box::new(Dns),
+        good: vec![GoodPacket {
+            bytes: dns_query_bytes(),
+            expected_header_len: 29,
+            expected_full_fields: dns_query_fields(),
+            expected_hint: Hint::Terminal,
+        }],
+        outer_ctx: Vec::new(),
+    });
+}
+
+#[test]
+fn dns_conforms_over_tcp_with_length_prefix() {
+    let mut bytes = vec![0x00, 29];
+    bytes.extend_from_slice(&dns_query_bytes());
+
+    // The plugin looks at its predecessor to spot TCP framing.
+    static TCP_KEY: &[KeyField] = &[KeyField {
+        a: "src_port",
+        b: Some("dst_port"),
+    }];
+    static TCP_IDENT: StreamIdentity = StreamIdentity {
+        key: TCP_KEY,
+        canonicalize: Canonicalize::EndpointSort,
+        lifecycle: None,
+        rollups: &[],
+    };
+    let _ = &TCP_IDENT; // context record needs only the protocol name
+    let tcp_layer = LayerRecord {
+        protocol: "tcp",
+        offset: 34,
+        header_len: 20,
+        fields: FieldMap::new(),
+    };
+
+    run_conformance(&ConformanceCase {
+        plugin: Box::new(Dns),
+        good: vec![GoodPacket {
+            bytes,
+            expected_header_len: 31,
+            expected_full_fields: dns_query_fields(),
+            expected_hint: Hint::Terminal,
+        }],
+        outer_ctx: vec![tcp_layer],
+    });
+}
+
+#[test]
+fn dhcp_conforms() {
+    // DHCPDISCOVER with requested-ip, server-id, and hostname options.
+    let mut bytes = vec![1, 1, 6, 0];
+    bytes.extend_from_slice(&0xDEADBEEFu32.to_be_bytes());
+    bytes.extend_from_slice(&[0; 20]); // secs..giaddr
+    bytes.extend_from_slice(&[0x00, 0x1A, 0x2B, 0x3C, 0x4D, 0x5E]);
+    bytes.extend_from_slice(&[0; 10]); // chaddr padding
+    bytes.extend_from_slice(&[0; 192]); // sname + file
+    bytes.extend_from_slice(&0x63825363u32.to_be_bytes());
+    bytes.extend_from_slice(&[53, 1, 1]); // DISCOVER
+    bytes.extend_from_slice(&[50, 4, 10, 0, 0, 99]);
+    bytes.extend_from_slice(&[54, 4, 10, 0, 0, 53]);
+    bytes.extend_from_slice(&[12, 5]);
+    bytes.extend_from_slice(b"host1");
+    bytes.push(255);
+
+    run_conformance(&ConformanceCase {
+        plugin: Box::new(Dhcp),
+        good: vec![GoodPacket {
+            expected_header_len: bytes.len(),
+            bytes,
+            expected_full_fields: vec![
+                ("app", Value::from("dhcp")),
+                ("op", Value::U64(1)),
+                ("msg_type", Value::U64(1)),
+                ("xid", Value::U64(0xDEADBEEF)),
+                (
+                    "client_mac",
+                    Value::from(&[0x00, 0x1A, 0x2B, 0x3C, 0x4D, 0x5E][..]),
+                ),
+                ("requested_ip", Value::from(&[10, 0, 0, 99][..])),
+                ("server_id", Value::from(&[10, 0, 0, 53][..])),
+                ("hostname", Value::from("host1")),
+            ],
+            expected_hint: Hint::Terminal,
+        }],
+        outer_ctx: Vec::new(),
+    });
+}
+
+#[test]
+fn ntp_conforms() {
+    // v4 client poll (RFC 5905), stratum 0, GPS reference id.
+    let mut bytes = vec![0x23, 0, 6, 0xEC];
+    bytes.extend_from_slice(&[0; 8]);
+    bytes.extend_from_slice(b"GPS\0");
+    bytes.extend_from_slice(&[0; 32]);
+
+    run_conformance(&ConformanceCase {
+        plugin: Box::new(Ntp),
+        good: vec![GoodPacket {
+            bytes,
+            expected_header_len: 48,
+            expected_full_fields: vec![
+                ("app", Value::from("ntp")),
+                ("version", Value::U64(4)),
+                ("mode", Value::U64(3)),
+                ("stratum", Value::U64(0)),
+                ("ref_id", Value::from(&b"GPS\0"[..])),
+                ("ref_ts", Value::U64(0)),
+                ("orig_ts", Value::U64(0)),
+                ("recv_ts", Value::U64(0)),
+                ("xmit_ts", Value::U64(0)),
+            ],
+            expected_hint: Hint::Terminal,
         }],
         outer_ctx: Vec::new(),
     });

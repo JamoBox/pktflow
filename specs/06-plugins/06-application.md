@@ -44,11 +44,11 @@ on port 53 will fail `parse` → `PluginError` stop (03.4 row 3). That is correc
 counted, visible, no guessing.
 
 ## Acceptance criteria
-- [ ] Real-capture fixtures for each (DNS query+response, full DORA, NTP client/server
+- [x] Real-capture fixtures for each (DNS query+response, full DORA, NTP client/server
       exchange) parse to exact expected fields and rollups.
-- [ ] DNS compression-bomb and forward-pointer fixtures decline safely (no hang/panic);
+- [x] DNS compression-bomb and forward-pointer fixtures decline safely (no hang/panic);
       fuzz target registered.
-- [ ] The app-stream pattern verified: one `dns` child stream under the UDP stream,
+- [x] The app-stream pattern verified: one `dns` child stream under the UDP stream,
       `qname` accumulate populated across multiple queries (PRD use case: "DNS query names
       observed in a UDP stream").
-- [ ] DHCP `msg_type` series preserves DORA order.
+- [x] DHCP `msg_type` series preserves DORA order.

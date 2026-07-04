@@ -19,6 +19,14 @@ under an hour (PRD §8 — the template exists to keep it that way).
 4. **Declare your streams.** `stream_identity()` with the endpoint
    `KeyField`s and any rollups. Return `None` if your layer qualifies its
    parent instead of forming conversations (see vlan).
+
+   **Endpoint-less protocols that want rollups** (the app-stream
+   pattern): if your protocol's conversation *is* the transport stream
+   (DNS, DHCP, NTP), declare a key of one shared field — `KeyField {
+   a: "app", b: None }` — on a constant the plugin always emits
+   (`app = Str("dns")`). You get exactly one child stream per transport
+   stream: a clean home for rollups without inventing endpoint
+   semantics. See dns.rs.
 5. **Register it.** Add one `.plugin(your_protocol::YourProtocol)` line to
    `default_engine()` in `crates/pktflow-plugins/src/lib.rs`. Duplicate
    names or route claims fail the build with an error naming both parties.

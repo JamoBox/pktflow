@@ -6,12 +6,15 @@
 use pktflow_core::Engine;
 
 pub mod arp;
+pub mod dhcp;
+pub mod dns;
 pub mod ethernet;
 pub mod gre;
 pub mod icmpv4;
 pub mod igmp;
 pub mod ipv4;
 pub mod ipv6;
+pub mod ntp;
 pub mod tcp;
 pub mod template;
 pub mod udp;
@@ -34,6 +37,9 @@ pub fn default_engine() -> Engine {
         .plugin(udp::Udp)
         .plugin(gre::Gre)
         .plugin(vxlan::Vxlan)
+        .plugin(dns::Dns)
+        .plugin(dhcp::Dhcp)
+        .plugin(ntp::Ntp)
         .build()
         // Not input-derived: a collision here is a bug in this very list,
         // caught by the registry's build-time validation (03.2).

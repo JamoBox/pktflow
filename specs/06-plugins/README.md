@@ -15,7 +15,7 @@ conversations, TCP lifecycle, UDP streams, nested tunnels, and rollups (FR-21).
 - [x] [06.3 Network layer](03-network.md) — IPv4, IPv6, ARP, ICMPv4, IGMP
 - [x] [06.4 Transport](04-transport.md) — TCP (lifecycle), UDP
 - [x] [06.5 Tunnels](05-tunnels.md) — GRE, VXLAN
-- [ ] [06.6 Application](06-application.md) — DNS, DHCP, NTP
+- [x] [06.6 Application](06-application.md) — DNS, DHCP, NTP
 
 ## Conventions (all plugins)
 
