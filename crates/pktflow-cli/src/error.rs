@@ -20,6 +20,10 @@ pub enum CliError {
     /// A pipeline invariant broke (a bug, not a usage problem).
     #[error("internal error: {0}")]
     Internal(String),
+    /// A lookup over the capture's data failed (missing or ambiguous
+    /// stream selector, 08.3) — runtime, not usage.
+    #[error("{0}")]
+    NotFound(String),
 }
 
 impl CliError {

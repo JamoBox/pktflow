@@ -6,6 +6,42 @@ use std::time::{Duration, SystemTime};
 
 use pktflow_core::{FieldMap, Value};
 
+/// Protocol-aware value rendering (FR-28): the `(protocol, field)` table
+/// entries, falling back to shape-based [`value_str`].
+pub fn field_value_str(protocol: &str, name: &str, value: &Value) -> String {
+    if protocol == "tcp" && name == "flags" {
+        if let Value::U64(bits) = value {
+            return tcp_flags_str(*bits);
+        }
+    }
+    value_str(name, value)
+}
+
+/// Symbolic TCP flags: `SYN+ACK`, `PSH+ACK`, … (FR-28 table row).
+pub fn tcp_flags_str(bits: u64) -> String {
+    // ACK last: the conventional renderings are SYN+ACK, PSH+ACK, FIN+ACK.
+    const NAMES: [(u64, &str); 8] = [
+        (0x02, "SYN"),
+        (0x01, "FIN"),
+        (0x04, "RST"),
+        (0x08, "PSH"),
+        (0x20, "URG"),
+        (0x40, "ECE"),
+        (0x80, "CWR"),
+        (0x10, "ACK"),
+    ];
+    let parts: Vec<&str> = NAMES
+        .iter()
+        .filter(|(bit, _)| bits & bit != 0)
+        .map(|(_, name)| *name)
+        .collect();
+    if parts.is_empty() {
+        "none".into()
+    } else {
+        parts.join("+")
+    }
+}
+
 /// Human value rendering keyed on shape and field name (FR-28 sketch).
 pub fn value_str(name: &str, value: &Value) -> String {
     match value {

@@ -52,7 +52,7 @@ pub fn dispatch(cli: Cli, stop: &StopFlags) -> Result<(), CliError> {
             };
             // Resolve the selector in both formats so bad selectors exit
             // nonzero before anything reaches stdout.
-            let detail = views::stream_detail(snapshot, &args.selector)?;
+            let detail = views::stream_detail(snapshot, &args.selector, args.full_series)?;
             match args.shared.format {
                 Format::Text => print!("{detail}"),
                 // 08.3 narrows the JSON to the selected stream.

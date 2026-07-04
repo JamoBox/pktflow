@@ -1,0 +1,10 @@
+tcp #5   :443 ↔ :52341   [closed]
+lineage   ethernet #0 (aa:bb:cc:dd:ee:01 ↔ aa:bb:cc:dd:ee:02) ▸ ipv4 #4 (10.0.0.5 ↔ 93.184.216.34) ▸ this
+timing    first 00:01:41.000  last 00:01:44.000  duration 00:00:03
+totals    7 pkts / 898 B    A→B 3 pkts / 562 B    B→A 4 pkts / 336 B
+initiator B (:52341)
+state     closed   (closed: capture-end)
+opaque    520 payload bytes beyond last parsed layer
+rollups
+  flags   {SYN, SYN+ACK, ACK, PSH+ACK, FIN+ACK}   (accumulate, 5 distinct / 7 obs)
+  flags   series: 00:01:41.000 ▼ SYN · 00:01:41.000 ▲ SYN+ACK · 00:01:41.000 ▼ ACK · 00:01:42.000 ▼ PSH+ACK · 00:01:43.000 ▲ PSH+ACK · 00:01:44.000 ▼ FIN+ACK · 00:01:44.000 ▲ FIN+ACK

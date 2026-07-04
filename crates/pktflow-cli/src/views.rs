@@ -6,12 +6,14 @@ use std::collections::HashMap;
 
 use pktflow_capture::InterfaceInfo;
 use pktflow_core::{DissectedPacket, PacketDirection, StopReason};
-use pktflow_flows::{AggregatorSnapshot, Stream, StreamId};
+use pktflow_flows::{AggregatorSnapshot, Rollup, SeriesPoint, Stream, StreamId};
 use serde_json::{json, Value as Json};
 
 use crate::cli::SortOrder;
 use crate::error::CliError;
-use crate::render::{human_bytes, human_duration, thousands, time_of_day, value_str};
+use crate::render::{
+    field_value_str, human_bytes, human_duration, thousands, time_of_day, value_str,
+};
 use crate::run::RunOutcome;
 use crate::summary::stop_class_key;
 
@@ -48,6 +50,23 @@ fn sort_siblings(streams: &mut [&Stream], order: SortOrder) {
 /// fields (`vni`, GRE `key`) render as `name=value`; the constant `app`
 /// field is dropped — the protocol name already says it.
 fn endpoints_str(s: &Stream) -> String {
+    let (a_side, b_side, extras) = endpoint_sides(s);
+    let mut out = String::new();
+    if !a_side.is_empty() {
+        out.push_str(&format!("{a_side} ↔ {b_side}"));
+    }
+    if !extras.is_empty() {
+        if !out.is_empty() {
+            out.push(' ');
+        }
+        out.push_str(&extras.join(" "));
+    }
+    out
+}
+
+/// The two rendered endpoint sides (canonical A, B) plus non-paired key
+/// fields. Empty side strings = no endpoint pair (qualifier-keyed).
+fn endpoint_sides(s: &Stream) -> (String, String, Vec<String>) {
     let mut a_side = Vec::new();
     let mut b_side = Vec::new();
     let mut extras = Vec::new();
@@ -81,17 +100,7 @@ fn endpoints_str(s: &Stream) -> String {
             extras.push(format!("{name}={}", value_str(name, value)));
         }
     }
-    let mut out = String::new();
-    if !a_side.is_empty() {
-        out.push_str(&format!("{} ↔ {}", a_side.join(","), b_side.join(",")));
-    }
-    if !extras.is_empty() {
-        if !out.is_empty() {
-            out.push(' ');
-        }
-        out.push_str(&extras.join(" "));
-    }
-    out
+    (a_side.join(","), b_side.join(","), extras)
 }
 
 /// One assembled row: label (tree prefix + identity) plus stat columns,
@@ -284,42 +293,153 @@ pub fn watch_frame(snapshot: &AggregatorSnapshot, sort: SortOrder, source: &str)
     )
 }
 
-/// Drill-down (08.3 first cut): `#id` selector only; key expressions
-/// arrive with 08.3 proper.
-pub fn stream_detail(snapshot: &AggregatorSnapshot, selector: &str) -> Result<String, CliError> {
-    let Some(seq) = selector
-        .strip_prefix('#')
-        .and_then(|s| s.parse::<u64>().ok())
-    else {
+/// Resolves an 08.3 selector: `#id`, or a key expression
+/// `PROTO A B` (endpoint pair, order-insensitive). Endpoints match this
+/// layer's rendered values; `addr:port` composites also require the
+/// address somewhere in the stream's ancestry. Missing and ambiguous
+/// selectors are runtime errors (exit 1); ambiguity lists candidates.
+pub fn resolve_selector<'a>(
+    snapshot: &'a AggregatorSnapshot,
+    selector: &str,
+) -> Result<&'a Stream, CliError> {
+    if let Some(rest) = selector.strip_prefix('#') {
+        let Ok(seq) = rest.parse::<u64>() else {
+            return Err(CliError::Usage(format!(
+                "bad selector {selector:?}: #id takes a number from a streams view"
+            )));
+        };
+        return snapshot
+            .streams
+            .iter()
+            .find(|s| s.created_seq == seq)
+            .ok_or_else(|| CliError::NotFound(format!("no stream #{seq} in this capture")));
+    }
+
+    let tokens: Vec<&str> = selector.split_whitespace().collect();
+    let [proto, ep1, ep2] = tokens.as_slice() else {
         return Err(CliError::Usage(format!(
-            "unsupported selector {selector:?}: use #id from a streams view \
-             (key expressions arrive with 08.3)"
+            "bad selector {selector:?}: use '#id' or 'PROTO ENDPOINT-A ENDPOINT-B'"
         )));
     };
+
     let ids = by_id(snapshot);
-    let Some(s) = snapshot.streams.iter().find(|s| s.created_seq == seq) else {
-        return Err(CliError::Usage(format!("no stream #{seq} in this capture")));
-    };
+    let candidates: Vec<&Stream> = snapshot
+        .streams
+        .iter()
+        .filter(|s| s.protocol == *proto)
+        .filter(|s| {
+            let (a, b, _) = endpoint_sides(s);
+            let ancestors = ancestor_values(s, &ids);
+            (token_matches(ep1, &a, &ancestors) && token_matches(ep2, &b, &ancestors))
+                || (token_matches(ep1, &b, &ancestors) && token_matches(ep2, &a, &ancestors))
+        })
+        .collect();
 
-    let mut out = String::new();
-    let header = stream_row("", s, false);
-    out.push_str(&format!(
-        "{}   {} / {}   {}\n",
-        header.label, header.pkts, header.bytes, header.tail
-    ));
+    match candidates.as_slice() {
+        [] => Err(CliError::NotFound(format!(
+            "no {proto} stream matching {ep1} ↔ {ep2} in this capture"
+        ))),
+        [one] => Ok(one),
+        many => {
+            let mut msg = format!("selector {selector:?} is ambiguous across parents; candidates:");
+            for s in many {
+                let lineage = lineage_str(s, &ids);
+                msg.push_str(&format!(
+                    "\n  #{}  {} {}  (under {lineage})",
+                    s.created_seq,
+                    s.protocol,
+                    endpoints_str(s),
+                ));
+            }
+            Err(CliError::NotFound(msg))
+        }
+    }
+}
 
-    // Lineage: walk parent links to root.
+/// Every rendered endpoint value in the stream's ancestry (both sides,
+/// all levels) — the address pool `addr:port` composites match against.
+fn ancestor_values(s: &Stream, ids: &HashMap<StreamId, &Stream>) -> Vec<String> {
+    let mut values = Vec::new();
+    let mut cursor = s.parent;
+    while let Some(pid) = cursor {
+        let Some(parent) = ids.get(&pid) else { break };
+        let (a, b, _) = endpoint_sides(parent);
+        values.push(a);
+        values.push(b);
+        cursor = parent.parent;
+    }
+    values
+}
+
+/// One endpoint token against one rendered side. `:`-prefixes are
+/// optional in the token; `addr:port` requires the port at this layer
+/// and the address in the ancestry.
+fn token_matches(token: &str, side: &str, ancestors: &[String]) -> bool {
+    let side_bare = side.strip_prefix(':').unwrap_or(side);
+    let token_bare = token.strip_prefix(':').unwrap_or(token);
+    if token_bare == side_bare {
+        return true;
+    }
+    if let Some((addr, port)) = token_bare.rsplit_once(':') {
+        return port == side_bare && ancestors.iter().any(|v| v == addr);
+    }
+    false
+}
+
+fn lineage_str(s: &Stream, ids: &HashMap<StreamId, &Stream>) -> String {
     let mut lineage = Vec::new();
     let mut cursor = s.parent;
     while let Some(pid) = cursor {
         let Some(parent) = ids.get(&pid) else { break };
-        lineage.push(format!("{} #{}", parent.protocol, parent.created_seq));
+        let endpoints = endpoints_str(parent);
+        let entry = if endpoints.is_empty() {
+            format!("{} #{}", parent.protocol, parent.created_seq)
+        } else {
+            format!("{} #{} ({endpoints})", parent.protocol, parent.created_seq)
+        };
+        lineage.push(entry);
         cursor = parent.parent;
     }
-    if !lineage.is_empty() {
-        lineage.reverse();
-        out.push_str(&format!("lineage   {} ▸ this\n", lineage.join(" ▸ ")));
+    lineage.reverse();
+    lineage.join(" ▸ ")
+}
+
+/// How many series points render before head/tail elision applies.
+const SERIES_ELISION: usize = 20;
+
+/// Drill-down (08.3): everything the aggregator knows about one stream,
+/// section by section; empty sections are omitted.
+pub fn stream_detail(
+    snapshot: &AggregatorSnapshot,
+    selector: &str,
+    full_series: bool,
+) -> Result<String, CliError> {
+    let s = resolve_selector(snapshot, selector)?;
+    let ids = by_id(snapshot);
+    let mut out = String::new();
+
+    // Header: identity + state, like a streams-view line without stats.
+    let endpoints = endpoints_str(s);
+    let state_tag = s.state.map(|st| format!("   [{st}]")).unwrap_or_default();
+    out.push_str(&format!("{} #{}", s.protocol, s.created_seq));
+    if !endpoints.is_empty() {
+        out.push_str(&format!("   {endpoints}"));
     }
+    out.push_str(&state_tag);
+    out.push('\n');
+
+    let lineage = lineage_str(s, &ids);
+    if !lineage.is_empty() {
+        out.push_str(&format!("lineage   {lineage} ▸ this\n"));
+    }
+
+    let duration = s.last_seen.duration_since(s.first_seen).unwrap_or_default();
+    out.push_str(&format!(
+        "timing    first {}  last {}  duration {}\n",
+        time_of_day(s.first_seen),
+        time_of_day(s.last_seen),
+        human_duration(duration),
+    ));
 
     out.push_str(&format!(
         "totals    {} pkts / {}    A→B {} pkts / {}    B→A {} pkts / {}\n",
@@ -330,22 +450,147 @@ pub fn stream_detail(snapshot: &AggregatorSnapshot, selector: &str) -> Result<St
         thousands(s.stats[1].packets),
         human_bytes(s.stats[1].bytes),
     ));
+
+    let (a_side, b_side, _) = endpoint_sides(s);
+    if !a_side.is_empty() {
+        let (side, endpoint) = match s.initiator {
+            PacketDirection::AtoB => ("A", &a_side),
+            PacketDirection::BtoA => ("B", &b_side),
+        };
+        out.push_str(&format!("initiator {side} ({endpoint})\n"));
+    }
+
+    if let Some(state) = s.state {
+        let closed = match s.closed {
+            Some(reason) => close_reason_str(reason),
+            None => "—",
+        };
+        out.push_str(&format!("state     {state}   (closed: {closed})\n"));
+    }
+
     if s.opaque_bytes > 0 {
         out.push_str(&format!(
             "opaque    {} payload bytes beyond last parsed layer\n",
             thousands(s.opaque_bytes)
         ));
     }
+
+    if !s.rollups.is_empty() {
+        out.push_str("rollups\n");
+        for (field, rollup) in s.rollups.iter() {
+            out.push_str(&rollup_line(s.protocol, field, rollup, full_series));
+        }
+    }
+
     let children: Vec<String> = s
         .children
         .iter()
         .filter_map(|id| ids.get(id).copied())
-        .map(|c| format!("{} #{}", c.protocol, c.created_seq))
+        .map(|c| child_chain_str(c, &ids))
         .collect();
     if !children.is_empty() {
         out.push_str(&format!("children  {}\n", children.join(", ")));
     }
     Ok(out)
+}
+
+fn close_reason_str(reason: pktflow_flows::CloseReason) -> &'static str {
+    match reason {
+        pktflow_flows::CloseReason::ProtocolClose => "protocol-close",
+        pktflow_flows::CloseReason::IdleTimeout => "idle-timeout",
+        pktflow_flows::CloseReason::LruEvicted => "lru-evicted",
+        pktflow_flows::CloseReason::CaptureEnd => "capture-end",
+    }
+}
+
+/// A child plus its single-child descendants: `ipv4 #3 (…) ▸ tcp #4 (…)`
+/// — the inner stack of a tunnel visible from the drill-down.
+fn child_chain_str(child: &Stream, ids: &HashMap<StreamId, &Stream>) -> String {
+    let mut parts = Vec::new();
+    let mut cursor = Some(child);
+    while let Some(s) = cursor {
+        let endpoints = endpoints_str(s);
+        if endpoints.is_empty() {
+            parts.push(format!("{} #{}", s.protocol, s.created_seq));
+        } else {
+            parts.push(format!("{} #{} ({endpoints})", s.protocol, s.created_seq));
+        }
+        cursor = match s.children.as_slice() {
+            [only] => ids.get(only).copied(),
+            _ => None,
+        };
+    }
+    parts.join(" ▸ ")
+}
+
+/// One rollup line per kind (05.4 honesty markers included).
+fn rollup_line(protocol: &str, field: &str, rollup: &Rollup, full_series: bool) -> String {
+    match rollup {
+        Rollup::Accumulate {
+            values,
+            count,
+            overflow,
+        } => {
+            let rendered: Vec<String> = values
+                .iter()
+                .map(|v| field_value_str(protocol, field, v))
+                .collect();
+            let marker = if *overflow {
+                format!(", ≥{} values", values.len())
+            } else {
+                String::new()
+            };
+            format!(
+                "  {field}   {{{}}}   (accumulate, {} distinct / {} obs{marker})\n",
+                rendered.join(", "),
+                values.len(),
+                thousands(*count),
+            )
+        }
+        Rollup::Sample { first, last } => {
+            let render = |v: &Option<pktflow_core::Value>| {
+                v.as_ref()
+                    .map(|v| field_value_str(protocol, field, v))
+                    .unwrap_or_else(|| "—".into())
+            };
+            format!(
+                "  {field}   {} → {}   (sample, first → last)\n",
+                render(first),
+                render(last),
+            )
+        }
+        Rollup::Series {
+            ring,
+            cap: _,
+            truncated,
+        } => {
+            let point = |p: &SeriesPoint| {
+                let arrow = match p.dir {
+                    PacketDirection::AtoB => "▲",
+                    PacketDirection::BtoA => "▼",
+                };
+                format!(
+                    "{} {arrow} {}",
+                    time_of_day(p.ts),
+                    field_value_str(protocol, field, &p.value)
+                )
+            };
+            let points: Vec<String> = if full_series || ring.len() <= SERIES_ELISION {
+                ring.iter().map(point).collect()
+            } else {
+                let head = ring.iter().take(SERIES_ELISION / 2).map(point);
+                let tail = ring.iter().skip(ring.len() - SERIES_ELISION / 2).map(point);
+                head.chain(std::iter::once(format!(
+                    "… {} elided …",
+                    ring.len() - SERIES_ELISION
+                )))
+                .chain(tail)
+                .collect()
+            };
+            let marker = if *truncated { "   (truncated)" } else { "" };
+            format!("  {field}   series: {}{marker}\n", points.join(" · "))
+        }
+    }
 }
 
 /// One packets-mode line (08.4 first cut): index, timestamp, layer
