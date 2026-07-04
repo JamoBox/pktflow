@@ -1,0 +1,18 @@
+Stream hierarchy view — the default lens
+
+Usage: pktflow streams [OPTIONS] <--read <FILE>|--iface <IFACE>>
+
+Options:
+  -r, --read <FILE>          Read packets from a capture file (offline replay)
+  -i, --iface <IFACE>        Capture live from a named interface
+  -f, --filter <BPF>         Kernel BPF filter string
+  -c, --count <N>            Stop after N packets
+      --depth <DEPTH>        Field extraction depth [default: structural] [possible values: keys, structural, full]
+      --format <FORMAT>      Output format [default: text] [possible values: text, json]
+      --idle-timeout <SECS>  Live mode: seconds of quiet before a stream is evicted
+      --max-streams <N>      Live mode: hard cap on concurrently tracked streams
+      --layer <PROTO>        Flat table of one protocol's streams instead of the tree
+      --merged               Fold same-key streams across parents (needs --layer)
+      --watch                Full-screen live view, redrawn every second
+      --sort <SORT>          Sibling sort order in the tree [default: bytes] [possible values: bytes, packets, first-seen, duration]
+  -h, --help                 Print help

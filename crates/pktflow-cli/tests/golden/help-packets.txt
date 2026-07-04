@@ -1,0 +1,16 @@
+Per-packet debug lens
+
+Usage: pktflow packets [OPTIONS] <--read <FILE>|--iface <IFACE>>
+
+Options:
+  -r, --read <FILE>          Read packets from a capture file (offline replay)
+  -i, --iface <IFACE>        Capture live from a named interface
+  -f, --filter <BPF>         Kernel BPF filter string
+  -c, --count <N>            Stop after N packets
+      --depth <DEPTH>        Field extraction depth [default: structural] [possible values: keys, structural, full]
+      --format <FORMAT>      Output format [default: text] [possible values: text, json]
+      --idle-timeout <SECS>  Live mode: seconds of quiet before a stream is evicted
+      --max-streams <N>      Live mode: hard cap on concurrently tracked streams
+  -v...                      -v: per-layer field blocks; -vv: + hex dump of unparsed payload
+      --no-streams           Skip stream aggregation (maximum-throughput triage)
+  -h, --help                 Print help

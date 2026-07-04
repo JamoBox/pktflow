@@ -1,0 +1,18 @@
+Dissects captured traffic into a hierarchy of streams (conversations) at every protocol layer.
+Shorthand: `pktflow FILE` = `pktflow streams -r FILE`.
+
+Usage: pktflow <COMMAND>
+
+Commands:
+  streams  Stream hierarchy view — the default lens
+  stream   Everything about one stream
+  packets  Per-packet debug lens
+  ifaces   List capturable interfaces
+  help     Print this message or the help of the given subcommand(s)
+
+Options:
+  -h, --help
+          Print help (see a summary with '-h')
+
+  -V, --version
+          Print version

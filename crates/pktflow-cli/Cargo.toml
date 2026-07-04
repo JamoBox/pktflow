@@ -9,10 +9,14 @@ name = "pktflow"
 path = "src/main.rs"
 
 [dependencies]
+pktflow-core.workspace = true
 pktflow-flows.workspace = true
 pktflow-plugins.workspace = true
 pktflow-capture.workspace = true
 thiserror.workspace = true
+clap.workspace = true
+ctrlc.workspace = true
+serde_json.workspace = true
 
 [lints]
 workspace = true

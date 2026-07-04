@@ -38,9 +38,9 @@ shared flags:
   second press = immediate exit.
 
 ## Acceptance criteria
-- [ ] clap tree implemented with the conflicts/defaults above; `--help` snapshot-tested
+- [x] clap tree implemented with the conflicts/defaults above; `--help` snapshot-tested
       (help text is UI; regressions are real).
-- [ ] Bare-path shorthand works; usage errors exit 2 with clap's message.
-- [ ] Summary appears on stderr for all subcommands and never contaminates `--format json`
+- [x] Bare-path shorthand works; usage errors exit 2 with clap's message.
+- [x] Summary appears on stderr for all subcommands and never contaminates `--format json`
       stdout (pipe-safety test: `pktflow streams -r f --format json | jq .` succeeds).
 - [ ] Graceful Ctrl-C verified manually on both OSes (checklist item, not CI).
