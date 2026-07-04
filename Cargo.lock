@@ -425,6 +425,7 @@ dependencies = [
  "pktflow-core",
  "pktflow-flows",
  "pktflow-plugins",
+ "pktflow-testkit",
  "serde_json",
  "thiserror",
 ]
@@ -457,6 +458,13 @@ dependencies = [
  "pktflow-flows",
  "proptest",
  "smallvec",
+]
+
+[[package]]
+name = "pktflow-testkit"
+version = "0.1.0"
+dependencies = [
+ "pktflow-core",
 ]
 
 [[package]]

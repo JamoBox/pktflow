@@ -50,6 +50,9 @@ pub struct StreamsArgs {
     /// Full-screen live view, redrawn every second
     #[arg(long)]
     pub watch: bool,
+    /// Testing hook: sleep N ms per packet to simulate replay pacing
+    #[arg(long, value_name = "MS", hide = true)]
+    pub pace_ms: Option<u64>,
     /// Sibling sort order in the tree
     #[arg(long, value_enum, default_value_t = SortOrder::Bytes)]
     pub sort: SortOrder,

@@ -18,5 +18,8 @@ clap.workspace = true
 ctrlc.workspace = true
 serde_json.workspace = true
 
+[dev-dependencies]
+pktflow-testkit.workspace = true
+
 [lints]
 workspace = true

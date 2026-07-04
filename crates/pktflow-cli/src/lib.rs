@@ -20,11 +20,14 @@ pub fn dispatch(cli: Cli, stop: &StopFlags) -> Result<(), CliError> {
     match cli.command {
         Command::Streams(args) => {
             if args.watch {
-                return Err(CliError::Usage(
-                    "--watch arrives with 08.2; run without it for the end-of-run view".into(),
-                ));
+                if args.shared.format == Format::Json {
+                    return Err(CliError::Usage(
+                        "--watch with --format json (NDJSON events) arrives with 08.5".into(),
+                    ));
+                }
+                return watch(&args, stop);
             }
-            let outcome = run::run(&args.shared, stop, true, |_, _| {})?;
+            let outcome = run_paced(&args, stop)?;
             match args.shared.format {
                 Format::Text => {
                     let Some(snapshot) = &outcome.snapshot else {
@@ -92,6 +95,64 @@ pub fn dispatch(cli: Cli, stop: &StopFlags) -> Result<(), CliError> {
             Ok(())
         }
     }
+}
+
+/// The paced (or plain) end-of-run pipeline for `streams`.
+fn run_paced(args: &cli::StreamsArgs, stop: &StopFlags) -> Result<run::RunOutcome, CliError> {
+    let pace = args.pace_ms.map(std::time::Duration::from_millis);
+    run::run(&args.shared, stop, true, move |_, _| {
+        if let Some(d) = pace {
+            std::thread::sleep(d);
+        }
+    })
+}
+
+/// `--watch` (08.2): full-screen redraw at least every second while
+/// packets flow, plus a final frame after `finish()` that matches the
+/// non-watch tree. Snapshot-based; stdout only.
+fn watch(args: &cli::StreamsArgs, stop: &StopFlags) -> Result<(), CliError> {
+    use std::time::{Duration, Instant};
+    let interval = Duration::from_secs(1);
+    let pace = args.pace_ms.map(Duration::from_millis);
+    let sort = args.sort;
+    let source = args
+        .shared
+        .input
+        .read
+        .as_ref()
+        .map(|p| p.display().to_string())
+        .or_else(|| args.shared.input.iface.clone())
+        .unwrap_or_default();
+
+    let mut last_draw = Instant::now();
+    let mut out = std::io::stdout();
+    let outcome = run::run_observed(
+        &args.shared,
+        stop,
+        true,
+        move |_, _| {
+            if let Some(d) = pace {
+                std::thread::sleep(d);
+            }
+        },
+        |agg| {
+            if last_draw.elapsed() >= interval {
+                last_draw = Instant::now();
+                let frame = views::watch_frame(&agg.snapshot(), sort, &source);
+                let _ = write!(out, "{frame}");
+                let _ = out.flush();
+            }
+        },
+    )?;
+
+    // The final frame: exactly the non-watch tree plus the footer.
+    let Some(snapshot) = &outcome.snapshot else {
+        return Err(CliError::Internal("watch run without snapshot".into()));
+    };
+    let source = &outcome.source_name;
+    print!("{}", views::watch_frame(snapshot, args.sort, source));
+    eprint!("{}", summary::render(&outcome));
+    Ok(())
 }
 
 fn print_json(doc: &serde_json::Value) -> Result<(), CliError> {

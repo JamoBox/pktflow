@@ -5,13 +5,13 @@
 use std::collections::HashMap;
 
 use pktflow_capture::InterfaceInfo;
-use pktflow_core::{DissectedPacket, StopReason};
+use pktflow_core::{DissectedPacket, PacketDirection, StopReason};
 use pktflow_flows::{AggregatorSnapshot, Stream, StreamId};
 use serde_json::{json, Value as Json};
 
 use crate::cli::SortOrder;
 use crate::error::CliError;
-use crate::render::{fields_str, human_bytes, human_duration, thousands, time_of_day, value_str};
+use crate::render::{human_bytes, human_duration, thousands, time_of_day, value_str};
 use crate::run::RunOutcome;
 use crate::summary::stop_class_key;
 
@@ -41,69 +41,187 @@ fn sort_siblings(streams: &mut [&Stream], order: SortOrder) {
     }
 }
 
-fn stream_line(s: &Stream) -> String {
-    let state = s.state.map(|st| format!("  [{st}]")).unwrap_or_default();
-    let duration = s.last_seen.duration_since(s.first_seen).unwrap_or_default();
-    format!(
-        "#{} {}  {}{}   {} pkts   {}   {}",
-        s.created_seq,
-        s.protocol,
-        fields_str(&s.key_fields),
-        state,
-        thousands(total_packets(s)),
-        human_bytes(total_bytes(s)),
-        human_duration(duration),
-    )
+/// Rendered endpoint pair in canonical A ↔ B order (08.2 line grammar):
+/// `key_fields` come from the creating packet, so `initiator` says which
+/// side of each `src_*`/`dst_*` pair is endpoint A. Ports render with a
+/// `:` prefix (their IP parent shows the addresses). Non-paired key
+/// fields (`vni`, GRE `key`) render as `name=value`; the constant `app`
+/// field is dropped — the protocol name already says it.
+fn endpoints_str(s: &Stream) -> String {
+    let mut a_side = Vec::new();
+    let mut b_side = Vec::new();
+    let mut extras = Vec::new();
+    for (name, value) in s.key_fields.iter() {
+        if let Some(suffix) = name.strip_prefix("src_") {
+            let dst_name = format!("dst_{suffix}");
+            if let Some(dst_value) = s.key_fields.get(&dst_name) {
+                let mut src_str = value_str(name, value);
+                let mut dst_str = value_str(&dst_name, dst_value);
+                if suffix.ends_with("port") {
+                    src_str = format!(":{src_str}");
+                    dst_str = format!(":{dst_str}");
+                }
+                match s.initiator {
+                    PacketDirection::AtoB => {
+                        a_side.push(src_str);
+                        b_side.push(dst_str);
+                    }
+                    PacketDirection::BtoA => {
+                        a_side.push(dst_str);
+                        b_side.push(src_str);
+                    }
+                }
+                continue;
+            }
+        }
+        if name.starts_with("dst_") && s.key_fields.get(&format!("src_{}", &name[4..])).is_some() {
+            continue; // consumed with its src_ partner
+        }
+        if *name != "app" {
+            extras.push(format!("{name}={}", value_str(name, value)));
+        }
+    }
+    let mut out = String::new();
+    if !a_side.is_empty() {
+        out.push_str(&format!("{} ↔ {}", a_side.join(","), b_side.join(",")));
+    }
+    if !extras.is_empty() {
+        if !out.is_empty() {
+            out.push(' ');
+        }
+        out.push_str(&extras.join(" "));
+    }
+    out
 }
 
-/// The default lens: hierarchy tree, roots down (08.2 first cut).
+/// One assembled row: label (tree prefix + identity) plus stat columns,
+/// aligned table-wide before printing.
+struct Row {
+    label: String,
+    pkts: String,
+    bytes: String,
+    tail: String,
+}
+
+fn stream_row(prefix: &str, s: &Stream, first_seen_col: bool) -> Row {
+    let endpoints = endpoints_str(s);
+    let state = s.state.map(|st| format!("   [{st}]")).unwrap_or_default();
+    let mut label = format!("{prefix}{} #{}", s.protocol, s.created_seq);
+    if !endpoints.is_empty() {
+        label.push_str("  ");
+        label.push_str(&endpoints);
+    }
+    label.push_str(&state);
+
+    let duration = s.last_seen.duration_since(s.first_seen).unwrap_or_default();
+    let mut tail = human_duration(duration);
+    // The ▲/▼ split only means something for streams with two endpoints;
+    // qualifier-keyed streams (dns, vxlan) have no B side to count.
+    if endpoints.contains('↔') {
+        tail.push_str(&format!(
+            "   ▲{}/▼{}",
+            thousands(s.stats[0].packets),
+            thousands(s.stats[1].packets)
+        ));
+    }
+    if first_seen_col {
+        tail.push_str(&format!("   first {}", time_of_day(s.first_seen)));
+    }
+    Row {
+        label,
+        pkts: format!("{} pkts", thousands(total_packets(s))),
+        bytes: human_bytes(total_bytes(s)),
+        tail,
+    }
+}
+
+fn render_rows(rows: &[Row]) -> String {
+    let label_w = rows
+        .iter()
+        .map(|r| r.label.chars().count())
+        .max()
+        .unwrap_or(0);
+    let pkts_w = rows
+        .iter()
+        .map(|r| r.pkts.chars().count())
+        .max()
+        .unwrap_or(0);
+    let bytes_w = rows
+        .iter()
+        .map(|r| r.bytes.chars().count())
+        .max()
+        .unwrap_or(0);
+    let mut out = String::new();
+    for r in rows {
+        let pad = label_w - r.label.chars().count();
+        out.push_str(&format!(
+            "{}{}   {:>pkts_w$}   {:>bytes_w$}   {}\n",
+            r.label,
+            " ".repeat(pad),
+            r.pkts,
+            r.bytes,
+            r.tail,
+        ));
+    }
+    out
+}
+
+/// The default lens (FR-24): the flow hierarchy, roots down, `├─`/`└─`
+/// glyphs, one line per stream.
 pub fn streams_tree(snapshot: &AggregatorSnapshot, sort: SortOrder) -> String {
     let ids = by_id(snapshot);
-    let mut out = String::new();
+    let mut rows = Vec::new();
     let mut roots: Vec<&Stream> = snapshot
         .roots
         .iter()
         .filter_map(|id| ids.get(id).copied())
         .collect();
     sort_siblings(&mut roots, sort);
-    for root in roots {
-        render_subtree(root, &ids, 0, sort, &mut out);
+    for root in &roots {
+        collect_subtree(root, &ids, "", sort, &mut rows);
     }
-    out
+    render_rows(&rows)
 }
 
-fn render_subtree(
+fn collect_subtree(
     s: &Stream,
     ids: &HashMap<StreamId, &Stream>,
-    depth: usize,
+    prefix: &str,
     sort: SortOrder,
-    out: &mut String,
+    rows: &mut Vec<Row>,
 ) {
-    out.push_str(&"  ".repeat(depth));
-    out.push_str(&stream_line(s));
-    out.push('\n');
+    rows.push(stream_row(prefix, s, false));
     let mut children: Vec<&Stream> = s
         .children
         .iter()
         .filter_map(|id| ids.get(id).copied())
         .collect();
     sort_siblings(&mut children, sort);
-    for child in children {
-        render_subtree(child, ids, depth + 1, sort, out);
+    // Glyph prefixes: the label prefix ends with the branch glyph; child
+    // subtrees continue with `│  ` under a `├─` and spaces under a `└─`.
+    let bare = prefix.replace("├─ ", "│  ").replace("└─ ", "   ");
+    let count = children.len();
+    for (i, child) in children.into_iter().enumerate() {
+        let last = i + 1 == count;
+        let branch = if last { "└─ " } else { "├─ " };
+        collect_subtree(child, ids, &format!("{bare}{branch}"), sort, rows);
     }
 }
 
-/// `--layer PROTO` flat table (FR-24's literal form).
+/// `--layer PROTO` flat table (FR-24's literal "list streams at a chosen
+/// layer"): one row per node, `created_seq` order, plus first-seen.
 pub fn streams_flat(snapshot: &AggregatorSnapshot, protocol: &str) -> String {
-    let mut out = String::new();
-    for s in snapshot.streams.iter().filter(|s| s.protocol == protocol) {
-        out.push_str(&stream_line(s));
-        out.push('\n');
-    }
-    out
+    let rows: Vec<Row> = snapshot
+        .streams
+        .iter()
+        .filter(|s| s.protocol == protocol)
+        .map(|s| stream_row("", s, true))
+        .collect();
+    render_rows(&rows)
 }
 
-/// `--layer PROTO --merged`: the D10 fold, one row per key.
+/// `--layer PROTO --merged`: the D10 fold, one row per key with the
+/// folded nodes' ids listed.
 pub fn streams_merged(snapshot: &AggregatorSnapshot, protocol: &str) -> String {
     // Snapshot-side re-fold: group same-protocol streams by key.
     let mut order: Vec<&pktflow_core::FlowKey> = Vec::new();
@@ -115,7 +233,7 @@ pub fn streams_merged(snapshot: &AggregatorSnapshot, protocol: &str) -> String {
         }
         slot.push(s);
     }
-    let mut out = String::new();
+    let mut rows = Vec::new();
     for key in order {
         let nodes = &groups[key];
         let first = nodes[0];
@@ -125,16 +243,45 @@ pub fn streams_merged(snapshot: &AggregatorSnapshot, protocol: &str) -> String {
             .iter()
             .map(|s| format!("#{}", s.created_seq))
             .collect();
-        out.push_str(&format!(
-            "{}  {}   {} pkts   {}   nodes {}\n",
-            first.protocol,
-            fields_str(&first.key_fields),
-            thousands(packets),
-            human_bytes(bytes),
-            ids.join(","),
-        ));
+        let endpoints = endpoints_str(first);
+        let mut label = first.protocol.to_string();
+        if !endpoints.is_empty() {
+            label.push_str("  ");
+            label.push_str(&endpoints);
+        }
+        rows.push(Row {
+            label,
+            pkts: format!("{} pkts", thousands(packets)),
+            bytes: human_bytes(bytes),
+            tail: format!("nodes {}", ids.join(",")),
+        });
     }
-    out
+    render_rows(&rows)
+}
+
+/// One `--watch` frame (08.2): ANSI clear+home, the tree capped to
+/// `WATCH_MAX_ROWS`, footer = running totals. Snapshot-based — the
+/// render side never touches the aggregator.
+pub const WATCH_CLEAR: &str = "\x1b[2J\x1b[H";
+const WATCH_MAX_ROWS: usize = 40;
+
+pub fn watch_frame(snapshot: &AggregatorSnapshot, sort: SortOrder, source: &str) -> String {
+    let tree = streams_tree(snapshot, sort);
+    let mut body = String::new();
+    let total_lines = tree.lines().count();
+    for (i, line) in tree.lines().enumerate() {
+        if i == WATCH_MAX_ROWS {
+            body.push_str(&format!("… and {} more\n", total_lines - i));
+            break;
+        }
+        body.push_str(line);
+        body.push('\n');
+    }
+    format!(
+        "{WATCH_CLEAR}{body}\nwatching {source} — packets {} · streams live {}\n",
+        thousands(snapshot.summary.packets),
+        snapshot.summary.streams_live,
+    )
 }
 
 /// Drill-down (08.3 first cut): `#id` selector only; key expressions
@@ -155,8 +302,11 @@ pub fn stream_detail(snapshot: &AggregatorSnapshot, selector: &str) -> Result<St
     };
 
     let mut out = String::new();
-    out.push_str(&stream_line(s));
-    out.push('\n');
+    let header = stream_row("", s, false);
+    out.push_str(&format!(
+        "{}   {} / {}   {}\n",
+        header.label, header.pkts, header.bytes, header.tail
+    ));
 
     // Lineage: walk parent links to root.
     let mut lineage = Vec::new();

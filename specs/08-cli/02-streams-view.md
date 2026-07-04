@@ -36,9 +36,9 @@ Stream selectors printed in every view (`#42`) are stable within a run (`created
 are what `pktflow stream` (08.3) accepts.
 
 ## Acceptance criteria
-- [ ] Tree and flat views golden-file-tested against 09.2 fixtures (text output is a
+- [x] Tree and flat views golden-file-tested against 09.2 fixtures (text output is a
       contract; goldens updated deliberately).
-- [ ] Tunnel fixture renders the full nested chain (use case 6 visible to a human).
-- [ ] `--merged` fold demonstrated on the dual-parent fixture (05.7).
-- [ ] `--watch` smoke: replay a fixture with simulated pacing, assert no panic, final frame
+- [x] Tunnel fixture renders the full nested chain (use case 6 visible to a human).
+- [x] `--merged` fold demonstrated on the dual-parent fixture (05.7).
+- [x] `--watch` smoke: replay a fixture with simulated pacing, assert no panic, final frame
       matches the non-watch output (manual on real iface for use case 3).

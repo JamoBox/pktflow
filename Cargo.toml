@@ -6,6 +6,7 @@ members = [
     "crates/pktflow-plugins",
     "crates/pktflow-capture",
     "crates/pktflow-cli",
+    "crates/pktflow-testkit",
 ]
 
 [workspace.package]
@@ -17,6 +18,7 @@ pktflow-core = { path = "crates/pktflow-core" }
 pktflow-flows = { path = "crates/pktflow-flows" }
 pktflow-plugins = { path = "crates/pktflow-plugins" }
 pktflow-capture = { path = "crates/pktflow-capture" }
+pktflow-testkit = { path = "crates/pktflow-testkit" }
 pcap = "2"
 thiserror = "2"
 clap = { version = "4", features = ["derive"] }

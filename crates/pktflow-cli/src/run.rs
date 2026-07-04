@@ -142,7 +142,20 @@ pub fn run(
     shared: &SharedArgs,
     stop: &StopFlags,
     aggregate: bool,
+    on_packet: impl FnMut(u64, &DissectedPacket),
+) -> Result<RunOutcome, CliError> {
+    run_observed(shared, stop, aggregate, on_packet, |_| {})
+}
+
+/// [`run`] plus an after-ingest observer: `--watch` (08.2) redraws from
+/// aggregator snapshots between packets, on this thread (D5's single
+/// writer), never mid-ingest.
+pub fn run_observed(
+    shared: &SharedArgs,
+    stop: &StopFlags,
+    aggregate: bool,
     mut on_packet: impl FnMut(u64, &DissectedPacket),
+    mut on_ingested: impl FnMut(&Aggregator),
 ) -> Result<RunOutcome, CliError> {
     let engine = Arc::new(pktflow_plugins::default_engine());
     let (mut src, mode, source_name) = open_source(shared, stop)?;
@@ -168,6 +181,7 @@ pub fn run(
         on_packet(index as u64, &packet);
         if let Some(agg) = agg.as_mut() {
             agg.ingest(&packet);
+            on_ingested(agg);
         }
     }
 
