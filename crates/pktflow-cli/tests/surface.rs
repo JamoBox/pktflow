@@ -22,6 +22,13 @@ fn stderr(out: &Output) -> String {
 
 // ---- help snapshots (no libpcap calls: safe on every CI OS) ----------
 
+/// Platform-neutral: Windows clap output is CRLF and names the binary
+/// `pktflow.exe` (argv[0]-derived); goldens are checked in as LF with
+/// the bare name.
+fn normalize_help(s: &str) -> String {
+    s.replace("\r\n", "\n").replace("pktflow.exe", "pktflow")
+}
+
 fn assert_help_matches(args: &[&str], golden: &str) {
     let out = run(args);
     assert!(out.status.success(), "--help exits 0");
@@ -31,9 +38,10 @@ fn assert_help_matches(args: &[&str], golden: &str) {
             .join(golden),
     )
     .expect("golden file");
-    let actual = stdout(&out);
+    let actual = normalize_help(&stdout(&out));
     assert_eq!(
-        actual, expected,
+        actual,
+        normalize_help(&expected),
         "help text drifted from {golden} — if deliberate, regenerate the golden"
     );
 }

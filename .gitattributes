@@ -1,0 +1,5 @@
+# Force LF checkouts everywhere: Windows git installs default to
+# core.autocrlf=true, which silently rewrites checked-in LF golden
+# files to CRLF on checkout — a source of hard-to-reproduce CI-only
+# diffs (see the 08.4 help-snapshot fix).
+* text=auto eol=lf

@@ -34,11 +34,9 @@ fn sort_siblings(streams: &mut [&Stream], order: SortOrder) {
     match order {
         SortOrder::Bytes => streams.sort_by_key(|s| std::cmp::Reverse(total_bytes(s))),
         SortOrder::Packets => streams.sort_by_key(|s| std::cmp::Reverse(total_packets(s))),
-        SortOrder::FirstSeen => streams.sort_by(|a, b| a.created_seq.cmp(&b.created_seq)),
-        SortOrder::Duration => streams.sort_by(|a, b| {
-            let da = a.last_seen.duration_since(a.first_seen).unwrap_or_default();
-            let db = b.last_seen.duration_since(b.first_seen).unwrap_or_default();
-            db.cmp(&da)
+        SortOrder::FirstSeen => streams.sort_by_key(|s| s.created_seq),
+        SortOrder::Duration => streams.sort_by_key(|s| {
+            std::cmp::Reverse(s.last_seen.duration_since(s.first_seen).unwrap_or_default())
         }),
     }
 }
