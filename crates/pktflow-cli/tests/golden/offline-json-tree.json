@@ -1,0 +1,293 @@
+{
+  "mode": "offline",
+  "pktflow": 1,
+  "source": "FIXTURE.pcap",
+  "streams": [
+    {
+      "bytes": {
+        "a_to_b": 407,
+        "b_to_a": 649
+      },
+      "children": [
+        1,
+        4
+      ],
+      "closed": "capture_end",
+      "endpoint_a": {
+        "src_mac": "aa:bb:cc:dd:ee:01"
+      },
+      "endpoint_b": {
+        "dst_mac": "aa:bb:cc:dd:ee:02"
+      },
+      "first_seen": "1970-01-01T00:01:40Z",
+      "id": 0,
+      "initiator": "a_to_b",
+      "key": {},
+      "last_seen": "1970-01-01T00:01:44Z",
+      "opaque_bytes": 0,
+      "packets": {
+        "a_to_b": 5,
+        "b_to_a": 4
+      },
+      "parent": null,
+      "protocol": "ethernet",
+      "rollups": {
+        "ethertype": {
+          "distinct": 1,
+          "kind": "accumulate",
+          "observations": 9,
+          "overflow": false,
+          "values": [
+            "2048"
+          ]
+        }
+      },
+      "state": null
+    },
+    {
+      "bytes": {
+        "a_to_b": 87,
+        "b_to_a": 71
+      },
+      "children": [
+        2
+      ],
+      "closed": "capture_end",
+      "endpoint_a": {
+        "dst_addr": "10.0.0.1"
+      },
+      "endpoint_b": {
+        "src_addr": "10.0.0.5"
+      },
+      "first_seen": "1970-01-01T00:01:40Z",
+      "id": 1,
+      "initiator": "b_to_a",
+      "key": {},
+      "last_seen": "1970-01-01T00:01:40Z",
+      "opaque_bytes": 0,
+      "packets": {
+        "a_to_b": 1,
+        "b_to_a": 1
+      },
+      "parent": 0,
+      "protocol": "ipv4",
+      "rollups": {
+        "protocol": {
+          "distinct": 1,
+          "kind": "accumulate",
+          "observations": 2,
+          "overflow": false,
+          "values": [
+            "17"
+          ]
+        }
+      },
+      "state": null
+    },
+    {
+      "bytes": {
+        "a_to_b": 87,
+        "b_to_a": 71
+      },
+      "children": [
+        3
+      ],
+      "closed": "capture_end",
+      "endpoint_a": {
+        "dst_port": 53
+      },
+      "endpoint_b": {
+        "src_port": 34567
+      },
+      "first_seen": "1970-01-01T00:01:40Z",
+      "id": 2,
+      "initiator": "b_to_a",
+      "key": {},
+      "last_seen": "1970-01-01T00:01:40Z",
+      "opaque_bytes": 0,
+      "packets": {
+        "a_to_b": 1,
+        "b_to_a": 1
+      },
+      "parent": 1,
+      "protocol": "udp",
+      "rollups": {
+        "length": {
+          "first": "37",
+          "kind": "sample",
+          "last": "53"
+        }
+      },
+      "state": null
+    },
+    {
+      "bytes": {
+        "a_to_b": 158,
+        "b_to_a": 0
+      },
+      "children": [],
+      "closed": "capture_end",
+      "endpoint_a": {},
+      "endpoint_b": {},
+      "first_seen": "1970-01-01T00:01:40Z",
+      "id": 3,
+      "initiator": "a_to_b",
+      "key": {},
+      "last_seen": "1970-01-01T00:01:40Z",
+      "opaque_bytes": 0,
+      "packets": {
+        "a_to_b": 2,
+        "b_to_a": 0
+      },
+      "parent": 2,
+      "protocol": "dns",
+      "rollups": {
+        "qname": {
+          "distinct": 1,
+          "kind": "accumulate",
+          "observations": 2,
+          "overflow": false,
+          "values": [
+            "example.com"
+          ]
+        },
+        "rcode": {
+          "distinct": 1,
+          "kind": "accumulate",
+          "observations": 2,
+          "overflow": false,
+          "values": [
+            "0"
+          ]
+        }
+      },
+      "state": null
+    },
+    {
+      "bytes": {
+        "a_to_b": 336,
+        "b_to_a": 562
+      },
+      "children": [
+        5
+      ],
+      "closed": "capture_end",
+      "endpoint_a": {
+        "src_addr": "10.0.0.5"
+      },
+      "endpoint_b": {
+        "dst_addr": "93.184.216.34"
+      },
+      "first_seen": "1970-01-01T00:01:41Z",
+      "id": 4,
+      "initiator": "a_to_b",
+      "key": {},
+      "last_seen": "1970-01-01T00:01:44Z",
+      "opaque_bytes": 0,
+      "packets": {
+        "a_to_b": 4,
+        "b_to_a": 3
+      },
+      "parent": 0,
+      "protocol": "ipv4",
+      "rollups": {
+        "protocol": {
+          "distinct": 1,
+          "kind": "accumulate",
+          "observations": 7,
+          "overflow": false,
+          "values": [
+            "6"
+          ]
+        }
+      },
+      "state": null
+    },
+    {
+      "bytes": {
+        "a_to_b": 562,
+        "b_to_a": 336
+      },
+      "children": [],
+      "closed": "capture_end",
+      "endpoint_a": {
+        "dst_port": 443
+      },
+      "endpoint_b": {
+        "src_port": 52341
+      },
+      "first_seen": "1970-01-01T00:01:41Z",
+      "id": 5,
+      "initiator": "b_to_a",
+      "key": {},
+      "last_seen": "1970-01-01T00:01:44Z",
+      "opaque_bytes": 520,
+      "packets": {
+        "a_to_b": 3,
+        "b_to_a": 4
+      },
+      "parent": 4,
+      "protocol": "tcp",
+      "rollups": {
+        "flags": {
+          "kind": "series",
+          "points": [
+            {
+              "dir": "b_to_a",
+              "ts": "1970-01-01T00:01:41Z",
+              "value": "SYN"
+            },
+            {
+              "dir": "a_to_b",
+              "ts": "1970-01-01T00:01:41Z",
+              "value": "SYN+ACK"
+            },
+            {
+              "dir": "b_to_a",
+              "ts": "1970-01-01T00:01:41Z",
+              "value": "ACK"
+            },
+            {
+              "dir": "b_to_a",
+              "ts": "1970-01-01T00:01:42Z",
+              "value": "PSH+ACK"
+            },
+            {
+              "dir": "a_to_b",
+              "ts": "1970-01-01T00:01:43Z",
+              "value": "PSH+ACK"
+            },
+            {
+              "dir": "b_to_a",
+              "ts": "1970-01-01T00:01:44Z",
+              "value": "FIN+ACK"
+            },
+            {
+              "dir": "a_to_b",
+              "ts": "1970-01-01T00:01:44Z",
+              "value": "FIN+ACK"
+            }
+          ],
+          "truncated": false
+        }
+      },
+      "state": "closed"
+    }
+  ],
+  "summary": {
+    "bytes": 1056,
+    "capture_drops": 0,
+    "packets": 9,
+    "stop_classes": {
+      "clean": 7,
+      "unknown_payload": 2
+    },
+    "streams": {
+      "dns": 1,
+      "ethernet": 1,
+      "ipv4": 2,
+      "tcp": 1,
+      "udp": 1
+    }
+  }
+}

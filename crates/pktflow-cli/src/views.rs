@@ -752,8 +752,216 @@ pub fn packet_json(index: u64, pkt: &DissectedPacket) -> Json {
     })
 }
 
-/// The offline JSON envelope (D8): `{"pktflow": 1, …}`. The full stream
-/// records grow additively in 08.5.
+/// `initiator` as D8's string enum.
+fn direction_json(dir: PacketDirection) -> &'static str {
+    match dir {
+        PacketDirection::AtoB => "a_to_b",
+        PacketDirection::BtoA => "b_to_a",
+    }
+}
+
+/// `closed`'s close reason as D8's snake_case string enum (the text
+/// renderer's hyphenated form is a display convention, not the wire
+/// name).
+fn close_reason_json(reason: pktflow_flows::CloseReason) -> &'static str {
+    match reason {
+        pktflow_flows::CloseReason::ProtocolClose => "protocol_close",
+        pktflow_flows::CloseReason::IdleTimeout => "idle_timeout",
+        pktflow_flows::CloseReason::LruEvicted => "lru_evicted",
+        pktflow_flows::CloseReason::CaptureEnd => "capture_end",
+    }
+}
+
+/// JSON projection of a field value (D8): numbers/bools/strings pass
+/// through natively; byte shapes render per the FR-28 table so JSON
+/// consumers get readable endpoints too (MACs/IPs as strings, unknown
+/// bytes as hex strings) instead of raw byte arrays.
+fn field_value_json(protocol: &str, name: &str, value: &pktflow_core::Value) -> Json {
+    match value {
+        pktflow_core::Value::U64(v) => json!(v),
+        pktflow_core::Value::I64(v) => json!(v),
+        pktflow_core::Value::Bool(v) => json!(v),
+        pktflow_core::Value::Str(s) => json!(s.as_str()),
+        pktflow_core::Value::Bytes(_) => json!(field_value_str(protocol, name, value)),
+        pktflow_core::Value::List(items) => Json::Array(
+            items
+                .iter()
+                .map(|v| field_value_json(protocol, name, v))
+                .collect(),
+        ),
+        other => json!(format!("{other:?}")),
+    }
+}
+
+/// Splits `key_fields` into `endpoint_a`/`endpoint_b` (paired
+/// `src_*`/`dst_*` fields, ordered by `initiator` — field names keep
+/// their original `src_`/`dst_` spelling, only the A/B *slot* they land
+/// in depends on which side originated the creating packet) and `key`
+/// (any remaining qualifier field, e.g. GRE's `key`, VXLAN's `vni`; the
+/// constant `app` field is dropped as redundant with `protocol`).
+fn endpoint_json(s: &Stream) -> (Json, Json, Json) {
+    let mut a = serde_json::Map::new();
+    let mut b = serde_json::Map::new();
+    let mut key = serde_json::Map::new();
+    for (name, value) in s.key_fields.iter() {
+        if let Some(suffix) = name.strip_prefix("src_") {
+            let dst_name = format!("dst_{suffix}");
+            if let Some(dst_value) = s.key_fields.get(&dst_name) {
+                let (a_name, a_value, b_name, b_value) = match s.initiator {
+                    PacketDirection::AtoB => (*name, value, dst_name.as_str(), dst_value),
+                    PacketDirection::BtoA => (dst_name.as_str(), dst_value, *name, value),
+                };
+                a.insert(
+                    a_name.to_string(),
+                    field_value_json(s.protocol, a_name, a_value),
+                );
+                b.insert(
+                    b_name.to_string(),
+                    field_value_json(s.protocol, b_name, b_value),
+                );
+                continue;
+            }
+        }
+        if name.starts_with("dst_") && s.key_fields.get(&format!("src_{}", &name[4..])).is_some() {
+            continue; // consumed with its src_ partner
+        }
+        if *name != "app" {
+            key.insert(
+                (*name).to_string(),
+                field_value_json(s.protocol, name, value),
+            );
+        }
+    }
+    (Json::Object(a), Json::Object(b), Json::Object(key))
+}
+
+/// One rollup, D8-shaped: `{"kind": ..., ...}` per [`Rollup`] variant.
+fn rollup_json(protocol: &str, field: &str, rollup: &Rollup) -> Json {
+    match rollup {
+        Rollup::Accumulate {
+            values,
+            count,
+            overflow,
+        } => {
+            let rendered: Vec<Json> = values
+                .iter()
+                .map(|v| json!(field_value_str(protocol, field, v)))
+                .collect();
+            json!({
+                "kind": "accumulate",
+                "values": rendered,
+                "distinct": values.len(),
+                "observations": count,
+                "overflow": overflow,
+            })
+        }
+        Rollup::Sample { first, last } => {
+            let render = |v: &Option<pktflow_core::Value>| {
+                v.as_ref().map(|v| field_value_str(protocol, field, v))
+            };
+            json!({ "kind": "sample", "first": render(first), "last": render(last) })
+        }
+        Rollup::Series {
+            ring, truncated, ..
+        } => {
+            let points: Vec<Json> = ring
+                .iter()
+                .map(|p| {
+                    json!({
+                        "ts": crate::render::rfc3339(p.ts),
+                        "dir": direction_json(p.dir),
+                        "value": field_value_str(protocol, field, &p.value),
+                    })
+                })
+                .collect();
+            json!({ "kind": "series", "points": points, "truncated": truncated })
+        }
+    }
+}
+
+/// A stream record, D8-shaped: shared by the offline batch (`streams[]`)
+/// and NDJSON live events. `seq_of` resolves a `StreamId` to its display
+/// id (`created_seq`); a live poll resolves it via the current
+/// snapshot/aggregator, while a `stream_closed` event (which only sees
+/// the departing `Stream`, not a live aggregator reference) resolves it
+/// via [`NdjsonTracker`]'s running id table — this is why the lookup is
+/// a closure rather than a `&HashMap<StreamId, &Stream>`.
+fn stream_record(
+    s: &Stream,
+    seq_of: &impl Fn(StreamId) -> Option<u64>,
+) -> serde_json::Map<String, Json> {
+    let (endpoint_a, endpoint_b, key) = endpoint_json(s);
+    let parent = s.parent.and_then(seq_of);
+    let children: Vec<u64> = s.children.iter().filter_map(|c| seq_of(*c)).collect();
+    let rollups: serde_json::Map<String, Json> = s
+        .rollups
+        .iter()
+        .map(|(field, rollup)| ((*field).to_string(), rollup_json(s.protocol, field, rollup)))
+        .collect();
+
+    let mut m = serde_json::Map::new();
+    m.insert("id".into(), json!(s.created_seq));
+    m.insert("protocol".into(), json!(s.protocol));
+    m.insert("parent".into(), json!(parent));
+    m.insert("children".into(), json!(children));
+    m.insert("endpoint_a".into(), endpoint_a);
+    m.insert("endpoint_b".into(), endpoint_b);
+    m.insert("key".into(), key);
+    m.insert("initiator".into(), json!(direction_json(s.initiator)));
+    m.insert("state".into(), json!(s.state));
+    m.insert("closed".into(), json!(s.closed.map(close_reason_json)));
+    m.insert(
+        "first_seen".into(),
+        json!(crate::render::rfc3339(s.first_seen)),
+    );
+    m.insert(
+        "last_seen".into(),
+        json!(crate::render::rfc3339(s.last_seen)),
+    );
+    m.insert(
+        "packets".into(),
+        json!({ "a_to_b": s.stats[0].packets, "b_to_a": s.stats[1].packets }),
+    );
+    m.insert(
+        "bytes".into(),
+        json!({ "a_to_b": s.stats[0].bytes, "b_to_a": s.stats[1].bytes }),
+    );
+    m.insert("opaque_bytes".into(), json!(s.opaque_bytes));
+    m.insert("rollups".into(), Json::Object(rollups));
+    m
+}
+
+/// The D8 summary object, shared by the offline envelope (nested under
+/// `"summary"`) and the NDJSON `summary` event (flattened alongside
+/// `"event"`).
+fn summary_json(
+    outcome: &RunOutcome,
+    snapshot: &AggregatorSnapshot,
+) -> serde_json::Map<String, Json> {
+    let mut stop_classes = serde_json::Map::new();
+    for (class, count) in snapshot.summary.stop_classes {
+        if count > 0 {
+            stop_classes.insert(stop_class_key(class).into(), json!(count));
+        }
+    }
+    let mut per_protocol = serde_json::Map::new();
+    for p in &snapshot.summary.per_protocol {
+        per_protocol.insert(p.protocol.into(), json!(p.ever));
+    }
+    let mut m = serde_json::Map::new();
+    m.insert("packets".into(), json!(snapshot.summary.packets));
+    m.insert("bytes".into(), json!(snapshot.summary.bytes));
+    m.insert("stop_classes".into(), Json::Object(stop_classes));
+    m.insert("streams".into(), Json::Object(per_protocol));
+    m.insert(
+        "capture_drops".into(),
+        json!(outcome.report.stats.dropped_kernel + outcome.report.stats.dropped_iface),
+    );
+    m
+}
+
+/// The offline JSON envelope (D8): `{"pktflow": 1, …}`, schema
+/// `schema/streams-v1.json`.
 pub fn json_envelope(outcome: &RunOutcome) -> Json {
     let mut doc = json!({
         "pktflow": 1,
@@ -761,63 +969,100 @@ pub fn json_envelope(outcome: &RunOutcome) -> Json {
         "source": outcome.source_name,
     });
     if let Some(snapshot) = &outcome.snapshot {
-        let mut stop_classes = serde_json::Map::new();
-        for (class, count) in snapshot.summary.stop_classes {
-            if count > 0 {
-                stop_classes.insert(stop_class_key(class).into(), json!(count));
-            }
-        }
-        let mut per_protocol = serde_json::Map::new();
-        for p in &snapshot.summary.per_protocol {
-            per_protocol.insert(p.protocol.into(), json!(p.ever));
-        }
-        doc["summary"] = json!({
-            "packets": snapshot.summary.packets,
-            "bytes": snapshot.summary.bytes,
-            "stop_classes": stop_classes,
-            "streams": per_protocol,
-            "capture_drops": outcome.report.stats.dropped_kernel
-                + outcome.report.stats.dropped_iface,
-        });
+        doc["summary"] = Json::Object(summary_json(outcome, snapshot));
         let ids = by_id(snapshot);
+        let seq_of = |id: StreamId| ids.get(&id).map(|s| s.created_seq);
         doc["streams"] = Json::Array(
             snapshot
                 .streams
                 .iter()
-                .map(|s| stream_json(s, &ids))
+                .map(|s| Json::Object(stream_record(s, &seq_of)))
                 .collect(),
         );
     }
     doc
 }
 
-fn stream_json(s: &Stream, ids: &HashMap<StreamId, &Stream>) -> Json {
-    let endpoints: serde_json::Map<String, Json> = s
-        .key_fields
-        .iter()
-        .map(|(name, value)| ((*name).into(), json!(value_str(name, value))))
-        .collect();
-    let parent = s
-        .parent
-        .and_then(|pid| ids.get(&pid))
-        .map(|p| p.created_seq);
-    let children: Vec<u64> = s
-        .children
-        .iter()
-        .filter_map(|cid| ids.get(cid))
-        .map(|c| c.created_seq)
-        .collect();
-    json!({
-        "id": s.created_seq,
-        "protocol": s.protocol,
-        "parent": parent,
-        "children": children,
-        "endpoints": endpoints,
-        "state": s.state,
-        "packets": { "a_to_b": s.stats[0].packets, "b_to_a": s.stats[1].packets },
-        "bytes": { "a_to_b": s.stats[0].bytes, "b_to_a": s.stats[1].bytes },
-        "opaque_bytes": s.opaque_bytes,
-    })
+/// `--watch --format json` NDJSON event tracker (08.5): `stream_new`
+/// fires the first time a stream is observed; `stream_update` throttles
+/// to ≥1 s per stream; `stream_closed` fires immediately from the
+/// aggregator's eviction sink, which sees only the departing `Stream`
+/// (no live aggregator reference) — `seq_by_id` is populated from every
+/// poll so a close event can still resolve its parent's display id.
+pub struct NdjsonTracker {
+    last_poll: std::time::Instant,
+    last_emitted: HashMap<StreamId, std::time::Instant>,
+    seq_by_id: HashMap<StreamId, u64>,
+}
+
+impl Default for NdjsonTracker {
+    fn default() -> Self {
+        Self {
+            last_poll: std::time::Instant::now() - std::time::Duration::from_secs(2),
+            last_emitted: HashMap::new(),
+            seq_by_id: HashMap::new(),
+        }
+    }
+}
+
+impl NdjsonTracker {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Called after every ingest; throttles its own work to ~10/s so a
+    /// high packet rate doesn't turn this into a per-packet cost.
+    pub fn poll(&mut self, agg: &pktflow_flows::Aggregator) -> Vec<Json> {
+        if self.last_poll.elapsed() < std::time::Duration::from_millis(100) {
+            return Vec::new();
+        }
+        self.last_poll = std::time::Instant::now();
+
+        // Two passes: populate every id's display number before
+        // resolving any parent/children (order-independent within a poll).
+        for s in agg.streams() {
+            self.seq_by_id.insert(s.id, s.created_seq);
+        }
+        let seq_of = |id: StreamId| self.seq_by_id.get(&id).copied();
+
+        let now = std::time::Instant::now();
+        let mut events = Vec::new();
+        for s in agg.streams() {
+            let kind = match self.last_emitted.get(&s.id) {
+                None => Some("stream_new"),
+                Some(last) if now.duration_since(*last) >= std::time::Duration::from_secs(1) => {
+                    Some("stream_update")
+                }
+                _ => None,
+            };
+            if let Some(kind) = kind {
+                self.last_emitted.insert(s.id, now);
+                let mut body = stream_record(s, &seq_of);
+                body.insert("event".into(), json!(kind));
+                events.push(Json::Object(body));
+            }
+        }
+        events
+    }
+
+    /// Called from the aggregator's eviction sink: immediate, never
+    /// throttled — a closure is a one-time event.
+    pub fn on_evicted(&mut self, ev: &pktflow_flows::EvictedStream) -> Json {
+        self.last_emitted.remove(&ev.stream.id);
+        let seq_of = |id: StreamId| self.seq_by_id.get(&id).copied();
+        let mut body = stream_record(&ev.stream, &seq_of);
+        body.insert("event".into(), json!("stream_closed"));
+        body.insert("close_reason".into(), json!(close_reason_json(ev.reason)));
+        Json::Object(body)
+    }
+
+    /// The final line (08.1's graceful Ctrl-C path calls `finish()`
+    /// before this ever runs, so it is always reachable).
+    pub fn summary_event(outcome: &RunOutcome, snapshot: &AggregatorSnapshot) -> Json {
+        let mut body = summary_json(outcome, snapshot);
+        body.insert("event".into(), json!("summary"));
+        Json::Object(body)
+    }
 }
 
 /// FR-23 interface listing.

@@ -11,7 +11,9 @@ use pktflow_capture::{
     pump, CaptureError, FileSource, LiveConfig, LiveSource, PacketSource, PumpReport, RawPacket,
 };
 use pktflow_core::{DissectedPacket, LinkType, ParseOpts};
-use pktflow_flows::{Aggregator, AggregatorConfig, AggregatorSnapshot, EvictionPolicy};
+use pktflow_flows::{
+    Aggregator, AggregatorConfig, AggregatorSnapshot, EvictedStream, EvictionPolicy,
+};
 
 use crate::cli::SharedArgs;
 use crate::error::CliError;
@@ -300,6 +302,65 @@ pub fn run_observed(
 
     Ok(RunOutcome {
         snapshot,
+        report,
+        elapsed: started.elapsed(),
+        mode,
+        source_name,
+    })
+}
+
+/// `--watch --format json` NDJSON pipeline (08.5): mirrors
+/// [`run_observed`]'s producer/consumer split, but always aggregates
+/// and wires `on_evicted` into the aggregator's eviction sink so
+/// `stream_closed` events fire the moment D2 closes a stream — not just
+/// at `finish()`. Live captures exercise this over `-i`; the same path
+/// is smoke-tested over `-r` with `--idle-timeout`/`--pace-ms` (D2
+/// eviction accepts overrides for file sources too, 08.1), since a real
+/// interface isn't available in CI.
+pub fn run_live(
+    shared: &SharedArgs,
+    stop: &StopFlags,
+    mut on_packet: impl FnMut(u64, &DissectedPacket),
+    mut on_ingested: impl FnMut(&Aggregator),
+    on_evicted: impl FnMut(EvictedStream) + Send + 'static,
+) -> Result<RunOutcome, CliError> {
+    let engine = Arc::new(pktflow_plugins::default_engine());
+    let (mut src, mode, source_name) = open_source(shared, stop)?;
+
+    let opts = ParseOpts {
+        depth: shared.depth.to_depth(),
+        aggregation: true,
+        ..ParseOpts::default()
+    };
+
+    let started = Instant::now();
+    let (tx, rx) = sync_channel::<DissectedPacket>(CHANNEL_CAPACITY);
+    let pump_engine = Arc::clone(&engine);
+    let limit = shared.count;
+    let producer = std::thread::spawn(move || {
+        let report = pump(&mut *src, &pump_engine, opts, &tx, limit);
+        drop(tx);
+        report
+    });
+
+    let mut config = aggregator_config(shared);
+    config.sink = Some(Box::new(on_evicted));
+    let mut agg = Aggregator::new(&engine, config);
+    for (index, packet) in rx.into_iter().enumerate() {
+        on_packet(index as u64, &packet);
+        agg.ingest(&packet);
+        on_ingested(&agg);
+    }
+
+    let report = producer
+        .join()
+        .map_err(|_| CliError::Internal("pump thread panicked".into()))??;
+
+    agg.finish();
+    let snapshot = agg.snapshot();
+
+    Ok(RunOutcome {
+        snapshot: Some(snapshot),
         report,
         elapsed: started.elapsed(),
         mode,

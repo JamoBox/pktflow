@@ -1,0 +1,220 @@
+{
+  "mode": "offline",
+  "pktflow": 1,
+  "source": "FIXTURE.pcap",
+  "streams": [
+    {
+      "bytes": {
+        "a_to_b": 220,
+        "b_to_a": 78
+      },
+      "children": [
+        1
+      ],
+      "closed": "capture_end",
+      "endpoint_a": {
+        "src_mac": "aa:bb:cc:dd:ee:01"
+      },
+      "endpoint_b": {
+        "dst_mac": "aa:bb:cc:dd:ee:02"
+      },
+      "first_seen": "1970-01-01T00:03:20Z",
+      "id": 0,
+      "initiator": "a_to_b",
+      "key": {},
+      "last_seen": "1970-01-01T00:03:21Z",
+      "opaque_bytes": 0,
+      "packets": {
+        "a_to_b": 2,
+        "b_to_a": 1
+      },
+      "parent": null,
+      "protocol": "ethernet",
+      "rollups": {
+        "ethertype": {
+          "distinct": 1,
+          "kind": "accumulate",
+          "observations": 3,
+          "overflow": false,
+          "values": [
+            "2048"
+          ]
+        }
+      },
+      "state": null
+    },
+    {
+      "bytes": {
+        "a_to_b": 220,
+        "b_to_a": 78
+      },
+      "children": [
+        2
+      ],
+      "closed": "capture_end",
+      "endpoint_a": {
+        "src_addr": "192.168.1.1"
+      },
+      "endpoint_b": {
+        "dst_addr": "192.168.1.2"
+      },
+      "first_seen": "1970-01-01T00:03:20Z",
+      "id": 1,
+      "initiator": "a_to_b",
+      "key": {},
+      "last_seen": "1970-01-01T00:03:21Z",
+      "opaque_bytes": 0,
+      "packets": {
+        "a_to_b": 2,
+        "b_to_a": 1
+      },
+      "parent": 0,
+      "protocol": "ipv4",
+      "rollups": {
+        "protocol": {
+          "distinct": 1,
+          "kind": "accumulate",
+          "observations": 3,
+          "overflow": false,
+          "values": [
+            "47"
+          ]
+        }
+      },
+      "state": null
+    },
+    {
+      "bytes": {
+        "a_to_b": 298,
+        "b_to_a": 0
+      },
+      "children": [
+        3
+      ],
+      "closed": "capture_end",
+      "endpoint_a": {},
+      "endpoint_b": {},
+      "first_seen": "1970-01-01T00:03:20Z",
+      "id": 2,
+      "initiator": "a_to_b",
+      "key": {
+        "key": 0
+      },
+      "last_seen": "1970-01-01T00:03:21Z",
+      "opaque_bytes": 0,
+      "packets": {
+        "a_to_b": 3,
+        "b_to_a": 0
+      },
+      "parent": 1,
+      "protocol": "gre",
+      "rollups": {},
+      "state": null
+    },
+    {
+      "bytes": {
+        "a_to_b": 220,
+        "b_to_a": 78
+      },
+      "children": [
+        4
+      ],
+      "closed": "capture_end",
+      "endpoint_a": {
+        "src_addr": "10.0.0.5"
+      },
+      "endpoint_b": {
+        "dst_addr": "10.0.0.9"
+      },
+      "first_seen": "1970-01-01T00:03:20Z",
+      "id": 3,
+      "initiator": "a_to_b",
+      "key": {},
+      "last_seen": "1970-01-01T00:03:21Z",
+      "opaque_bytes": 0,
+      "packets": {
+        "a_to_b": 2,
+        "b_to_a": 1
+      },
+      "parent": 2,
+      "protocol": "ipv4",
+      "rollups": {
+        "protocol": {
+          "distinct": 1,
+          "kind": "accumulate",
+          "observations": 3,
+          "overflow": false,
+          "values": [
+            "6"
+          ]
+        }
+      },
+      "state": null
+    },
+    {
+      "bytes": {
+        "a_to_b": 78,
+        "b_to_a": 220
+      },
+      "children": [],
+      "closed": "capture_end",
+      "endpoint_a": {
+        "dst_port": 443
+      },
+      "endpoint_b": {
+        "src_port": 40000
+      },
+      "first_seen": "1970-01-01T00:03:20Z",
+      "id": 4,
+      "initiator": "b_to_a",
+      "key": {},
+      "last_seen": "1970-01-01T00:03:21Z",
+      "opaque_bytes": 64,
+      "packets": {
+        "a_to_b": 1,
+        "b_to_a": 2
+      },
+      "parent": 3,
+      "protocol": "tcp",
+      "rollups": {
+        "flags": {
+          "kind": "series",
+          "points": [
+            {
+              "dir": "b_to_a",
+              "ts": "1970-01-01T00:03:20Z",
+              "value": "SYN"
+            },
+            {
+              "dir": "a_to_b",
+              "ts": "1970-01-01T00:03:20Z",
+              "value": "SYN+ACK"
+            },
+            {
+              "dir": "b_to_a",
+              "ts": "1970-01-01T00:03:21Z",
+              "value": "ACK"
+            }
+          ],
+          "truncated": false
+        }
+      },
+      "state": "established"
+    }
+  ],
+  "summary": {
+    "bytes": 298,
+    "capture_drops": 0,
+    "packets": 3,
+    "stop_classes": {
+      "clean": 2,
+      "unknown_payload": 1
+    },
+    "streams": {
+      "ethernet": 1,
+      "gre": 1,
+      "ipv4": 2,
+      "tcp": 1
+    }
+  }
+}

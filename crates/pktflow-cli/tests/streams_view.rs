@@ -122,8 +122,6 @@ fn watch_smoke_final_frame_matches_the_plain_tree() {
     let _ = std::fs::remove_file(&path);
 }
 
-#[test]
-fn watch_rejects_json_for_now() {
-    let out = pktflow(&["streams", "-r", "f.pcap", "--watch", "--format", "json"]);
-    assert_eq!(out.status.code(), Some(2), "NDJSON events arrive with 08.5");
-}
+// `--watch --format json` (NDJSON live events) is exercised in
+// tests/json_output.rs (08.5), which supersedes this file's earlier
+// placeholder that asserted it was rejected.

@@ -20,12 +20,10 @@ pub fn dispatch(cli: Cli, stop: &StopFlags) -> Result<(), CliError> {
     match cli.command {
         Command::Streams(args) => {
             if args.watch {
-                if args.shared.format == Format::Json {
-                    return Err(CliError::Usage(
-                        "--watch with --format json (NDJSON events) arrives with 08.5".into(),
-                    ));
-                }
-                return watch(&args, stop);
+                return match args.shared.format {
+                    Format::Text => watch(&args, stop),
+                    Format::Json => watch_json(&args, stop),
+                };
             }
             let outcome = run_paced(&args, stop)?;
             match args.shared.format {
@@ -173,6 +171,53 @@ fn watch(args: &cli::StreamsArgs, stop: &StopFlags) -> Result<(), CliError> {
     };
     let source = &outcome.source_name;
     print!("{}", views::watch_frame(snapshot, args.sort, source));
+    eprint!("{}", summary::render(&outcome));
+    Ok(())
+}
+
+/// `--watch --format json` (08.5): the NDJSON equivalent of [`watch`] —
+/// `stream_new`/`stream_update`/`stream_closed` events as the run
+/// progresses, a `summary` line always last (even after Ctrl-C's
+/// graceful stop, which still reaches `finish()`). One `NdjsonTracker`
+/// shared between the after-ingest poll and the aggregator's own
+/// eviction sink — both run on this thread, never concurrently, so the
+/// `Mutex` is a formality to satisfy the sink's `Send` bound.
+fn watch_json(args: &cli::StreamsArgs, stop: &StopFlags) -> Result<(), CliError> {
+    let pace = args.pace_ms.map(std::time::Duration::from_millis);
+    let tracker = std::sync::Arc::new(std::sync::Mutex::new(views::NdjsonTracker::new()));
+
+    let poll_tracker = std::sync::Arc::clone(&tracker);
+    let evict_tracker = std::sync::Arc::clone(&tracker);
+
+    let outcome = run::run_live(
+        &args.shared,
+        stop,
+        move |_, _| {
+            if let Some(d) = pace {
+                std::thread::sleep(d);
+            }
+        },
+        move |agg| {
+            if let Ok(mut t) = poll_tracker.lock() {
+                for event in t.poll(agg) {
+                    println!("{event}");
+                }
+            }
+        },
+        move |ev| {
+            if let Ok(mut t) = evict_tracker.lock() {
+                println!("{}", t.on_evicted(&ev));
+            }
+        },
+    )?;
+
+    let Some(snapshot) = &outcome.snapshot else {
+        return Err(CliError::Internal("watch json run without snapshot".into()));
+    };
+    println!(
+        "{}",
+        views::NdjsonTracker::summary_event(&outcome, snapshot)
+    );
     eprint!("{}", summary::render(&outcome));
     Ok(())
 }

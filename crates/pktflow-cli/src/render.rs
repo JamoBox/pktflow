@@ -1,10 +1,18 @@
-//! First-cut text rendering helpers. 08.5 owns the full FR-28 renderer
-//! table (per-shape unit tests, IPv6 compression); these are the shared
-//! primitives the views build on.
+//! The FR-28 renderer table (per-shape unit tests, IPv6 compression)
+//! and D8's timestamp formatting; the shared primitives the views
+//! build on.
 
 use std::time::{Duration, SystemTime};
 
 use pktflow_core::{FieldMap, Value};
+
+/// RFC 3339 UTC (D8 JSON timestamps): `2026-07-02T12:04:01Z`, with a
+/// fractional-second suffix only when the packet timestamp carries one.
+pub fn rfc3339(t: SystemTime) -> String {
+    time::OffsetDateTime::from(t)
+        .format(&time::format_description::well_known::Rfc3339)
+        .unwrap_or_else(|_| "1970-01-01T00:00:00Z".into())
+}
 
 /// Protocol-aware value rendering (FR-28): the `(protocol, field)` table
 /// entries, falling back to shape-based [`value_str`].
@@ -66,11 +74,9 @@ fn bytes_str(name: &str, b: &[u8]) -> String {
     match b.len() {
         4 if addr_like => format!("{}.{}.{}.{}", b[0], b[1], b[2], b[3]),
         16 if addr_like => {
-            let mut segs = Vec::with_capacity(8);
-            for chunk in b.chunks_exact(2) {
-                segs.push(format!("{:x}", u16::from_be_bytes([chunk[0], chunk[1]])));
-            }
-            segs.join(":")
+            let mut a = [0u8; 16];
+            a.copy_from_slice(b);
+            ipv6_compressed_str(&a)
         }
         6 if mac_like => {
             let parts: Vec<String> = b.iter().map(|x| format!("{x:02x}")).collect();
@@ -83,6 +89,54 @@ fn bytes_str(name: &str, b: &[u8]) -> String {
             }
             s
         }
+    }
+}
+
+/// RFC 5952 canonical IPv6 text form: lowercase, no leading zeros per
+/// group, the longest run of ≥2 all-zero groups collapsed to `::`
+/// (leftmost run wins a tie, §4.2.3), IPv4-mapped addresses
+/// (`::ffff:0:0/96`) written with a dotted-quad tail (§5).
+fn ipv6_compressed_str(b: &[u8; 16]) -> String {
+    let mut groups = [0u16; 8];
+    for (i, g) in groups.iter_mut().enumerate() {
+        *g = u16::from_be_bytes([b[2 * i], b[2 * i + 1]]);
+    }
+
+    if groups[0..5] == [0, 0, 0, 0, 0] && groups[5] == 0xffff {
+        return format!("::ffff:{}.{}.{}.{}", b[12], b[13], b[14], b[15]);
+    }
+
+    let mut best: Option<(usize, usize)> = None; // (start, len), longest run ≥2, leftmost tie
+    let mut i = 0;
+    while i < groups.len() {
+        if groups[i] == 0 {
+            let start = i;
+            while i < groups.len() && groups[i] == 0 {
+                i += 1;
+            }
+            let len = i - start;
+            if len >= 2 && best.is_none_or(|(_, best_len)| len > best_len) {
+                best = Some((start, len));
+            }
+        } else {
+            i += 1;
+        }
+    }
+
+    match best {
+        Some((start, len)) => {
+            let head: Vec<String> = groups[..start].iter().map(|g| format!("{g:x}")).collect();
+            let tail: Vec<String> = groups[start + len..]
+                .iter()
+                .map(|g| format!("{g:x}"))
+                .collect();
+            format!("{}::{}", head.join(":"), tail.join(":"))
+        }
+        None => groups
+            .iter()
+            .map(|g| format!("{g:x}"))
+            .collect::<Vec<_>>()
+            .join(":"),
     }
 }
 
@@ -181,5 +235,103 @@ mod tests {
             "10.0.0.5"
         );
         assert_eq!(value_str("id", &Value::from(&[0x01, 0x02][..])), "0102");
+    }
+
+    fn v6(name: &str, groups: [u16; 8]) -> String {
+        let mut b = [0u8; 16];
+        for (i, g) in groups.iter().enumerate() {
+            b[2 * i..2 * i + 2].copy_from_slice(&g.to_be_bytes());
+        }
+        value_str(name, &Value::from(&b[..]))
+    }
+
+    #[test]
+    fn ipv6_unspecified_and_loopback() {
+        assert_eq!(v6("src_addr", [0; 8]), "::");
+        assert_eq!(v6("src_addr", [0, 0, 0, 0, 0, 0, 0, 1]), "::1");
+    }
+
+    #[test]
+    fn ipv6_compresses_the_longest_zero_run() {
+        // 2001:db8::1:0:0:1 — a single zero-group is never compressed,
+        // so only the two-group run compresses.
+        assert_eq!(
+            v6("src_addr", [0x2001, 0x0db8, 0, 0, 1, 0, 0, 1]),
+            "2001:db8::1:0:0:1"
+        );
+    }
+
+    #[test]
+    fn ipv6_leftmost_run_wins_a_length_tie() {
+        // Two runs of length 2 (groups 1-2 and groups 4-5): RFC 5952
+        // §4.2.3 requires the leftmost.
+        assert_eq!(
+            v6("dst_addr", [0x2001, 0, 0, 1, 0, 0, 1, 1]),
+            "2001::1:0:0:1:1"
+        );
+    }
+
+    #[test]
+    fn ipv6_embedded_v4_uses_dotted_quad_tail() {
+        assert_eq!(
+            v6("dst_addr", [0, 0, 0, 0, 0, 0xffff, 0xc000, 0x0201]),
+            "::ffff:192.0.2.1"
+        );
+    }
+
+    #[test]
+    fn ipv6_no_leading_zeros_and_lowercase() {
+        assert_eq!(
+            v6("src_addr", [0x2001, 0x0db8, 0xabcd, 0, 0, 0, 0, 1]),
+            "2001:db8:abcd::1"
+        );
+    }
+
+    #[test]
+    fn tcp_flags_render_symbolically() {
+        assert_eq!(tcp_flags_str(0x02), "SYN");
+        assert_eq!(tcp_flags_str(0x12), "SYN+ACK");
+        assert_eq!(tcp_flags_str(0x18), "PSH+ACK");
+        assert_eq!(tcp_flags_str(0x11), "FIN+ACK");
+        assert_eq!(tcp_flags_str(0), "none");
+        assert_eq!(
+            field_value_str("tcp", "flags", &Value::U64(0x12)),
+            "SYN+ACK"
+        );
+        // Non-tcp or non-flags fields fall through to shape rendering.
+        assert_eq!(field_value_str("udp", "flags", &Value::U64(2)), "2");
+    }
+
+    #[test]
+    fn other_bytes_are_lowercase_hex_with_elision_past_32() {
+        let exactly_32 = [0xABu8; 32];
+        let rendered = value_str("opaque", &Value::from(&exactly_32[..]));
+        assert_eq!(rendered.len(), 64, "32 bytes = 64 hex chars, no ellipsis");
+        assert!(!rendered.contains('…'));
+
+        let over_32 = [0xCDu8; 33];
+        let rendered = value_str("opaque", &Value::from(&over_32[..]));
+        assert_eq!(rendered.len(), 64 + '…'.len_utf8());
+        assert!(rendered.ends_with('…'));
+        assert!(rendered.starts_with("cdcd"));
+    }
+
+    #[test]
+    fn decimal_values_render_plain() {
+        assert_eq!(value_str("count", &Value::U64(42)), "42");
+        assert_eq!(value_str("delta", &Value::I64(-7)), "-7");
+    }
+
+    #[test]
+    fn rfc3339_formats_utc_timestamps() {
+        assert_eq!(rfc3339(SystemTime::UNIX_EPOCH), "1970-01-01T00:00:00Z");
+        assert_eq!(
+            rfc3339(SystemTime::UNIX_EPOCH + Duration::from_secs(100)),
+            "1970-01-01T00:01:40Z"
+        );
+        assert_eq!(
+            rfc3339(SystemTime::UNIX_EPOCH + Duration::from_millis(1_751_457_841_221)),
+            "2025-07-02T12:04:01.221Z"
+        );
     }
 }

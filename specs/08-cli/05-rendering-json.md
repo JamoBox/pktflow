@@ -51,10 +51,10 @@ additive changes only within major.
   fields, stop reason) — the 09 suites' dissection-assertion format.
 
 ## Acceptance criteria
-- [ ] Renderer table implemented with unit tests per shape, incl. IPv6 compression edge
+- [x] Renderer table implemented with unit tests per shape, incl. IPv6 compression edge
       cases (`::`, embedded v4) and the hex elision.
-- [ ] Offline JSON validated against a checked-in JSON Schema file (`schema/streams-v1.json`)
+- [x] Offline JSON validated against a checked-in JSON Schema file (`schema/streams-v1.json`)
       in CI; goldens for the fixtures.
-- [ ] NDJSON live events smoke-tested via replay pacing; final `summary` line always present
+- [x] NDJSON live events smoke-tested via replay pacing; final `summary` line always present
       (even on Ctrl-C — graceful path, 08.1).
-- [ ] Determinism: repeated runs produce byte-identical offline JSON (00.3 hook).
+- [x] Determinism: repeated runs produce byte-identical offline JSON (00.3 hook).

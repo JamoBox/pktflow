@@ -1,0 +1,130 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://pktflow/schema/streams-v1.json",
+  "title": "pktflow offline JSON output (D8, schema version 1)",
+  "description": "The `pktflow streams|stream --format json` document (offline mode). NDJSON live/packets events reuse the `stream` and `summary` shapes as standalone lines with an added `event` property; additive changes only within this major version.",
+  "type": "object",
+  "required": ["pktflow", "mode", "source"],
+  "properties": {
+    "pktflow": { "const": 1 },
+    "mode": { "enum": ["offline", "live"] },
+    "source": { "type": "string" },
+    "summary": { "$ref": "#/$defs/summary" },
+    "streams": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/stream" }
+    }
+  },
+  "$defs": {
+    "summary": {
+      "type": "object",
+      "required": ["packets", "bytes", "stop_classes", "streams", "capture_drops"],
+      "properties": {
+        "packets": { "type": "integer", "minimum": 0 },
+        "bytes": { "type": "integer", "minimum": 0 },
+        "stop_classes": {
+          "type": "object",
+          "additionalProperties": { "type": "integer", "minimum": 0 },
+          "propertyNames": {
+            "enum": ["clean", "unknown_payload", "malformed", "suspicious"]
+          }
+        },
+        "streams": {
+          "type": "object",
+          "additionalProperties": { "type": "integer", "minimum": 0 }
+        },
+        "capture_drops": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "stream": {
+      "type": "object",
+      "required": [
+        "id", "protocol", "parent", "children", "endpoint_a", "endpoint_b",
+        "key", "initiator", "state", "closed", "first_seen", "last_seen",
+        "packets", "bytes", "opaque_bytes", "rollups"
+      ],
+      "properties": {
+        "id": { "type": "integer", "minimum": 0 },
+        "protocol": { "type": "string" },
+        "parent": { "type": ["integer", "null"], "minimum": 0 },
+        "children": { "type": "array", "items": { "type": "integer", "minimum": 0 } },
+        "endpoint_a": { "type": "object" },
+        "endpoint_b": { "type": "object" },
+        "key": { "type": "object" },
+        "initiator": { "enum": ["a_to_b", "b_to_a"] },
+        "state": { "type": ["string", "null"] },
+        "closed": {
+          "enum": ["protocol_close", "idle_timeout", "lru_evicted", "capture_end", null]
+        },
+        "first_seen": { "type": "string", "format": "date-time" },
+        "last_seen": { "type": "string", "format": "date-time" },
+        "packets": { "$ref": "#/$defs/directional_u64" },
+        "bytes": { "$ref": "#/$defs/directional_u64" },
+        "opaque_bytes": { "type": "integer", "minimum": 0 },
+        "rollups": {
+          "type": "object",
+          "additionalProperties": { "$ref": "#/$defs/rollup" }
+        },
+        "event": {
+          "enum": ["stream_new", "stream_update", "stream_closed"]
+        },
+        "close_reason": {
+          "enum": ["protocol_close", "idle_timeout", "lru_evicted", "capture_end"]
+        }
+      }
+    },
+    "directional_u64": {
+      "type": "object",
+      "required": ["a_to_b", "b_to_a"],
+      "properties": {
+        "a_to_b": { "type": "integer", "minimum": 0 },
+        "b_to_a": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "rollup": {
+      "type": "object",
+      "required": ["kind"],
+      "properties": {
+        "kind": { "enum": ["accumulate", "sample", "series"] }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "kind": { "const": "accumulate" } } },
+          "then": {
+            "required": ["values", "distinct", "observations", "overflow"],
+            "properties": {
+              "values": { "type": "array" },
+              "distinct": { "type": "integer", "minimum": 0 },
+              "observations": { "type": "integer", "minimum": 0 },
+              "overflow": { "type": "boolean" }
+            }
+          }
+        },
+        {
+          "if": { "properties": { "kind": { "const": "sample" } } },
+          "then": { "required": ["first", "last"] }
+        },
+        {
+          "if": { "properties": { "kind": { "const": "series" } } },
+          "then": {
+            "required": ["points", "truncated"],
+            "properties": {
+              "points": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "required": ["ts", "dir", "value"],
+                  "properties": {
+                    "ts": { "type": "string", "format": "date-time" },
+                    "dir": { "enum": ["a_to_b", "b_to_a"] }
+                  }
+                }
+              },
+              "truncated": { "type": "boolean" }
+            }
+          }
+        }
+      ]
+    }
+  }
+}

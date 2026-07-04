@@ -3,6 +3,8 @@
 
 #![allow(dead_code)] // each test binary uses a subset
 
+pub mod schema;
+
 use std::path::PathBuf;
 use std::process::Output;
 
