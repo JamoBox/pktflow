@@ -42,7 +42,7 @@ pub fn list_interfaces() -> Result<Vec<InterfaceInfo>, CaptureError>;  // FR-23
 
 ## Acceptance criteria
 - [ ] `list_interfaces` returns a non-empty, well-formed list on both CI OSes.
-- [ ] Loopback round-trip test (`#[ignore]` by default; run where CI grants capture rights):
+- [x] Loopback round-trip test (`#[ignore]` by default; run where CI grants capture rights):
       send UDP packets to localhost, capture them, assert content arrival.
-- [ ] Stop-flag shutdown from a quiet interface completes within 2× `read_timeout`.
-- [ ] Invalid BPF string → clean `Backend` error naming the filter.
+- [x] Stop-flag shutdown from a quiet interface completes within 2× `read_timeout`.
+- [x] Invalid BPF string → clean `Backend` error naming the filter.
