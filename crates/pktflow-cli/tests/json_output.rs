@@ -157,7 +157,13 @@ fn ndjson_live_events_smoke_test_via_replay_pacing() {
 
 #[test]
 fn watch_json_rejects_bad_input_same_as_watch_text() {
-    // No fixture needed: this is a pure argument-validation path.
+    if windows_skips() {
+        return;
+    }
+    // The path itself is never touched (no fixture needed) — but
+    // FileSource::open still calls into libpcap just to *report* the
+    // file's missing, and Windows CI has no wpcap.dll runtime, so this
+    // needs the same guard as every other file-opening test.
     let out = pktflow(&[
         "streams",
         "-r",
