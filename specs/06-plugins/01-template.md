@@ -39,7 +39,7 @@ fill in your header, add one line to `default_engine()`", written against this f
 
 ## Acceptance criteria
 - [x] `template.rs` compiles, registers, passes the 09.1 kit, ≤ 150 lines.
-- [ ] A synthetic PKTT-in-PKTT capture shows a nested stream in the CLI (proves the full
+- [x] A synthetic PKTT-in-PKTT capture shows a nested stream in the CLI (proves the full
       pipeline with zero real-protocol involvement).
-- [ ] `docs/adding-a-protocol.md` exists and its steps were literally followed once by the
+- [x] `docs/adding-a-protocol.md` exists and its steps were literally followed once by the
       "16th toy plugin" rehearsal (06 README definition of done).

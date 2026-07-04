@@ -116,6 +116,12 @@ pub struct SharedArgs {
     /// Live mode: hard cap on concurrently tracked streams
     #[arg(long, value_name = "N")]
     pub max_streams: Option<usize>,
+    /// Force the first layer to a named plugin instead of routing by
+    /// link type — for protocols reached only by direct-by-name
+    /// encapsulation (06.1's tutorial "pktt" space) or a raw capture of
+    /// a single known protocol with no link-layer framing.
+    #[arg(long, value_name = "PLUGIN")]
+    pub entry: Option<String>,
 }
 
 impl SharedArgs {
@@ -221,6 +227,18 @@ mod tests {
         assert_eq!(args.shared.format, Format::Text);
         assert_eq!(args.sort, SortOrder::Bytes);
         assert!(!args.shared.wants_live_eviction());
+        assert_eq!(args.shared.entry, None);
+    }
+
+    #[test]
+    fn entry_flag_parses() {
+        let cli =
+            Cli::try_parse_from(["pktflow", "streams", "-r", "f.pcap", "--entry", "template"])
+                .expect("parse");
+        let Command::Streams(args) = cli.command else {
+            panic!("streams subcommand");
+        };
+        assert_eq!(args.shared.entry.as_deref(), Some("template"));
     }
 
     #[test]

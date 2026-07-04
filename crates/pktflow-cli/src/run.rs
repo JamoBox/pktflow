@@ -121,6 +121,34 @@ fn open_source(
     }
 }
 
+/// Validates `--entry` against the registered plugin list before it
+/// ever reaches the engine: an unknown forced-entry name is a call-time
+/// panic there (04.2 — a programmer error, not a data error), so the
+/// CLI must catch it here and turn it into a clean usage error instead.
+fn resolve_opts(
+    shared: &SharedArgs,
+    engine: &pktflow_core::Engine,
+    aggregate: bool,
+) -> Result<ParseOpts, CliError> {
+    let entry = match &shared.entry {
+        Some(name) => Some(
+            engine
+                .plugin_by_name(name)
+                .ok_or_else(|| {
+                    CliError::Usage(format!("--entry {name:?} is not a registered plugin"))
+                })?
+                .name(), // the plugin's own &'static str, not the user's owned String
+        ),
+        None => None,
+    };
+    Ok(ParseOpts {
+        depth: shared.depth.to_depth(),
+        aggregation: aggregate,
+        entry,
+        ..ParseOpts::default()
+    })
+}
+
 fn aggregator_config(shared: &SharedArgs) -> AggregatorConfig {
     let eviction = if shared.wants_live_eviction() {
         EvictionPolicy::Live {
@@ -164,13 +192,8 @@ pub fn run_packets(
     mut on_packet: impl FnMut(u64, &PacketEvent),
 ) -> Result<RunOutcome, CliError> {
     let engine = Arc::new(pktflow_plugins::default_engine());
+    let opts = resolve_opts(shared, &engine, aggregate)?;
     let (mut src, mode, source_name) = open_source(shared, stop)?;
-
-    let opts = ParseOpts {
-        depth: shared.depth.to_depth(),
-        aggregation: aggregate,
-        ..ParseOpts::default()
-    };
     let limit = shared.count;
 
     let started = Instant::now();
@@ -264,13 +287,8 @@ pub fn run_observed(
     mut on_ingested: impl FnMut(&Aggregator),
 ) -> Result<RunOutcome, CliError> {
     let engine = Arc::new(pktflow_plugins::default_engine());
+    let opts = resolve_opts(shared, &engine, aggregate)?;
     let (mut src, mode, source_name) = open_source(shared, stop)?;
-
-    let opts = ParseOpts {
-        depth: shared.depth.to_depth(),
-        aggregation: aggregate,
-        ..ParseOpts::default()
-    };
 
     let started = Instant::now();
     let (tx, rx) = sync_channel::<DissectedPacket>(CHANNEL_CAPACITY);
@@ -325,13 +343,8 @@ pub fn run_live(
     on_evicted: impl FnMut(EvictedStream) + Send + 'static,
 ) -> Result<RunOutcome, CliError> {
     let engine = Arc::new(pktflow_plugins::default_engine());
+    let opts = resolve_opts(shared, &engine, true)?;
     let (mut src, mode, source_name) = open_source(shared, stop)?;
-
-    let opts = ParseOpts {
-        depth: shared.depth.to_depth(),
-        aggregation: true,
-        ..ParseOpts::default()
-    };
 
     let started = Instant::now();
     let (tx, rx) = sync_channel::<DissectedPacket>(CHANNEL_CAPACITY);
