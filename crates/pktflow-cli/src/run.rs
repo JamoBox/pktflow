@@ -135,6 +135,110 @@ fn aggregator_config(shared: &SharedArgs) -> AggregatorConfig {
     }
 }
 
+/// Cap on the unparsed-tail sample carried across the packets-mode
+/// channel for `-vv` hex dumps; the true length is `packet.opaque_len`.
+const TAIL_SAMPLE_CAP: usize = 64;
+
+/// One packets-mode event (08.4): the dissected packet plus what the
+/// plain pump path doesn't preserve across its channel — per-layer
+/// heuristic flags (03.3) and a capped sample of the unparsed tail.
+pub struct PacketEvent {
+    pub packet: DissectedPacket,
+    pub heuristic: Vec<bool>,
+    pub tail_sample: Vec<u8>,
+}
+
+/// The packets-mode pipeline (08.4): a producer thread reads and
+/// dissects (driving [`pktflow_core::LayerIter`] directly, since the
+/// plain `pump`/`DissectedPacket` path drops heuristic flags and raw
+/// bytes at the channel boundary); the consumer formats, writes, and
+/// optionally aggregates — mirroring [`run`]'s split so packets mode
+/// stays the cheap lens instead of serializing read+dissect+format+write
+/// on one thread.
+pub fn run_packets(
+    shared: &SharedArgs,
+    stop: &StopFlags,
+    aggregate: bool,
+    mut on_packet: impl FnMut(u64, &PacketEvent),
+) -> Result<RunOutcome, CliError> {
+    let engine = Arc::new(pktflow_plugins::default_engine());
+    let (mut src, mode, source_name) = open_source(shared, stop)?;
+
+    let opts = ParseOpts {
+        depth: shared.depth.to_depth(),
+        aggregation: aggregate,
+        ..ParseOpts::default()
+    };
+    let limit = shared.count;
+
+    let started = Instant::now();
+    let (tx, rx) = sync_channel::<PacketEvent>(CHANNEL_CAPACITY);
+    let pump_engine = Arc::clone(&engine);
+    let producer = std::thread::spawn(move || -> Result<PumpReport, CaptureError> {
+        let mut report = PumpReport::default();
+        let mut last_ts: Option<std::time::SystemTime> = None;
+        let mut heuristic_flags = Vec::new();
+
+        while limit.is_none_or(|l| report.packets < l) {
+            let Some(raw) = src.next_packet()? else {
+                break;
+            };
+            if last_ts.is_some_and(|t| raw.meta.timestamp < t) {
+                report.timestamps_regressed += 1;
+            }
+            last_ts = Some(last_ts.map_or(raw.meta.timestamp, |t| t.max(raw.meta.timestamp)));
+
+            let mut layers = pump_engine.layers(raw.bytes, &raw.meta, opts);
+            heuristic_flags.clear();
+            for step in layers.by_ref() {
+                heuristic_flags.push(step.via_heuristic);
+            }
+            let packet = layers.into_packet(raw.meta);
+            let tail_start = raw.bytes.len() - packet.opaque_len;
+            let sample_len = packet.opaque_len.min(TAIL_SAMPLE_CAP);
+            let tail_sample = raw.bytes[tail_start..tail_start + sample_len].to_vec();
+
+            report.packets += 1;
+            report.bytes += raw.meta.origlen as u64;
+            let event = PacketEvent {
+                packet,
+                heuristic: heuristic_flags.clone(),
+                tail_sample,
+            };
+            if tx.send(event).is_err() {
+                break; // consumer gone (e.g. broken pipe): stop reading
+            }
+        }
+        report.stats = src.stats();
+        Ok(report)
+    });
+
+    let mut agg = aggregate.then(|| Aggregator::new(&engine, aggregator_config(shared)));
+    for (index, event) in rx.into_iter().enumerate() {
+        on_packet(index as u64, &event);
+        if let Some(agg) = agg.as_mut() {
+            agg.ingest(&event.packet);
+        }
+    }
+
+    let report = producer
+        .join()
+        .map_err(|_| CliError::Internal("pump thread panicked".into()))??;
+
+    let snapshot = agg.map(|mut agg| {
+        agg.finish();
+        agg.snapshot()
+    });
+
+    Ok(RunOutcome {
+        snapshot,
+        report,
+        elapsed: started.elapsed(),
+        mode,
+        source_name,
+    })
+}
+
 /// Runs the pipeline to completion. `on_packet` sees every dissected
 /// packet in order (packets mode prints from it); `aggregate: false`
 /// skips stream tracking entirely (`--no-streams`).

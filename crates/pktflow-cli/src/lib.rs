@@ -63,21 +63,43 @@ pub fn dispatch(cli: Cli, stop: &StopFlags) -> Result<(), CliError> {
         }
         Command::Packets(args) => {
             let stdout = std::io::stdout();
-            let mut out = stdout.lock();
+            // Stdout is line-buffered even when piped (a syscall per
+            // line); this is meant to be the cheap, high-throughput
+            // lens, so batch writes behind an explicit buffer instead.
+            let mut out = std::io::BufWriter::with_capacity(64 * 1024, stdout.lock());
             let format = args.shared.format;
+            let verbosity = args.verbose;
             let mut write_err: Option<std::io::Error> = None;
-            let outcome = run::run(&args.shared, stop, !args.no_streams, |index, pkt| {
-                if write_err.is_some() {
-                    return;
-                }
-                let line = match format {
-                    Format::Text => views::packet_line(index, pkt),
-                    Format::Json => views::packet_json(index, pkt).to_string(),
-                };
-                if let Err(e) = writeln!(out, "{line}") {
+            let outcome =
+                run::run_packets(&args.shared, stop, !args.no_streams, |index, event| {
+                    if write_err.is_some() {
+                        return;
+                    }
+                    let result = match format {
+                        Format::Text => write!(
+                            out,
+                            "{}",
+                            views::packet_block(
+                                index,
+                                &event.packet,
+                                verbosity,
+                                &event.tail_sample,
+                                &event.heuristic,
+                            )
+                        ),
+                        Format::Json => {
+                            writeln!(out, "{}", views::packet_json(index, &event.packet))
+                        }
+                    };
+                    if let Err(e) = result {
+                        write_err = Some(e);
+                    }
+                })?;
+            if write_err.is_none() {
+                if let Err(e) = out.flush() {
                     write_err = Some(e);
                 }
-            })?;
+            }
             drop(out);
             if let Some(e) = write_err {
                 // A closed pipe (e.g. `| head`) is a normal way to end.

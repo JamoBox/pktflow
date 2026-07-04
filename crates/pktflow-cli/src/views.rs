@@ -593,18 +593,137 @@ fn rollup_line(protocol: &str, field: &str, rollup: &Rollup, full_series: bool) 
     }
 }
 
-/// One packets-mode line (08.4 first cut): index, timestamp, layer
-/// chain, caplen, stop class with D9 detail.
+/// One headline field from the innermost layer that offers one — a CLI
+/// preference list, deliberately not part of the plugin trait (08.4).
+const HEADLINE_FIELDS: [(&str, &str); 7] = [
+    ("dns", "qname"),
+    ("arp", "opcode"),
+    ("tcp", "flags"),
+    ("icmpv4", "type"),
+    ("dhcp", "msg_type"),
+    ("igmp", "type"),
+    ("ntp", "mode"),
+];
+
+fn headline_str(pkt: &DissectedPacket) -> Option<String> {
+    for layer in pkt.layers.iter().rev() {
+        for (proto, field) in HEADLINE_FIELDS {
+            if layer.protocol == proto {
+                if let Some(value) = layer.fields.get(field) {
+                    return Some(format!(
+                        "{field}={}",
+                        field_value_str(layer.protocol, field, value)
+                    ));
+                }
+            }
+        }
+    }
+    None
+}
+
+/// Innermost endpoints in source order — this is the per-packet view,
+/// deliberately NOT canonicalized (direction arrows belong to streams).
+/// Innermost address pair + innermost port pair compose `addr:port`.
+fn packet_endpoints_str(pkt: &DissectedPacket) -> Option<String> {
+    let mut addrs: Option<(String, String)> = None;
+    let mut ports: Option<(String, String)> = None;
+    let mut macs: Option<(String, String)> = None;
+    for layer in &pkt.layers {
+        let get = |n: &str| layer.fields.get(n);
+        if let (Some(s), Some(d)) = (get("src_addr"), get("dst_addr")) {
+            addrs = Some((value_str("src_addr", s), value_str("dst_addr", d)));
+            ports = None; // ports bind to the innermost IP layer above them
+        }
+        if let (Some(s), Some(d)) = (get("src_port"), get("dst_port")) {
+            ports = Some((value_str("src_port", s), value_str("dst_port", d)));
+        }
+        if let (Some(s), Some(d)) = (get("src_mac"), get("dst_mac")) {
+            macs = Some((value_str("src_mac", s), value_str("dst_mac", d)));
+        }
+    }
+    match (addrs, ports, macs) {
+        (Some((sa, da)), Some((sp, dp)), _) => Some(format!("{sa}:{sp} → {da}:{dp}")),
+        (Some((sa, da)), None, _) => Some(format!("{sa} → {da}")),
+        (None, Some((sp, dp)), _) => Some(format!(":{sp} → :{dp}")),
+        (None, None, Some((sm, dm))) => Some(format!("{sm} → {dm}")),
+        (None, None, None) => None,
+    }
+}
+
+/// One packets-mode line (08.4): index, timestamp, layer chain,
+/// innermost endpoints (source order), headline field, caplen, stop.
 pub fn packet_line(index: u64, pkt: &DissectedPacket) -> String {
     let chain: Vec<&str> = pkt.layers.iter().map(|l| l.protocol).collect();
-    format!(
-        "{}  {}  {}  {}  [{}]",
+    let mut out = format!(
+        "{}  {}  {}",
         index,
         time_of_day(pkt.meta.timestamp),
-        chain.join(" ▸ "),
+        chain.join(" ▸ ")
+    );
+    if let Some(endpoints) = packet_endpoints_str(pkt) {
+        out.push_str(&format!("  {endpoints}"));
+    }
+    if let Some(headline) = headline_str(pkt) {
+        out.push_str(&format!("  {headline}"));
+    }
+    out.push_str(&format!(
+        "  {}  [{}]",
         human_bytes(pkt.meta.caplen as u64),
         stop_str(pkt.stop),
-    )
+    ));
+    out
+}
+
+/// The full packets-mode entry per verbosity (08.4): base line; `-v`
+/// adds per-layer field blocks with offsets and header lengths; `-vv`
+/// adds a bounded hex dump of the unparsed payload and `via_heuristic`
+/// markers (03.3). `tail_sample` is already capped by the producer
+/// thread ([`crate::run::PacketEvent`]); `pkt.opaque_len` is the true
+/// unparsed length.
+pub fn packet_block(
+    index: u64,
+    pkt: &DissectedPacket,
+    verbosity: u8,
+    tail_sample: &[u8],
+    heuristic: &[bool],
+) -> String {
+    let mut out = packet_line(index, pkt);
+    out.push('\n');
+    if verbosity == 0 {
+        return out;
+    }
+    for (i, layer) in pkt.layers.iter().enumerate() {
+        let marker = if verbosity >= 2 && heuristic.get(i).copied().unwrap_or(false) {
+            "  (via heuristic)"
+        } else {
+            ""
+        };
+        out.push_str(&format!(
+            "    {} @{} hdr {}{marker}",
+            layer.protocol, layer.offset, layer.header_len
+        ));
+        if !layer.fields.is_empty() {
+            let fields: Vec<String> = layer
+                .fields
+                .iter()
+                .map(|(name, value)| {
+                    format!("{name}={}", field_value_str(layer.protocol, name, value))
+                })
+                .collect();
+            out.push_str(&format!(": {}", fields.join(" ")));
+        }
+        out.push('\n');
+    }
+    if verbosity >= 2 && pkt.opaque_len > 0 {
+        let hex: Vec<String> = tail_sample.iter().map(|b| format!("{b:02x}")).collect();
+        out.push_str(&format!(
+            "    payload ({} of {} unparsed bytes): {}\n",
+            tail_sample.len(),
+            pkt.opaque_len,
+            hex.join(" ")
+        ));
+    }
+    out
 }
 
 /// D9's home: non-clean stops render with detail (08.4).

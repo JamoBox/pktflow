@@ -46,6 +46,14 @@ enum Layer {
     },
     Gre,
     Payload(Vec<u8>),
+    /// Payload bytes, but the enclosing header claims `protocol` as its
+    /// next-protocol number regardless of what these bytes actually
+    /// contain — fixtures needing a header that announces more than the
+    /// bytes back up (a truncated TCP header, say).
+    RawNext {
+        protocol: u8,
+        bytes: Vec<u8>,
+    },
 }
 
 /// Fluent single-packet builder (outermost layer first). `build` yields
@@ -159,6 +167,14 @@ impl PacketBuilder {
         self
     }
 
+    /// Raw bytes under an explicit IP next-protocol claim — for
+    /// malformed fixtures (09.2 `malformed_zoo`): a header can announce
+    /// TCP/UDP/etc. while the bytes behind it are too short to parse.
+    pub fn bytes_claiming(mut self, protocol: u8, b: Vec<u8>) -> Self {
+        self.layers.push(Layer::RawNext { protocol, bytes: b });
+        self
+    }
+
     /// A minimal DNS query message (one question, A/IN).
     pub fn dns_query(self, txid: u16, qname: &str) -> Self {
         let mut b = Vec::new();
@@ -227,6 +243,7 @@ fn ip_proto_of(layer: Option<&Layer>) -> u8 {
         Some(Layer::Udp { .. }) => 17,
         Some(Layer::Gre) => 47,
         Some(Layer::Ipv4 { .. }) => 4, // IP-in-IP
+        Some(Layer::RawNext { protocol, .. }) => *protocol,
         // Nothing (or a raw payload) next: a number nothing claims.
         _ => 253,
     }
@@ -263,6 +280,11 @@ fn assemble(layers: &[Layer]) -> Vec<u8> {
         body = match layer {
             Layer::Payload(b) => {
                 let mut out = b.clone();
+                out.extend_from_slice(&body);
+                out
+            }
+            Layer::RawNext { bytes, .. } => {
+                let mut out = bytes.clone();
                 out.extend_from_slice(&body);
                 out
             }
