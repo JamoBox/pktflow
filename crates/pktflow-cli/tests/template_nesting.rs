@@ -69,6 +69,7 @@ fn pktt_in_pktt_nests_a_stream_under_its_parent_in_the_cli() {
         &path.to_string_lossy(),
         "--entry",
         "template",
+        "--batch",
     ]);
     assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
     let body = stdout(&out);

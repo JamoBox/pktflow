@@ -167,7 +167,9 @@ fn no_streams_is_not_slower_than_streams_mode() {
             .expect("5 runs")
     };
 
-    let streams_time = best_of(&["streams", "-r", p.as_ref()]);
+    // --batch: this compares pure aggregation cost against packets mode,
+    // not live-redraw overhead.
+    let streams_time = best_of(&["streams", "-r", p.as_ref(), "--batch"]);
     let packets_time = best_of(&["packets", "-r", p.as_ref(), "--no-streams"]);
 
     assert!(

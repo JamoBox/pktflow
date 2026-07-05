@@ -1,6 +1,6 @@
 //! 08.2 golden tests: tree and flat views, the tunnel chain, the
-//! `--merged` fold, and the `--watch` smoke — text output is a contract;
-//! goldens are updated deliberately (`UPDATE_GOLDENS=1`).
+//! `--merged` fold, and the (now default) live-view smoke — text output
+//! is a contract; goldens are updated deliberately (`UPDATE_GOLDENS=1`).
 
 mod support;
 
@@ -12,7 +12,7 @@ fn tree_view_matches_golden() {
         return; // Npcap SDK only on Windows CI
     }
     let path = tmp_pcap("tree", &tree_fixture());
-    let out = pktflow(&["streams", "-r", &path.to_string_lossy()]);
+    let out = pktflow(&["streams", "-r", &path.to_string_lossy(), "--batch"]);
     assert_eq!(out.status.code(), Some(0));
     assert_golden(&String::from_utf8_lossy(&out.stdout), "streams-tree.txt");
     let _ = std::fs::remove_file(&path);
@@ -24,6 +24,7 @@ fn flat_layer_view_matches_golden() {
         return;
     }
     let path = tmp_pcap("flat", &tree_fixture());
+    // --layer implies --batch (the live view is tree-only).
     let out = pktflow(&["streams", "-r", &path.to_string_lossy(), "--layer", "tcp"]);
     assert_eq!(out.status.code(), Some(0));
     assert_golden(
@@ -39,7 +40,7 @@ fn tunnel_fixture_renders_the_full_nested_chain() {
         return;
     }
     let path = tmp_pcap("gre", &gre_fixture());
-    let out = pktflow(&["streams", "-r", &path.to_string_lossy()]);
+    let out = pktflow(&["streams", "-r", &path.to_string_lossy(), "--batch"]);
     assert_eq!(out.status.code(), Some(0));
     let body = String::from_utf8_lossy(&out.stdout).into_owned();
     assert_golden(&body, "streams-gre.txt");
@@ -89,13 +90,13 @@ fn watch_smoke_final_frame_matches_the_plain_tree() {
     let path = tmp_pcap("watch", &tree_fixture());
     let p = path.to_string_lossy();
 
-    let plain = pktflow(&["streams", "-r", p.as_ref()]);
+    let plain = pktflow(&["streams", "-r", p.as_ref(), "--batch"]);
     assert_eq!(plain.status.code(), Some(0));
     let plain_tree = String::from_utf8_lossy(&plain.stdout).into_owned();
 
-    // Paced replay under --watch: no panic, and the final frame's tree
-    // matches the non-watch output exactly.
-    let watch = pktflow(&["streams", "-r", p.as_ref(), "--watch", "--pace-ms", "20"]);
+    // Paced replay under the (now default) live view: no panic, and the
+    // final frame's tree matches the --batch output exactly.
+    let watch = pktflow(&["streams", "-r", p.as_ref(), "--pace-ms", "20"]);
     assert_eq!(
         watch.status.code(),
         Some(0),
@@ -122,6 +123,6 @@ fn watch_smoke_final_frame_matches_the_plain_tree() {
     let _ = std::fs::remove_file(&path);
 }
 
-// `--watch --format json` (NDJSON live events) is exercised in
+// The default `--format json` (NDJSON live events) is exercised in
 // tests/json_output.rs (08.5), which supersedes this file's earlier
 // placeholder that asserted it was rejected.

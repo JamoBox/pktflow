@@ -9,7 +9,7 @@ selection and shared flags factored once.
 ## Specification
 
 ```text
-pktflow streams  (-r FILE | -i IFACE) [--layer PROTO] [--merged] [--watch] [shared]   # default lens (08.2)
+pktflow streams  (-r FILE | -i IFACE) [--layer PROTO] [--merged] [--batch] [shared]   # default lens (08.2)
 pktflow stream   (-r FILE | -i IFACE) <STREAM-SELECTOR>                    [shared]   # drill-down (08.3)
 pktflow packets  (-r FILE | -i IFACE) [-v...]                              [shared]   # debug lens (08.4)
 pktflow ifaces                                                                         # FR-23 (07.3)
@@ -27,6 +27,9 @@ shared flags:
 
 - `pktflow FILE` (bare path, no subcommand) = `pktflow streams -r FILE` — the zero-friction
   path for the curious analyst.
+- `streams` defaults to the live view (08.2): full-screen text redraw, or an NDJSON event
+  stream for `--format json`. `--batch` opts out, running once and printing a single final
+  result instead — the shape scripts want (`--batch --format json` = one document).
 - **Mode defaults follow D2 automatically:** `-r` ⇒ `EvictionPolicy::None`; `-i` ⇒
   `Live` defaults; overrides via the two flags.
 - End-of-run **summary on stderr** (text mode) regardless of subcommand (FR-27): packets

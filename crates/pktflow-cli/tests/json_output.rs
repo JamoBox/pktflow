@@ -1,5 +1,6 @@
-//! 08.5 JSON tests: offline envelope schema validation, determinism
-//! (00.3's hook), and NDJSON live events smoke-tested via replay pacing.
+//! 08.5 JSON tests: `--batch` envelope schema validation, determinism
+//! (00.3's hook), and the (now default) NDJSON live events smoke-tested
+//! via replay pacing.
 
 mod support;
 
@@ -59,7 +60,14 @@ fn offline_json_validates_against_the_checked_in_schema() {
         ("gre", gre_fixture(), "offline-json-gre.json"),
     ] {
         let path = tmp_pcap(&format!("schema-{name}"), &fixture);
-        let out = pktflow(&["streams", "-r", &path.to_string_lossy(), "--format", "json"]);
+        let out = pktflow(&[
+            "streams",
+            "-r",
+            &path.to_string_lossy(),
+            "--format",
+            "json",
+            "--batch",
+        ]);
         assert_eq!(out.status.code(), Some(0), "{name}: {}", stderr(&out));
         let doc: Json = serde_json::from_str(&stdout(&out)).expect("valid JSON");
         validate(&schema, "", &doc).unwrap_or_else(|e| panic!("{name} envelope: {e}"));
@@ -85,7 +93,7 @@ fn repeated_offline_runs_produce_byte_identical_json() {
     let p = path.to_string_lossy();
 
     let run = || {
-        let out = pktflow(&["streams", "-r", p.as_ref(), "--format", "json"]);
+        let out = pktflow(&["streams", "-r", p.as_ref(), "--format", "json", "--batch"]);
         assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
         stdout(&out)
     };
@@ -127,7 +135,7 @@ fn repeated_offline_runs_are_byte_identical_over_the_full_corpus() {
         let path = tmp_pcap(&format!("corpus-determinism-{name}"), &capture);
         let p = path.to_string_lossy();
         let run = || {
-            let out = pktflow(&["streams", "-r", p.as_ref(), "--format", "json"]);
+            let out = pktflow(&["streams", "-r", p.as_ref(), "--format", "json", "--batch"]);
             assert_eq!(out.status.code(), Some(0), "{name}: {}", stderr(&out));
             stdout(&out)
         };
@@ -148,7 +156,6 @@ fn ndjson_live_events_smoke_test_via_replay_pacing() {
         "streams",
         "-r",
         &path.to_string_lossy(),
-        "--watch",
         "--format",
         "json",
         "--idle-timeout",
@@ -200,7 +207,7 @@ fn ndjson_live_events_smoke_test_via_replay_pacing() {
 }
 
 #[test]
-fn watch_json_rejects_bad_input_same_as_watch_text() {
+fn default_json_rejects_bad_input_same_as_batch_text() {
     if windows_skips() {
         return;
     }
@@ -212,7 +219,6 @@ fn watch_json_rejects_bad_input_same_as_watch_text() {
         "streams",
         "-r",
         "definitely-missing.pcap",
-        "--watch",
         "--format",
         "json",
     ]);

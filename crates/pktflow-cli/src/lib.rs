@@ -19,7 +19,10 @@ use run::StopFlags;
 pub fn dispatch(cli: Cli, stop: &StopFlags) -> Result<(), CliError> {
     match cli.command {
         Command::Streams(args) => {
-            if args.watch {
+            // The live view only ever redraws the tree; `--layer`'s flat
+            // table (and `--merged`) has no live-redraw form, so it
+            // implies --batch rather than silently ignoring the flag.
+            if !args.batch && args.layer.is_none() {
                 return match args.shared.format {
                     Format::Text => watch(&args, stop),
                     Format::Json => watch_json(&args, stop),
@@ -117,7 +120,9 @@ pub fn dispatch(cli: Cli, stop: &StopFlags) -> Result<(), CliError> {
     }
 }
 
-/// The paced (or plain) end-of-run pipeline for `streams`.
+/// `--batch` (08.2): the paced (or plain) end-of-run pipeline for
+/// `streams` — run once, print a single final result. Opt-in; the
+/// default is the live view below.
 fn run_paced(args: &cli::StreamsArgs, stop: &StopFlags) -> Result<run::RunOutcome, CliError> {
     let pace = args.pace_ms.map(std::time::Duration::from_millis);
     run::run(&args.shared, stop, true, move |_, _| {
@@ -127,9 +132,9 @@ fn run_paced(args: &cli::StreamsArgs, stop: &StopFlags) -> Result<run::RunOutcom
     })
 }
 
-/// `--watch` (08.2): full-screen redraw at least every second while
+/// The default (08.2): full-screen redraw at least every second while
 /// packets flow, plus a final frame after `finish()` that matches the
-/// non-watch tree. Snapshot-based; stdout only.
+/// `--batch` tree. Snapshot-based; stdout only.
 fn watch(args: &cli::StreamsArgs, stop: &StopFlags) -> Result<(), CliError> {
     use std::time::{Duration, Instant};
     let interval = Duration::from_secs(1);
@@ -165,7 +170,7 @@ fn watch(args: &cli::StreamsArgs, stop: &StopFlags) -> Result<(), CliError> {
         },
     )?;
 
-    // The final frame: exactly the non-watch tree plus the footer.
+    // The final frame: exactly the --batch tree plus the footer.
     let Some(snapshot) = &outcome.snapshot else {
         return Err(CliError::Internal("watch run without snapshot".into()));
     };
@@ -175,9 +180,9 @@ fn watch(args: &cli::StreamsArgs, stop: &StopFlags) -> Result<(), CliError> {
     Ok(())
 }
 
-/// `--watch --format json` (08.5): the NDJSON equivalent of [`watch`] —
-/// `stream_new`/`stream_update`/`stream_closed` events as the run
-/// progresses, a `summary` line always last (even after Ctrl-C's
+/// The default `--format json` (08.5): the NDJSON equivalent of
+/// [`watch`] — `stream_new`/`stream_update`/`stream_closed` events as
+/// the run progresses, a `summary` line always last (even after Ctrl-C's
 /// graceful stop, which still reaches `finish()`). One `NdjsonTracker`
 /// shared between the after-ingest poll and the aggregator's own
 /// eviction sink — both run on this thread, never concurrently, so the

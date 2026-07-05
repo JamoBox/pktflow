@@ -266,7 +266,8 @@ pub fn streams_merged(snapshot: &AggregatorSnapshot, protocol: &str) -> String {
     render_rows(&rows)
 }
 
-/// One `--watch` frame (08.2): ANSI clear+home, the tree capped to
+/// One live-view frame (08.2, default unless `--batch`): ANSI
+/// clear+home, the tree capped to
 /// `WATCH_MAX_ROWS`, footer = running totals. Snapshot-based — the
 /// render side never touches the aggregator.
 pub const WATCH_CLEAR: &str = "\x1b[2J\x1b[H";
@@ -983,7 +984,7 @@ pub fn json_envelope(outcome: &RunOutcome) -> Json {
     doc
 }
 
-/// `--watch --format json` NDJSON event tracker (08.5): `stream_new`
+/// The default `--format json` NDJSON event tracker (08.5): `stream_new`
 /// fires the first time a stream is observed; `stream_update` throttles
 /// to ≥1 s per stream; `stream_closed` fires immediately from the
 /// aggregator's eviction sink, which sees only the departing `Stream`

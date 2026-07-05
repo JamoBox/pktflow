@@ -90,9 +90,9 @@ significantly higher than 100k in practice; out of scope for this round to fix.
 
 Roughly linear in live-stream count (10x streams, ~14.5x time) — consistent with
 `snapshot()`'s documented deep-copy-every-live-stream cost (05.7's accepted cost). At
-100k live streams, a 230 ms snapshot is likely fine for an interactive `--watch` refresh
-cadence but would be the first thing to revisit if v2 sharding (D5) becomes necessary at
-higher live-stream counts.
+100k live streams, a 230 ms snapshot is likely fine for the live view's refresh cadence
+but would be the first thing to revisit if v2 sharding (D5) becomes necessary at higher
+live-stream counts.
 
 ## Deferred-tuning callbacks
 

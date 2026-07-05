@@ -174,7 +174,14 @@ fn summary_reaches_stderr_for_every_subcommand() {
 fn json_stdout_is_pipe_safe() {
     windows_skips!();
     let path = write_fixture("json");
-    let out = run(&["streams", "-r", &path.to_string_lossy(), "--format", "json"]);
+    let out = run(&[
+        "streams",
+        "-r",
+        &path.to_string_lossy(),
+        "--format",
+        "json",
+        "--batch",
+    ]);
     assert_eq!(out.status.code(), Some(0));
 
     // The whole of stdout must be one parseable JSON document.

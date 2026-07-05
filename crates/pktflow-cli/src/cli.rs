@@ -47,9 +47,11 @@ pub struct StreamsArgs {
     /// Fold same-key streams across parents (needs --layer)
     #[arg(long, requires = "layer")]
     pub merged: bool,
-    /// Full-screen live view, redrawn every second
+    /// Run once and print a single final result instead of the default
+    /// live view (full-screen text, redrawn every second; NDJSON events
+    /// for `--format json`)
     #[arg(long)]
-    pub watch: bool,
+    pub batch: bool,
     /// Testing hook: sleep N ms per packet to simulate replay pacing
     #[arg(long, value_name = "MS", hide = true)]
     pub pace_ms: Option<u64>,

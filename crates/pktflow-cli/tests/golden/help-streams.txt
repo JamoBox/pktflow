@@ -14,6 +14,6 @@ Options:
       --entry <PLUGIN>       Force the first layer to a named plugin instead of routing by link type — for protocols reached only by direct-by-name encapsulation (06.1's tutorial "pktt" space) or a raw capture of a single known protocol with no link-layer framing
       --layer <PROTO>        Flat table of one protocol's streams instead of the tree
       --merged               Fold same-key streams across parents (needs --layer)
-      --watch                Full-screen live view, redrawn every second
+      --batch                Run once and print a single final result instead of the default live view (full-screen text, redrawn every second; NDJSON events for `--format json`)
       --sort <SORT>          Sibling sort order in the tree [default: bytes] [possible values: bytes, packets, first-seen, duration]
   -h, --help                 Print help

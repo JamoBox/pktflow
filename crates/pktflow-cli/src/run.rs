@@ -276,9 +276,9 @@ pub fn run(
     run_observed(shared, stop, aggregate, on_packet, |_| {})
 }
 
-/// [`run`] plus an after-ingest observer: `--watch` (08.2) redraws from
-/// aggregator snapshots between packets, on this thread (D5's single
-/// writer), never mid-ingest.
+/// [`run`] plus an after-ingest observer: the default live view (08.2)
+/// redraws from aggregator snapshots between packets, on this thread
+/// (D5's single writer), never mid-ingest.
 pub fn run_observed(
     shared: &SharedArgs,
     stop: &StopFlags,
@@ -327,7 +327,7 @@ pub fn run_observed(
     })
 }
 
-/// `--watch --format json` NDJSON pipeline (08.5): mirrors
+/// The default `--format json` NDJSON pipeline (08.5): mirrors
 /// [`run_observed`]'s producer/consumer split, but always aggregates
 /// and wires `on_evicted` into the aggregator's eviction sink so
 /// `stream_closed` events fire the moment D2 closes a stream — not just

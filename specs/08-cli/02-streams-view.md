@@ -3,8 +3,9 @@
 > Task: [08 CLI](README.md) · Depends on: 08.1, 05.7 · PRD: FR-24, use cases 1/3/4
 
 ## Goal
-The default lens: the capture as a set of conversations — hierarchy tree by default, flat
-per-layer table with `--layer`, live-updating with `--watch`.
+The default lens: the capture as a set of conversations — hierarchy tree by default,
+live-updating unless `--batch`, flat per-layer table with `--layer` (which implies
+`--batch`: the live view is tree-only).
 
 ## Specification
 
@@ -28,9 +29,10 @@ bytes desc within siblings; `--sort {bytes|packets|first-seen|duration}`.
 `at_layer`); `--merged` switches to `at_layer_merged` (D10 fold). Columns as above plus
 first-seen. This is FR-24's literal "list streams at a chosen layer".
 
-**`--watch` (live or replay):** full-screen redraw every 1 s (plain ANSI clear+home — no TUI
-framework in v1), top-N by recent bytes, closed streams drop out, footer = running summary.
-Snapshot-based (05.7/D5): render thread requests snapshots; never touches the aggregator.
+**Live view (default, live or replay; `--batch` opts out):** full-screen redraw every 1 s
+(plain ANSI clear+home — no TUI framework in v1), top-N by recent bytes, closed streams
+drop out, footer = running summary. Snapshot-based (05.7/D5): render thread requests
+snapshots; never touches the aggregator.
 
 Stream selectors printed in every view (`#42`) are stable within a run (`created_seq`) and
 are what `pktflow stream` (08.3) accepts.
@@ -40,5 +42,5 @@ are what `pktflow stream` (08.3) accepts.
       contract; goldens updated deliberately).
 - [x] Tunnel fixture renders the full nested chain (use case 6 visible to a human).
 - [x] `--merged` fold demonstrated on the dual-parent fixture (05.7).
-- [x] `--watch` smoke: replay a fixture with simulated pacing, assert no panic, final frame
-      matches the non-watch output (manual on real iface for use case 3).
+- [x] Live-view smoke: replay a fixture with simulated pacing, assert no panic, final frame
+      matches the `--batch` output (manual on real iface for use case 3).

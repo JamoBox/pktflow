@@ -32,16 +32,19 @@ picture, not just decoding bytes. See [`PRD.md`](PRD.md) for the full product ra
 ```sh
 cargo build --release
 ./target/release/pktflow capture.pcap                  # shorthand for `pktflow streams -r capture.pcap`
-./target/release/pktflow streams -r capture.pcap --format json
+./target/release/pktflow streams -r capture.pcap --batch --format json  # one JSON document, for scripting
 ./target/release/pktflow stream -r capture.pcap '#3'      # drill into one stream (by id from a streams view)
 ./target/release/pktflow packets -r capture.pcap -v       # per-packet debug lens
 ./target/release/pktflow ifaces                           # list capturable interfaces
-sudo ./target/release/pktflow streams -i eth0 --watch     # live, full-screen view
+sudo ./target/release/pktflow streams -i eth0             # live, full-screen view (the default)
 ```
 
-Run `pktflow <subcommand> --help` for the full flag set (BPF filters, live-mode eviction
-tuning, `--entry` for forced first-layer dissection, NDJSON live events via
-`--watch --format json`, and more).
+`streams` defaults to a live, continuously-redrawn view (full-screen text, or an NDJSON
+event stream for `--format json`) — pass `--batch` to run once and print a single final
+result instead, which is what you want for scripting (`--format json --batch` gives one
+parseable document rather than a stream of events). Run `pktflow <subcommand> --help` for
+the full flag set (BPF filters, live-mode eviction tuning, `--entry` for forced first-layer
+dissection, and more).
 
 ## Workspace layout
 
