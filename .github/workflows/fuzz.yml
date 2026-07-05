@@ -1,0 +1,37 @@
+name: Fuzz
+
+# Scheduled, not per-PR (09.1): fuzzing is a background safety net, not
+# a merge gate. Runs nightly plus on-demand via workflow_dispatch.
+on:
+  schedule:
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  fuzz:
+    name: Fuzz (${{ matrix.target }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [dissect, dns_name]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@nightly
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: crates/pktflow-plugins/fuzz -> target
+      - run: cargo install cargo-fuzz --locked
+      - name: Fuzz ${{ matrix.target }} for 5 minutes
+        working-directory: crates/pktflow-plugins
+        run: cargo fuzz run ${{ matrix.target }} -- -max_total_time=300
+      - name: Upload crash artifacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-crash-${{ matrix.target }}
+          path: crates/pktflow-plugins/fuzz/artifacts/${{ matrix.target }}
+          if-no-files-found: ignore

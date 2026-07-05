@@ -1,0 +1,32 @@
+[package]
+name = "pktflow-plugins-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+# Firewalled from the parent workspace (cargo-fuzz convention): its own
+# lockfile/dependency graph, nightly-only, never built by `cargo build
+# --workspace` or `just ci`.
+[workspace]
+
+[dependencies]
+libfuzzer-sys = "0.4"
+pktflow-core = { path = "../../pktflow-core" }
+pktflow-plugins = { path = ".." }
+
+[[bin]]
+name = "dissect"
+path = "fuzz_targets/dissect.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "dns_name"
+path = "fuzz_targets/dns_name.rs"
+test = false
+doc = false
+bench = false
