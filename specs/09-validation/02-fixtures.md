@@ -47,7 +47,7 @@ sample, one capture with traffic the v1 set does not claim (QUIC) — the honest
 sample for D9 reporting.
 
 ## Acceptance criteria
-- [ ] Builder produces byte-identical output across runs (checksums deterministic) and its
+- [x] Builder produces byte-identical output across runs (checksums deterministic) and its
       pcap files open in Wireshark/tshark without warnings (sanity anchor for 09.3).
-- [ ] All named fixtures implemented with `ExpectedStreams` trees; used by ≥1 test each.
+- [x] All named fixtures implemented with `ExpectedStreams` trees; used by ≥1 test each.
 - [ ] Real captures checked in with provenance README; total corpus < 5 MB.

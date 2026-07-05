@@ -3,6 +3,8 @@
 
 #![allow(dead_code)] // each test binary uses a subset
 
+pub mod expected;
+pub mod named_fixtures;
 pub mod schema;
 
 use std::path::PathBuf;

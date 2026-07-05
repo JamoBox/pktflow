@@ -28,10 +28,19 @@ enum Layer {
     },
     Vlan {
         vid: u16,
+        /// TPID the *enclosing* header uses to announce this tag: 0x8100
+        /// for an ordinary 802.1Q tag, 0x88A8 for an 802.1ad S-tag (the
+        /// outer tag of a QinQ stack).
+        tpid: u16,
     },
     Ipv4 {
         src: [u8; 4],
         dst: [u8; 4],
+    },
+    /// RFC 7348 VXLAN: 8-byte header (I-flag + VNI), always wrapping an
+    /// inner Ethernet frame.
+    Vxlan {
+        vni: u32,
     },
     Tcp {
         sport: u16,
@@ -110,8 +119,16 @@ impl PacketBuilder {
         self
     }
 
+    /// An ordinary 802.1Q tag (TPID 0x8100).
     pub fn vlan(mut self, vid: u16) -> Self {
-        self.layers.push(Layer::Vlan { vid });
+        self.layers.push(Layer::Vlan { vid, tpid: 0x8100 });
+        self
+    }
+
+    /// An 802.1ad S-tag (TPID 0x88A8) — the outer tag of a QinQ stack
+    /// (09.2 `qinq_stack`); follow with `.vlan(inner_vid)` for the C-tag.
+    pub fn vlan_stag(mut self, vid: u16) -> Self {
+        self.layers.push(Layer::Vlan { vid, tpid: 0x88A8 });
         self
     }
 
@@ -156,6 +173,13 @@ impl PacketBuilder {
         self
     }
 
+    /// RFC 7348 VXLAN over UDP (dst port 4789 conventionally set via
+    /// `.udp(sport, 4789)`); always wraps an inner Ethernet frame.
+    pub fn vxlan(mut self, vni: u32) -> Self {
+        self.layers.push(Layer::Vxlan { vni });
+        self
+    }
+
     /// `n` bytes of `0xCC` filler beyond the last parsed layer.
     pub fn payload(self, n: usize) -> Self {
         self.bytes(vec![0xCC; n])
@@ -183,6 +207,45 @@ impl PacketBuilder {
         b.extend_from_slice(&[0, 1, 0, 0, 0, 0, 0, 0]); // 1 question
         push_qname(&mut b, qname);
         b.extend_from_slice(&[0, 1, 0, 1]); // A, IN
+        self.bytes(b)
+    }
+
+    /// A DHCP/BOOTP message (RFC 2131): fixed 236-byte header + magic
+    /// cookie + TLV options, always terminated by `END` (09.2 `dhcp_dora`:
+    /// vary `op`/`msg_type`/`options` to build DISCOVER/OFFER/REQUEST/ACK).
+    /// `op` is 1 (BOOTREQUEST, client→server) or 2 (BOOTREPLY, server→client);
+    /// `msg_type` is the DHCP option-53 code (1=DISCOVER 2=OFFER 3=REQUEST
+    /// 5=ACK). `options` are extra TLVs (code, data) appended after msg_type.
+    pub fn dhcp(
+        self,
+        op: u8,
+        msg_type: u8,
+        xid: u32,
+        client_mac: &str,
+        options: &[(u8, &[u8])],
+    ) -> Self {
+        const MAGIC_COOKIE: u32 = 0x6382_5363;
+        let mut b = Vec::with_capacity(240);
+        b.push(op);
+        b.push(1); // htype = Ethernet
+        b.push(6); // hlen = 6
+        b.push(0); // hops
+        b.extend_from_slice(&xid.to_be_bytes());
+        b.extend_from_slice(&[0; 8]); // secs+flags, ciaddr
+        b.extend_from_slice(&[0; 8]); // yiaddr, siaddr
+        b.extend_from_slice(&[0; 4]); // giaddr
+        b.extend_from_slice(&mac(client_mac));
+        b.extend_from_slice(&[0; 10]); // pad chaddr to 16 bytes
+        b.extend_from_slice(&[0; 64]); // sname
+        b.extend_from_slice(&[0; 128]); // file
+        b.extend_from_slice(&MAGIC_COOKIE.to_be_bytes());
+        b.extend_from_slice(&[53, 1, msg_type]);
+        for (code, data) in options {
+            b.push(*code);
+            b.push(u8::try_from(data.len()).expect("dhcp option fits in a byte"));
+            b.extend_from_slice(data);
+        }
+        b.push(255); // END
         self.bytes(b)
     }
 
@@ -229,7 +292,7 @@ fn push_qname(out: &mut Vec<u8>, qname: &str) {
 /// its next-protocol field).
 fn ether_type_of(layer: &Layer) -> u16 {
     match layer {
-        Layer::Vlan { .. } => 0x8100,
+        Layer::Vlan { tpid, .. } => *tpid,
         Layer::Ipv4 { .. } => 0x0800,
         // Payload directly under eth/gre: an ethertype nothing claims.
         _ => 0x9999,
@@ -296,7 +359,7 @@ fn assemble(layers: &[Layer]) -> Vec<u8> {
                 out.extend_from_slice(&body);
                 out
             }
-            Layer::Vlan { vid } => {
+            Layer::Vlan { vid, .. } => {
                 let mut out = Vec::with_capacity(4 + body.len());
                 out.extend_from_slice(&(vid & 0x0FFF).to_be_bytes());
                 out.extend_from_slice(&next.map_or(0x9999, ether_type_of).to_be_bytes());
@@ -307,6 +370,15 @@ fn assemble(layers: &[Layer]) -> Vec<u8> {
                 let mut out = Vec::with_capacity(4 + body.len());
                 out.extend_from_slice(&0u16.to_be_bytes()); // no C/K/S, version 0
                 out.extend_from_slice(&next.map_or(0x9999, ether_type_of).to_be_bytes());
+                out.extend_from_slice(&body);
+                out
+            }
+            Layer::Vxlan { vni } => {
+                let mut out = Vec::with_capacity(8 + body.len());
+                out.push(0x08); // flags: I-bit set, nothing else
+                out.extend_from_slice(&[0, 0, 0]); // reserved
+                out.extend_from_slice(&vni.to_be_bytes()[1..]); // 24-bit VNI
+                out.push(0); // reserved
                 out.extend_from_slice(&body);
                 out
             }
@@ -390,7 +462,7 @@ fn transport_checksum(
 
 /// Multi-packet capture: pcap files for CLI-level tests, raw packet
 /// vectors for in-process ones (`MockSource::new(kit.packets(), …)`).
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub struct CaptureBuilder {
     packets: Vec<(SystemTime, Vec<u8>)>,
 }
@@ -403,6 +475,15 @@ impl CaptureBuilder {
     pub fn packet(mut self, builder: PacketBuilder) -> Self {
         let (meta, bytes) = builder.build();
         self.packets.push((meta.timestamp, bytes));
+        self
+    }
+
+    /// A packet from already-assembled wire bytes, bypassing
+    /// `PacketBuilder` — for fixtures that need post-build byte patching
+    /// (09.2 `malformed_zoo`: bad IHL, fragment offsets) that the fluent
+    /// layer-by-layer builder can't express.
+    pub fn raw_packet(mut self, ts: SystemTime, bytes: Vec<u8>) -> Self {
+        self.packets.push((ts, bytes));
         self
     }
 
