@@ -64,3 +64,19 @@ jobs:
         run: Add-Content $env:GITHUB_ENV "LIB=C:\npcap-sdk\Lib\x64"
       - uses: Swatinem/rust-cache@v2
       - run: cargo test --workspace --all-features
+
+  # Docker gives the process CAP_NET_RAW (and runs as root) by default,
+  # which is exactly what crates/pktflow-capture/tests/live.rs's
+  # `#[ignore = "needs capture privileges..."]` tests need — the bare
+  # `test` job above can't grant that to a GitHub-hosted runner's
+  # unprivileged step user, so those tests are skipped there. This job
+  # runs them for real, in the Dockerfile's container.
+  privileged-integration-tests:
+    name: Privileged integration tests (Docker)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build test image
+        run: docker build -t pktflow-test .
+      - name: Run tests, including the privileged live-capture ones
+        run: docker run --rm pktflow-test
