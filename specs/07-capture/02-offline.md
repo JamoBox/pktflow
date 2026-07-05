@@ -36,5 +36,5 @@ impl PacketSource for FileSource { /* ... */ }
 - [x] Nonexistent / non-capture / zero-packet files produce clean `CaptureError`s and a
       clean empty run respectively.
 - [x] Out-of-order-timestamp fixture: all packets ingested, counter set, no panic.
-- [ ] Determinism: two replays of the same file produce byte-identical JSON output
+- [x] Determinism: two replays of the same file produce byte-identical JSON output
       (hooks into 00.3's determinism smoke).
