@@ -25,17 +25,33 @@ fn list_interfaces_returns_a_well_formed_list() {
     );
 }
 
+/// The loopback device name isn't portable: Linux/macOS use a fixed
+/// `lo`/`lo0`, but Npcap's Windows loopback adapter is identified by its
+/// `loopback` flag rather than a fixed name (its NPF device string is
+/// assigned per-install). Discovering it via `list_interfaces` avoids
+/// hardcoding a name that doesn't hold across Windows installs.
+fn loopback_device() -> String {
+    if cfg!(windows) {
+        list_interfaces()
+            .expect("list")
+            .into_iter()
+            .find(|i| i.loopback)
+            .expect("a loopback interface is present")
+            .name
+    } else if cfg!(target_os = "linux") {
+        "lo".to_string()
+    } else {
+        "lo0".to_string()
+    }
+}
+
 #[test]
 #[ignore = "needs capture privileges (run as root / with cap_net_raw)"]
 fn loopback_round_trip_captures_sent_udp() {
     const MARKER: &[u8] = b"pktflow-loopback-roundtrip";
-    let device = if cfg!(target_os = "linux") {
-        "lo"
-    } else {
-        "lo0"
-    };
+    let device = loopback_device();
     let mut src = LiveSource::open(
-        device,
+        &device,
         LiveConfig {
             bpf: Some("udp and port 47999".into()),
             read_timeout: Duration::from_millis(100),
@@ -76,14 +92,10 @@ fn loopback_round_trip_captures_sent_udp() {
 #[test]
 #[ignore = "needs capture privileges (run as root / with cap_net_raw)"]
 fn stop_flag_shuts_down_a_quiet_capture_within_two_timeouts() {
-    let device = if cfg!(target_os = "linux") {
-        "lo"
-    } else {
-        "lo0"
-    };
+    let device = loopback_device();
     let read_timeout = Duration::from_millis(200);
     let mut src = LiveSource::open(
-        device,
+        &device,
         LiveConfig {
             // A filter that matches nothing keeps the interface quiet.
             bpf: Some("udp and port 1".into()),
@@ -113,13 +125,9 @@ fn stop_flag_shuts_down_a_quiet_capture_within_two_timeouts() {
 #[test]
 #[ignore = "needs capture privileges (run as root / with cap_net_raw)"]
 fn invalid_bpf_on_a_real_device_names_the_filter() {
-    let device = if cfg!(target_os = "linux") {
-        "lo"
-    } else {
-        "lo0"
-    };
+    let device = loopback_device();
     let err = match LiveSource::open(
-        device,
+        &device,
         LiveConfig {
             bpf: Some("nonsense filter syntax".into()),
             ..LiveConfig::default()

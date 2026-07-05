@@ -11,7 +11,7 @@ feeding borrowed packet buffers + `PacketMeta` into the engine/aggregator pipeli
 
 - [x] [07.1 Source abstraction](01-source-abstraction.md) — `PacketSource`, DLT mapping
 - [x] [07.2 Offline replay](02-offline.md) — pcap/pcapng files (FR-22a)
-- [ ] [07.3 Live capture & interfaces](03-live.md) — devices, listing, BPF (FR-22b, FR-23)
+- [x] [07.3 Live capture & interfaces](03-live.md) — devices, listing, BPF (FR-22b, FR-23)
 
 ## Definition of done
 
