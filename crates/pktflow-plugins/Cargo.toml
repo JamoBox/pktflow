@@ -3,6 +3,7 @@ name = "pktflow-plugins"
 description = "Reference protocol plugin set and registration list"
 version.workspace = true
 edition.workspace = true
+license.workspace = true
 
 [dependencies]
 pktflow-core.workspace = true

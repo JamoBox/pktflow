@@ -12,6 +12,8 @@ members = [
 [workspace.package]
 version = "0.1.0"
 edition = "2021"
+license = "MIT"
+repository = "https://github.com/JamoBox/pktflow"
 
 [workspace.dependencies]
 pktflow-core = { path = "crates/pktflow-core" }

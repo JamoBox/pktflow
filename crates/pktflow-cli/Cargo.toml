@@ -3,6 +3,7 @@ name = "pktflow-cli"
 description = "The pktflow binary: streams view, drill-down, packet mode, JSON output"
 version.workspace = true
 edition.workspace = true
+license.workspace = true
 
 [[bin]]
 name = "pktflow"
