@@ -1,0 +1,16 @@
+[package]
+name = "pktflow-flows"
+description = "Stream aggregator: store, hierarchy, rollups, lifecycle, queries"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+pktflow-core.workspace = true
+smallvec.workspace = true
+
+[dev-dependencies]
+proptest.workspace = true
+
+[lints]
+workspace = true

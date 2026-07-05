@@ -30,8 +30,8 @@ pub enum Depth {
   revisit only if profiling demands it).
 
 ## Acceptance criteria
-- [ ] `Depth` implemented with ordering tests (`None < Keys < Structural < Full`).
-- [ ] Engine-side clamp specified in the parser config and unit-tested: aggregation on +
+- [x] `Depth` implemented with ordering tests (`None < Keys < Structural < Full`).
+- [x] Engine-side clamp specified in the parser config and unit-tested: aggregation on +
       requested `None` ⇒ plugins observe `Keys`.
-- [ ] Doc comment states the plugin contract (flow-key fields present at ≥ `Keys`) that 09.1
+- [x] Doc comment states the plugin contract (flow-key fields present at ≥ `Keys`) that 09.1
       enforces mechanically.

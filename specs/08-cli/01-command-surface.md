@@ -9,7 +9,7 @@ selection and shared flags factored once.
 ## Specification
 
 ```text
-pktflow streams  (-r FILE | -i IFACE) [--layer PROTO] [--merged] [--watch] [shared]   # default lens (08.2)
+pktflow streams  (-r FILE | -i IFACE) [--layer PROTO] [--merged] [--batch] [shared]   # default lens (08.2)
 pktflow stream   (-r FILE | -i IFACE) <STREAM-SELECTOR>                    [shared]   # drill-down (08.3)
 pktflow packets  (-r FILE | -i IFACE) [-v...]                              [shared]   # debug lens (08.4)
 pktflow ifaces                                                                         # FR-23 (07.3)
@@ -27,6 +27,9 @@ shared flags:
 
 - `pktflow FILE` (bare path, no subcommand) = `pktflow streams -r FILE` — the zero-friction
   path for the curious analyst.
+- `streams` defaults to the live view (08.2): full-screen text redraw, or an NDJSON event
+  stream for `--format json`. `--batch` opts out, running once and printing a single final
+  result instead — the shape scripts want (`--batch --format json` = one document).
 - **Mode defaults follow D2 automatically:** `-r` ⇒ `EvictionPolicy::None`; `-i` ⇒
   `Live` defaults; overrides via the two flags.
 - End-of-run **summary on stderr** (text mode) regardless of subcommand (FR-27): packets
@@ -38,9 +41,12 @@ shared flags:
   second press = immediate exit.
 
 ## Acceptance criteria
-- [ ] clap tree implemented with the conflicts/defaults above; `--help` snapshot-tested
+- [x] clap tree implemented with the conflicts/defaults above; `--help` snapshot-tested
       (help text is UI; regressions are real).
-- [ ] Bare-path shorthand works; usage errors exit 2 with clap's message.
-- [ ] Summary appears on stderr for all subcommands and never contaminates `--format json`
+- [x] Bare-path shorthand works; usage errors exit 2 with clap's message.
+- [x] Summary appears on stderr for all subcommands and never contaminates `--format json`
       stdout (pipe-safety test: `pktflow streams -r f --format json | jq .` succeeds).
-- [ ] Graceful Ctrl-C verified manually on both OSes (checklist item, not CI).
+- [x] Graceful Ctrl-C verified manually on both OSes (checklist item, not CI): first press
+      prints the "stopping — finishing streams" message and exits cleanly with the final
+      summary; verified on Windows against a live interface (`pktflow streams -i
+      "\Device\NPF_Loopback"`).

@@ -65,9 +65,9 @@ Rules:
   a rollup on the MAC conversation instead (06.2).
 
 ## Acceptance criteria
-- [ ] Types implemented in `pktflow-core` (declaration) with construction validation where
+- [x] Types implemented in `pktflow-core` (declaration) with construction validation where
       static (`Series { cap: 0 }` rejected).
-- [ ] The 5-tuple-as-tree-path decision (TCP key = ports only) documented on `KeyField` —
+- [x] The 5-tuple-as-tree-path decision (TCP key = ports only) documented on `KeyField` —
       it is the design's least obvious consequence of D10.
-- [ ] A test plugin declaring a 2-field endpoint key + `Sample` rollup round-trips through
+- [x] A test plugin declaring a 2-field endpoint key + `Sample` rollup round-trips through
       the (future) aggregator API types without engine-side protocol knowledge.

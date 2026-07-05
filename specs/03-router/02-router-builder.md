@@ -42,8 +42,8 @@ defaulted method returning `false`). Pool order = registration order (the determ
 tiebreak, 03.3).
 
 ## Acceptance criteria
-- [ ] Builder + validations implemented; each of the four error cases unit-tested.
-- [ ] `Engine: Send + Sync`, no interior mutability; shareable via `Arc<Engine>`.
-- [ ] Manual override demonstrably beats a claim in a routing test.
-- [ ] Registering the same plugin set in two different orders yields identical route tables
+- [x] Builder + validations implemented; each of the four error cases unit-tested.
+- [x] `Engine: Send + Sync`, no interior mutability; shareable via `Arc<Engine>`.
+- [x] Manual override demonstrably beats a claim in a routing test.
+- [x] Registering the same plugin set in two different orders yields identical route tables
       (order only matters for the fallback pool, where it is preserved as documented).

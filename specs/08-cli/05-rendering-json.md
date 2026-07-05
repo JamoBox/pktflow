@@ -43,18 +43,20 @@ additive changes only within major.
   `streams` is the flat node list (tree reconstructable via `parent`/`children`); ordering =
   `created_seq` (deterministic, 05.7). Values rendered per the text table *for well-known
   shapes* (MACs/IPs as strings — JSON consumers deserve readable endpoints too); unknown
-  bytes as hex strings; timestamps RFC 3339 UTC.
-- *Live* — NDJSON events: `{"event":"stream_new"|"stream_update"|"stream_closed"|"summary", …}`
-  with `stream_update` throttled to ≥1 s per stream; `stream_closed` carries the final
-  record + `close_reason`; `summary` is the last line (D8).
+  bytes as hex strings; timestamps RFC 3339 UTC. This shape is what `--batch` gives (offline
+  or live, the source doesn't matter — `--batch` is what selects it).
+- *Default (unless `--batch`)* — NDJSON events:
+  `{"event":"stream_new"|"stream_update"|"stream_closed"|"summary", …}` with `stream_update`
+  throttled to ≥1 s per stream; `stream_closed` carries the final record + `close_reason`;
+  `summary` is the last line (D8).
 - `packets` subcommand + json = NDJSON, one `DissectedPacket` projection per line (layers,
   fields, stop reason) — the 09 suites' dissection-assertion format.
 
 ## Acceptance criteria
-- [ ] Renderer table implemented with unit tests per shape, incl. IPv6 compression edge
+- [x] Renderer table implemented with unit tests per shape, incl. IPv6 compression edge
       cases (`::`, embedded v4) and the hex elision.
-- [ ] Offline JSON validated against a checked-in JSON Schema file (`schema/streams-v1.json`)
+- [x] Offline JSON validated against a checked-in JSON Schema file (`schema/streams-v1.json`)
       in CI; goldens for the fixtures.
-- [ ] NDJSON live events smoke-tested via replay pacing; final `summary` line always present
+- [x] NDJSON live events smoke-tested via replay pacing; final `summary` line always present
       (even on Ctrl-C — graceful path, 08.1).
-- [ ] Determinism: repeated runs produce byte-identical offline JSON (00.3 hook).
+- [x] Determinism: repeated runs produce byte-identical offline JSON (00.3 hook).

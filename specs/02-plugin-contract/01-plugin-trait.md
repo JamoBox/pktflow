@@ -44,7 +44,7 @@ Contract rules (enforced by the 09.1 test kit where mechanically possible):
    the aggregator (05). Plugins are constructed once and shared (`Send + Sync`, D5).
 
 ## Acceptance criteria
-- [ ] Trait object-safe: `Box<dyn LayerPlugin>` and `&dyn LayerPlugin` usable.
-- [ ] A ~30-line no-op test plugin (fixed header_len, one field, `Hint::Terminal`)
+- [x] Trait object-safe: `Box<dyn LayerPlugin>` and `&dyn LayerPlugin` usable.
+- [x] A ~30-line no-op test plugin (fixed header_len, one field, `Hint::Terminal`)
       implements only the two required members and passes the 09.1 kit's generic checks.
-- [ ] Rule 3 verified by an engine-side unit test with a lying plugin.
+- [x] Rule 3 verified by an engine-side unit test with a lying plugin.

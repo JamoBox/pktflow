@@ -35,7 +35,7 @@ pub enum RouteId {
   diagnostics and D9 stop-reason messages.
 
 ## Acceptance criteria
-- [ ] `RouteId` implemented, `Copy + Eq + Hash`, with `Display` as specified.
-- [ ] Unit test: `EtherType(6) != IpProtocol(6)` as map keys (no cross-space collision).
-- [ ] A `Custom`-space id round-trips through claim → route table → dispatch in a test with
+- [x] `RouteId` implemented, `Copy + Eq + Hash`, with `Display` as specified.
+- [x] Unit test: `EtherType(6) != IpProtocol(6)` as map keys (no cross-space collision).
+- [x] A `Custom`-space id round-trips through claim → route table → dispatch in a test with
       a synthetic plugin pair.

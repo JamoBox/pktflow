@@ -37,7 +37,7 @@ cli ──► plugins ──► core        flows ─x─ plugins (never)
   sixth crate, until 09.2 justifies one.
 
 ## Acceptance criteria
-- [ ] Workspace builds with all five crates stubbed (`lib.rs`/`main.rs` compiling, no logic).
-- [ ] `cargo tree -i pcap` shows only `pktflow-capture` and `pktflow-cli` as dependents.
-- [ ] `pktflow-flows` does not depend on `pktflow-plugins` (checked in CI via `cargo tree`).
-- [ ] Lints configured at workspace level and inherited by all crates.
+- [x] Workspace builds with all five crates stubbed (`lib.rs`/`main.rs` compiling, no logic).
+- [x] `cargo tree -i pcap` shows only `pktflow-capture` and `pktflow-cli` as dependents.
+- [x] `pktflow-flows` does not depend on `pktflow-plugins` (checked in CI via `cargo tree`).
+- [x] Lints configured at workspace level and inherited by all crates.

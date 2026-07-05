@@ -38,8 +38,8 @@ Also: `docs/adding-a-protocol.md` — a short walkthrough that says "copy templa
 fill in your header, add one line to `default_engine()`", written against this file.
 
 ## Acceptance criteria
-- [ ] `template.rs` compiles, registers, passes the 09.1 kit, ≤ 150 lines.
-- [ ] A synthetic PKTT-in-PKTT capture shows a nested stream in the CLI (proves the full
+- [x] `template.rs` compiles, registers, passes the 09.1 kit, ≤ 150 lines.
+- [x] A synthetic PKTT-in-PKTT capture shows a nested stream in the CLI (proves the full
       pipeline with zero real-protocol involvement).
-- [ ] `docs/adding-a-protocol.md` exists and its steps were literally followed once by the
+- [x] `docs/adding-a-protocol.md` exists and its steps were literally followed once by the
       "16th toy plugin" rehearsal (06 README definition of done).

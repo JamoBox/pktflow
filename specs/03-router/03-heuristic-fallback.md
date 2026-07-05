@@ -42,7 +42,7 @@ if exhausted: StopReason::UnknownHint
   not the record itself (streams don't care once bytes parsed).
 
 ## Acceptance criteria
-- [ ] Scoring + prior + tie-break implemented as above; constants named and documented.
-- [ ] Test: two plugins probing 60 vs 60 → earlier-registered wins, both orders exercised.
-- [ ] Test: winner's `parse` fails → next-best runs, failed plugin not retried (FR-15).
-- [ ] Test: all candidates below `MIN_CONFIDENCE` → stop, no layer emitted.
+- [x] Scoring + prior + tie-break implemented as above; constants named and documented.
+- [x] Test: two plugins probing 60 vs 60 → earlier-registered wins, both orders exercised.
+- [x] Test: winner's `parse` fails → next-best runs, failed plugin not retried (FR-15).
+- [x] Test: all candidates below `MIN_CONFIDENCE` → stop, no layer emitted.

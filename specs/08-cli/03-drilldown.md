@@ -38,8 +38,8 @@ children  udp #55 (…), dns #56 (…)
   without a TUI.
 
 ## Acceptance criteria
-- [ ] Both selector forms resolve; ambiguity path exits 1 listing candidates.
-- [ ] Golden tests: a TCP session (all sections), a UDP+dns stream (rollups, no lifecycle),
+- [x] Both selector forms resolve; ambiguity path exits 1 listing candidates.
+- [x] Golden tests: a TCP session (all sections), a UDP+dns stream (rollups, no lifecycle),
       a GRE stream (children section shows the inner stack).
-- [ ] Overflow/truncation markers verified against a cap-exceeding fixture (nothing lies
+- [x] Overflow/truncation markers verified against a cap-exceeding fixture (nothing lies
       by omission — 05.4).

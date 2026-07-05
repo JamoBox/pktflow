@@ -45,7 +45,7 @@ fn probe(&self, bytes: &[u8], ctx: &ParseCtx) -> Option<Confidence> { None }
 - A probe is *advisory*: winning the score contest still requires `parse` to succeed (03.3).
 
 ## Acceptance criteria
-- [ ] Defaults compile away: a claims-less plugin adds no routes; probe-less plugin never
+- [x] Defaults compile away: a claims-less plugin adds no routes; probe-less plugin never
       appears in fallback scoring.
-- [ ] Duplicate-claim collision surfaces as a build-time `RegistryError` naming both plugins.
-- [ ] `Confidence` unrepresentable above 100.
+- [x] Duplicate-claim collision surfaces as a build-time `RegistryError` naming both plugins.
+- [x] `Confidence` unrepresentable above 100.

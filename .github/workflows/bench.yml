@@ -1,0 +1,53 @@
+name: Bench
+
+# Scheduled, not per-PR (09.4): benches are measurements, not a merge
+# gate — `ci.yml`'s lint job only compiles them (`cargo bench --no-run`).
+# This runs them for real, on a schedule, comparing against a rolling
+# baseline cached across runs; regressions > 15% flag the job red.
+on:
+  schedule:
+    - cron: "37 4 * * *"
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  bench:
+    name: Benchmarks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install libpcap
+        run: sudo apt-get update && sudo apt-get install -y libpcap-dev
+      - uses: Swatinem/rust-cache@v2
+      - name: Restore previous baseline
+        uses: actions/cache/restore@v4
+        with:
+          path: target/criterion
+          key: bench-baseline-${{ github.run_id }}
+          restore-keys: |
+            bench-baseline-
+      - name: Run benches
+        run: |
+          mkdir -p bench-logs
+          cargo bench -p pktflow-cli --bench dissect_only 2>&1 | tee bench-logs/dissect_only.log
+          cargo bench -p pktflow-cli --bench dissect_aggregate 2>&1 | tee bench-logs/dissect_aggregate.log
+          cargo bench -p pktflow-cli --bench throughput_floor 2>&1 | tee bench-logs/throughput_floor.log
+          cargo bench -p pktflow-cli --bench snapshot_cost 2>&1 | tee bench-logs/snapshot_cost.log
+          cargo bench -p pktflow-cli --bench aggregator_memory 2>&1 | tee bench-logs/aggregator_memory.log
+      - name: Save updated baseline
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: target/criterion
+          key: bench-baseline-${{ github.run_id }}
+      - name: Upload bench logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: bench-logs
+          path: bench-logs/
+      - name: Check for regressions > 15%
+        run: python3 scripts/check-bench-regression.py bench-logs/*.log

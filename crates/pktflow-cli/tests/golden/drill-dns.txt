@@ -1,0 +1,7 @@
+dns #3
+lineage   ethernet #0 (aa:bb:cc:dd:ee:01 ↔ aa:bb:cc:dd:ee:02) ▸ ipv4 #1 (10.0.0.1 ↔ 10.0.0.5) ▸ udp #2 (:53 ↔ :34567) ▸ this
+timing    first 00:01:40.000  last 00:01:40.000  duration 00:00:00
+totals    2 pkts / 158 B    A→B 2 pkts / 158 B    B→A 0 pkts / 0 B
+rollups
+  qname   {example.com}   (accumulate, 1 distinct / 2 obs)
+  rcode   {0}   (accumulate, 1 distinct / 2 obs)

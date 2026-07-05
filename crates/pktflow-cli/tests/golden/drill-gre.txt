@@ -1,0 +1,5 @@
+gre #2   key=0
+lineage   ethernet #0 (aa:bb:cc:dd:ee:01 ↔ aa:bb:cc:dd:ee:02) ▸ ipv4 #1 (192.168.1.1 ↔ 192.168.1.2) ▸ this
+timing    first 00:03:20.000  last 00:03:21.000  duration 00:00:01
+totals    3 pkts / 298 B    A→B 3 pkts / 298 B    B→A 0 pkts / 0 B
+children  ipv4 #3 (10.0.0.5 ↔ 10.0.0.9) ▸ tcp #4 (:443 ↔ :40000)

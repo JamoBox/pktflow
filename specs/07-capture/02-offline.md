@@ -31,10 +31,10 @@ impl PacketSource for FileSource { /* ... */ }
   this crate (capture doesn't know about aggregation).
 
 ## Acceptance criteria
-- [ ] Fixture `.pcap` and `.pcapng` files (09.2) replay with exact packet counts, lens, and
+- [x] Fixture `.pcap` and `.pcapng` files (09.2) replay with exact packet counts, lens, and
       timestamps.
-- [ ] Nonexistent / non-capture / zero-packet files produce clean `CaptureError`s and a
+- [x] Nonexistent / non-capture / zero-packet files produce clean `CaptureError`s and a
       clean empty run respectively.
-- [ ] Out-of-order-timestamp fixture: all packets ingested, counter set, no panic.
-- [ ] Determinism: two replays of the same file produce byte-identical JSON output
+- [x] Out-of-order-timestamp fixture: all packets ingested, counter set, no panic.
+- [x] Determinism: two replays of the same file produce byte-identical JSON output
       (hooks into 00.3's determinism smoke).

@@ -37,8 +37,8 @@ A `ParseError` is **not** a program error — it is routine data ("these bytes a
 protocol") and must be cheap: no allocation, no backtrace capture.
 
 ## Acceptance criteria
-- [ ] `ByteReader` implemented with unit tests covering every method at boundary conditions
+- [x] `ByteReader` implemented with unit tests covering every method at boundary conditions
       (empty input, exact-length, off-by-one).
-- [ ] Error enums defined and exported; `ParseError` is `Copy` or otherwise allocation-free.
-- [ ] A crate-level test feeds 0-, 1-, and truncated-length buffers through `ByteReader`
+- [x] Error enums defined and exported; `ParseError` is `Copy` or otherwise allocation-free.
+- [x] A crate-level test feeds 0-, 1-, and truncated-length buffers through `ByteReader`
       patterns and asserts `Err(Truncated)` — never a panic (this becomes the fuzz seed).

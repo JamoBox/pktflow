@@ -31,8 +31,8 @@ Notes:
   pcap-free.
 
 ## Acceptance criteria
-- [ ] All three precedence tiers implemented and unit-tested, including precedence order
+- [x] All three precedence tiers implemented and unit-tested, including precedence order
       (forced entry beats an existing link-type route).
-- [ ] Unclaimed link type with heuristics off ⇒ zero layers, `UnclaimedRoute(LinkType(n))`.
-- [ ] Raw-IP fixture (`DLT_RAW` with an IPv4 packet) parses via entry heuristics when
+- [x] Unclaimed link type with heuristics off ⇒ zero layers, `UnclaimedRoute(LinkType(n))`.
+- [x] Raw-IP fixture (`DLT_RAW` with an IPv4 packet) parses via entry heuristics when
       enabled: ipv4's probe (version nibble + header checksum) wins.

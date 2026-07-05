@@ -32,8 +32,8 @@ pktflow packets -r FILE [-v | -vv] [--depth …]
   nothing. Explicitly *not* part of the plugin trait (presentation stays out of core).
 
 ## Acceptance criteria
-- [ ] Golden tests for base/`-v`/`-vv` on a mixed fixture including an unclaimed-port packet
+- [x] Golden tests for base/`-v`/`-vv` on a mixed fixture including an unclaimed-port packet
       and a truncated packet (stop details rendered as specified).
-- [ ] `--depth keys` visibly reduces `-v` field blocks (FR-16 demonstrable from the CLI).
-- [ ] Throughput sanity: packets mode with `--no-streams` on the 09.4 benchmark capture is
+- [x] `--depth keys` visibly reduces `-v` field blocks (FR-16 demonstrable from the CLI).
+- [x] Throughput sanity: packets mode with `--no-streams` on the 09.4 benchmark capture is
       not slower than streams mode (it must be the cheap lens).

@@ -36,8 +36,8 @@ CI: benches compiled (`cargo bench --no-run`) per PR; a scheduled job runs them 
 relative deltas; regressions > 15% flag red.
 
 ## Acceptance criteria
-- [ ] All five benches implemented and runnable via `just bench`.
-- [ ] Depth-payoff and throughput-floor results recorded in `benches/README.md` with
+- [x] All five benches implemented and runnable via `just bench`.
+- [x] Depth-payoff and throughput-floor results recorded in `benches/README.md` with
       machine specs; §8 metric conclusion stated explicitly.
-- [ ] Memory plateau demonstrated (graph or table in the README).
-- [ ] Scheduled CI bench job wired with the 15% regression gate.
+- [x] Memory plateau demonstrated (graph or table in the README).
+- [x] Scheduled CI bench job wired with the 15% regression gate.

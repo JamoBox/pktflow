@@ -1,0 +1,12 @@
+[package]
+name = "pktflow-testkit"
+description = "Synthetic packet/capture builders shared by tests (09.2)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+pktflow-core.workspace = true
+
+[lints]
+workspace = true

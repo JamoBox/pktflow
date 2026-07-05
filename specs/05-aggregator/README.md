@@ -11,13 +11,13 @@ everything after presents it.
 
 ## Sub-tasks
 
-- [ ] [05.1 Flow keys & canonicalization](01-flow-keys.md) — key building, D3 rule (FR-2, FR-3)
-- [ ] [05.2 Stream store](02-stream-store.md) — the single-writer state machine (FR-1)
-- [ ] [05.3 Flow hierarchy](03-hierarchy.md) — parent-scoped nesting, tunnels (FR-4, FR-8)
-- [ ] [05.4 Metadata rollups](04-rollups.md) — accumulate/sample/series (FR-5)
-- [ ] [05.5 Lifecycle state](05-lifecycle.md) — plugin-defined session state (FR-6)
-- [ ] [05.6 Memory & eviction](06-memory-eviction.md) — D2 policy, sinks (PRD §7)
-- [ ] [05.7 Query API](07-query-api.md) — list/get/traverse/snapshot (FR-7)
+- [x] [05.1 Flow keys & canonicalization](01-flow-keys.md) — key building, D3 rule (FR-2, FR-3)
+- [x] [05.2 Stream store](02-stream-store.md) — the single-writer state machine (FR-1)
+- [x] [05.3 Flow hierarchy](03-hierarchy.md) — parent-scoped nesting, tunnels (FR-4, FR-8)
+- [x] [05.4 Metadata rollups](04-rollups.md) — accumulate/sample/series (FR-5)
+- [x] [05.5 Lifecycle state](05-lifecycle.md) — plugin-defined session state (FR-6)
+- [x] [05.6 Memory & eviction](06-memory-eviction.md) — D2 policy, sinks (PRD §7)
+- [x] [05.7 Query API](07-query-api.md) — list/get/traverse/snapshot (FR-7)
 
 ## Definition of done
 

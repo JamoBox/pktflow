@@ -41,7 +41,7 @@ Plus workspace-level fuzz targets (`cargo-fuzz`, run in scheduled CI, not per-PR
 → `Engine::dissect` with the full default engine; DNS name decoder standalone (06.6).
 
 ## Acceptance criteria
-- [ ] Kit implemented; all 15 reference plugins have a `ConformanceCase` and pass.
-- [ ] Kit failures produce actionable messages naming plugin, rule, and byte offset.
-- [ ] Fuzz targets build and run clean for a 10-minute smoke locally; scheduled CI job wired.
-- [ ] Template plugin's tests (06.1) use the kit, so every copied plugin starts conformant.
+- [x] Kit implemented; all 15 reference plugins have a `ConformanceCase` and pass.
+- [x] Kit failures produce actionable messages naming plugin, rule, and byte offset.
+- [x] Fuzz targets build and run clean for a 10-minute smoke locally; scheduled CI job wired.
+- [x] Template plugin's tests (06.1) use the kit, so every copied plugin starts conformant.

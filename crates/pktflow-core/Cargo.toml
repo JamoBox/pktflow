@@ -1,0 +1,21 @@
+[package]
+name = "pktflow-core"
+description = "Values, layers, plugin trait, router, lazy parser — the protocol-free dissection substrate"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+thiserror.workspace = true
+smallvec.workspace = true
+compact_str.workspace = true
+serde = { workspace = true, optional = true }
+
+[features]
+serde = ["dep:serde"]
+
+[dev-dependencies]
+serde_json.workspace = true
+
+[lints]
+workspace = true

@@ -41,8 +41,8 @@ pub fn pump(src: &mut dyn PacketSource, engine: &Engine, opts: ParseOpts,
   `Backend(String)`.
 
 ## Acceptance criteria
-- [ ] Trait + pump implemented; a `Vec<(SystemTime, Vec<u8>)>`-backed `MockSource` ships in
+- [x] Trait + pump implemented; a `Vec<(SystemTime, Vec<u8>)>`-backed `MockSource` ships in
       the crate for tests (07/08/09 all reuse it).
-- [ ] Pump respects `limit` exactly and reports totals matching a fixture.
-- [ ] Backpressure verified: a stalled consumer blocks the pump rather than growing memory.
-- [ ] `PermissionDenied` remediation text present for both OSes (string-tested).
+- [x] Pump respects `limit` exactly and reports totals matching a fixture.
+- [x] Backpressure verified: a stalled consumer blocks the pump rather than growing memory.
+- [x] `PermissionDenied` remediation text present for both OSes (string-tested).

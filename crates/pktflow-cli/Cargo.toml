@@ -1,0 +1,48 @@
+[package]
+name = "pktflow-cli"
+description = "The pktflow binary: streams view, drill-down, packet mode, JSON output"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "pktflow"
+path = "src/main.rs"
+
+[dependencies]
+pktflow-core.workspace = true
+pktflow-flows.workspace = true
+pktflow-plugins.workspace = true
+pktflow-capture.workspace = true
+thiserror.workspace = true
+clap.workspace = true
+ctrlc.workspace = true
+serde_json.workspace = true
+time.workspace = true
+
+[dev-dependencies]
+criterion = { version = "0.8.2", features = ["html_reports"] }
+pktflow-testkit.workspace = true
+
+[[bench]]
+name = "dissect_only"
+harness = false
+
+[[bench]]
+name = "dissect_aggregate"
+harness = false
+
+[[bench]]
+name = "throughput_floor"
+harness = false
+
+[[bench]]
+name = "aggregator_memory"
+harness = false
+
+[[bench]]
+name = "snapshot_cost"
+harness = false
+
+[lints]
+workspace = true

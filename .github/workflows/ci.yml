@@ -1,0 +1,82 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  lint:
+    name: Lint (fmt + clippy)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - name: Install libpcap
+        run: sudo apt-get update && sudo apt-get install -y libpcap-dev
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo fmt --all --check
+      - run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+      - name: Benches compile (09.4 — running them is a scheduled job, not a merge gate)
+        run: cargo bench --no-run --workspace
+
+  boundaries:
+    name: Crate boundary check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: ./scripts/check-boundaries.sh
+
+  test:
+    name: Test (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install libpcap (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libpcap-dev
+      - name: Cache Npcap SDK (Windows)
+        if: runner.os == 'Windows'
+        id: npcap-sdk
+        uses: actions/cache@v4
+        with:
+          path: C:\npcap-sdk
+          key: npcap-sdk-1.13
+      - name: Download Npcap SDK (Windows)
+        if: runner.os == 'Windows' && steps.npcap-sdk.outputs.cache-hit != 'true'
+        shell: pwsh
+        run: |
+          Invoke-WebRequest -Uri https://npcap.com/dist/npcap-sdk-1.13.zip -OutFile npcap-sdk.zip
+          Expand-Archive npcap-sdk.zip -DestinationPath C:\npcap-sdk
+      - name: Configure Npcap SDK lib path (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: Add-Content $env:GITHUB_ENV "LIB=C:\npcap-sdk\Lib\x64"
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo test --workspace --all-features
+
+  # Docker gives the process CAP_NET_RAW (and runs as root) by default,
+  # which is exactly what crates/pktflow-capture/tests/live.rs's
+  # `#[ignore = "needs capture privileges..."]` tests need — the bare
+  # `test` job above can't grant that to a GitHub-hosted runner's
+  # unprivileged step user, so those tests are skipped there. This job
+  # runs them for real, in the Dockerfile's container.
+  privileged-integration-tests:
+    name: Privileged integration tests (Docker)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build test image
+        run: docker build -t pktflow-test .
+      - name: Run tests, including the privileged live-capture ones
+        run: docker run --rm pktflow-test
