@@ -46,8 +46,20 @@ allowed): one browsing session (eth/ip/tcp/dns mix), one DHCP exchange, one VXLA
 sample, one capture with traffic the v1 set does not claim (QUIC) — the honest-unknowns
 sample for D9 reporting.
 
+Sourced from public repositories with redistribution explicitly permitted, rather than
+self-captured traffic: `dhcp_dora.pcap` (DORA exchange), `vxlan_overlay.pcap` (VXLAN
+tunnel), and — standing in for the single browsing-session fixture, since neither
+project's corpus has one organic multi-protocol session under a permissive license —
+`dns_lookup.pcap` + `http_transaction.pcap` as two genuine real captures, all four from
+tcpdump's BSD-licensed test suite. `quic_unknown.pcap` (the honest-unknowns sample) is a
+tshark-filtered, byte-unmodified slice of Wireshark's own GPLv2-licensed
+`quic-with-secrets.pcapng` test capture — tcpdump's QUIC fixtures all use `DLT_NULL`
+loopback framing, which pktflow's v1 entry points (Ethernet/Raw-IP only) don't route, so
+they'd stop at layer zero rather than exercise the intended case. Full provenance,
+license texts, and checksums in `fixtures/real/README.md`.
+
 ## Acceptance criteria
 - [x] Builder produces byte-identical output across runs (checksums deterministic) and its
       pcap files open in Wireshark/tshark without warnings (sanity anchor for 09.3).
 - [x] All named fixtures implemented with `ExpectedStreams` trees; used by ≥1 test each.
-- [ ] Real captures checked in with provenance README; total corpus < 5 MB.
+- [x] Real captures checked in with provenance README; total corpus < 5 MB.
