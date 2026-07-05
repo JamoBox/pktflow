@@ -12,7 +12,7 @@ PRD's performance claims. Much of it starts alongside task 06 (the kit) rather t
 - [x] [09.1 Plugin test kit](01-plugin-test-kit.md) — contract conformance per plugin
 - [ ] [09.2 Fixture corpus](02-fixtures.md) — synthetic builder + curated captures
 - [ ] [09.3 End-to-end stream tests](03-e2e.md) — expected trees + reference parity
-- [ ] [09.4 Benchmarks](04-benchmarks.md) — depth payoff, throughput, memory
+- [x] [09.4 Benchmarks](04-benchmarks.md) — depth payoff, throughput, memory
 
 ## Definition of done
 
