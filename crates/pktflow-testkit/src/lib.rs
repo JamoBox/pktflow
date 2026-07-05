@@ -523,6 +523,118 @@ impl CaptureBuilder {
     }
 }
 
+/// Deterministic address derived from a pool index: `prefix.b2.b1.b0` —
+/// used by [`mixed_capture`] (and available to benches needing their own
+/// bulk-distinct-flow corpora) so traffic is reproducible without a
+/// `rand` dependency.
+pub fn pool_ipv4(prefix: u8, index: u32) -> String {
+    let [_, b2, b1, b0] = index.to_be_bytes();
+    format!("{prefix}.{b2}.{b1}.{b0}")
+}
+
+/// Deterministic MAC derived from a pool index, paired with [`pool_ipv4`].
+pub fn pool_mac(tag: u8, index: u32) -> String {
+    let [_, b2, b1, b0] = index.to_be_bytes();
+    format!("aa:bb:{tag:02x}:{b2:02x}:{b1:02x}:{b0:02x}")
+}
+
+/// The 09.4 bench corpus: a deterministic `n`-packet mix — 70% TCP, 20%
+/// UDP+DNS, 5% tunnels (GRE), 5% noise (unclaimed-port UDP) — cycling
+/// through bounded pools of distinct conversations (so aggregation sees
+/// realistic, interleaved cardinality rather than one giant flow or a
+/// million singleton ones). Reproducible byte-for-byte across runs: no
+/// randomness, just index arithmetic.
+pub fn mixed_capture(n: usize) -> Vec<(SystemTime, Vec<u8>)> {
+    const TCP_POOL: u32 = 2_000;
+    const DNS_POOL: u32 = 500;
+    const TUNNEL_POOL: u32 = 100;
+    const NOISE_POOL: u32 = 200;
+
+    let mut packets = Vec::with_capacity(n);
+    for i in 0..n {
+        let ts = SystemTime::UNIX_EPOCH + Duration::from_secs(i as u64);
+        let bucket = i % 20;
+        let (meta, bytes) = if bucket < 14 {
+            // 70%: TCP, a short handshake-through-data-through-teardown
+            // cycle (14 phases) per flow, `TCP_POOL` flows interleaved.
+            let flow = (i as u32 / 14) % TCP_POOL;
+            let client = pool_ipv4(10, flow);
+            let server = pool_ipv4(172, flow);
+            let cport = 40000 + (flow % 20_000) as u16;
+            let phase = i % 14;
+            let (a, b, flags, seq) = match phase {
+                0 => (&client, &server, flags::SYN, 1u32),
+                1 => (&server, &client, flags::SYN | flags::ACK, 1),
+                13 => (&client, &server, flags::FIN | flags::ACK, 100),
+                p if p % 2 == 0 => (&client, &server, flags::PSH | flags::ACK, p as u32),
+                p => (&server, &client, flags::PSH | flags::ACK, p as u32),
+            };
+            let (sport, dport) = if a == &client {
+                (cport, 443)
+            } else {
+                (443, cport)
+            };
+            PacketBuilder::new(ts)
+                .eth(&pool_mac(1, flow), &pool_mac(2, flow))
+                .ipv4(a, b)
+                .tcp(sport, dport, flags, seq)
+                .payload(64)
+                .build()
+        } else if bucket < 18 {
+            // 20%: DNS over UDP, query then response per flow.
+            let flow = (i as u32 / 4) % DNS_POOL;
+            let client = pool_ipv4(10, flow);
+            let resolver = pool_ipv4(192, flow % 4); // a handful of resolvers
+            let qname = format!("host-{flow}.example.net");
+            let txid = (flow as u16).wrapping_add(i as u16);
+            if i % 2 == 0 {
+                PacketBuilder::new(ts)
+                    .eth(&pool_mac(3, flow), &pool_mac(4, flow))
+                    .ipv4(&client, &resolver)
+                    .udp(34567, 53)
+                    .dns_query(txid, &qname)
+                    .build()
+            } else {
+                PacketBuilder::new(ts)
+                    .eth(&pool_mac(4, flow), &pool_mac(3, flow))
+                    .ipv4(&resolver, &client)
+                    .udp(53, 34567)
+                    .dns_response(txid, &qname, "93.184.216.34")
+                    .build()
+            }
+        } else if bucket < 19 {
+            // 5%: GRE-tunneled TCP.
+            let flow = (i as u32) % TUNNEL_POOL;
+            let outer_a = pool_ipv4(198, flow);
+            let outer_b = pool_ipv4(203, flow);
+            let inner_a = pool_ipv4(10, flow.wrapping_add(1_000_000));
+            let inner_b = pool_ipv4(10, flow.wrapping_add(2_000_000));
+            PacketBuilder::new(ts)
+                .eth(&pool_mac(5, flow), &pool_mac(6, flow))
+                .ipv4(&outer_a, &outer_b)
+                .gre()
+                .ipv4(&inner_a, &inner_b)
+                .tcp(50000, 443, flags::PSH | flags::ACK, i as u32)
+                .payload(32)
+                .build()
+        } else {
+            // 5%: noise — an unclaimed UDP port, proving the gate holds
+            // under load (03.4).
+            let flow = (i as u32) % NOISE_POOL;
+            let a = pool_ipv4(10, flow.wrapping_add(3_000_000));
+            let b = pool_ipv4(10, flow.wrapping_add(4_000_000));
+            PacketBuilder::new(ts)
+                .eth(&pool_mac(7, flow), &pool_mac(8, flow))
+                .ipv4(&a, &b)
+                .udp(51820, 51820)
+                .payload(96)
+                .build()
+        };
+        packets.push((meta.timestamp, bytes));
+    }
+    packets
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -589,5 +701,17 @@ mod tests {
             .build();
         assert_eq!(bytes[23], 47, "outer IP proto is GRE");
         assert_eq!(&bytes[34..38], &[0, 0, 0x08, 0x00], "GRE announces IPv4");
+    }
+
+    #[test]
+    fn mixed_capture_is_deterministic_and_well_formed() {
+        let a = mixed_capture(2000);
+        let b = mixed_capture(2000);
+        assert_eq!(a, b, "reproducible across runs");
+        assert_eq!(a.len(), 2000);
+        assert!(
+            a.iter().all(|(_, bytes)| bytes.len() >= 14),
+            "every packet has at least an eth header"
+        );
     }
 }

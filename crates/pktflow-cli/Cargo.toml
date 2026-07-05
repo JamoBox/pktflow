@@ -20,7 +20,28 @@ serde_json.workspace = true
 time.workspace = true
 
 [dev-dependencies]
+criterion = { version = "0.8.2", features = ["html_reports"] }
 pktflow-testkit.workspace = true
+
+[[bench]]
+name = "dissect_only"
+harness = false
+
+[[bench]]
+name = "dissect_aggregate"
+harness = false
+
+[[bench]]
+name = "throughput_floor"
+harness = false
+
+[[bench]]
+name = "aggregator_memory"
+harness = false
+
+[[bench]]
+name = "snapshot_cost"
+harness = false
 
 [lints]
 workspace = true

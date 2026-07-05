@@ -22,3 +22,14 @@ test:
 fuzz seconds="300":
     cd crates/pktflow-plugins && cargo +nightly fuzz run dissect -- -max_total_time={{seconds}}
     cd crates/pktflow-plugins && cargo +nightly fuzz run dns_name -- -max_total_time={{seconds}}
+
+# 09.4: run all five benches (offline only; no NIC in the loop). Not
+# part of `just ci` — measurements are a scheduled/manual check, not a
+# per-PR gate (see the fuzz recipe above for the same reasoning).
+bench:
+    cargo bench --no-run --workspace
+    cargo bench -p pktflow-cli --bench dissect_only
+    cargo bench -p pktflow-cli --bench dissect_aggregate
+    cargo bench -p pktflow-cli --bench throughput_floor
+    cargo bench -p pktflow-cli --bench aggregator_memory
+    cargo bench -p pktflow-cli --bench snapshot_cost

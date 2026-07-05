@@ -21,6 +21,8 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo fmt --all --check
       - run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+      - name: Benches compile (09.4 — running them is a scheduled job, not a merge gate)
+        run: cargo bench --no-run --workspace
 
   boundaries:
     name: Crate boundary check
