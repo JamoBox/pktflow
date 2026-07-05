@@ -46,4 +46,7 @@ shared flags:
 - [x] Bare-path shorthand works; usage errors exit 2 with clap's message.
 - [x] Summary appears on stderr for all subcommands and never contaminates `--format json`
       stdout (pipe-safety test: `pktflow streams -r f --format json | jq .` succeeds).
-- [ ] Graceful Ctrl-C verified manually on both OSes (checklist item, not CI).
+- [x] Graceful Ctrl-C verified manually on both OSes (checklist item, not CI): first press
+      prints the "stopping — finishing streams" message and exits cleanly with the final
+      summary; verified on Windows against a live interface (`pktflow streams -i
+      "\Device\NPF_Loopback"`).

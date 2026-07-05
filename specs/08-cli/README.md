@@ -10,7 +10,7 @@ rendering belongs in a library crate.
 
 ## Sub-tasks
 
-- [ ] [08.1 Command surface](01-command-surface.md) — clap tree, shared flags, exit codes
+- [x] [08.1 Command surface](01-command-surface.md) — clap tree, shared flags, exit codes
 - [x] [08.2 Streams view](02-streams-view.md) — the default lens (FR-24)
 - [x] [08.3 Drill-down](03-drilldown.md) — one stream in full (FR-25)
 - [x] [08.4 Packets mode](04-packets-mode.md) — debug lens (FR-26)
