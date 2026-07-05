@@ -4,8 +4,14 @@
 mod support;
 
 use serde_json::Value as Json;
+use support::named_fixtures::{
+    bidi_tcp_session, dhcp_dora, dns_over_udp_session, dual_parent_ip, encrypted_udp_no_phantom,
+    idle_eviction, lru_pressure, malformed_zoo, mixed_stop_reasons, qinq_stack, vxlan_nested,
+};
 use support::schema::{load_schema, validate};
-use support::{gre_fixture, pktflow, tmp_pcap, tree_fixture};
+use support::{
+    dual_parent_fixture, gre_fixture, overflow_fixture, pktflow, tmp_pcap, tree_fixture,
+};
 
 fn stdout(out: &std::process::Output) -> String {
     String::from_utf8_lossy(&out.stdout).into_owned()
@@ -91,6 +97,44 @@ fn repeated_offline_runs_produce_byte_identical_json() {
     let doc: Json = serde_json::from_str(&first).expect("valid JSON");
     assert!(!doc["streams"].as_array().expect("array").is_empty());
     let _ = std::fs::remove_file(&path);
+}
+
+#[test]
+fn repeated_offline_runs_are_byte_identical_over_the_full_corpus() {
+    // 09.3's determinism e2e, CLI half: the same property as
+    // repeated_offline_runs_produce_byte_identical_json above, now over
+    // every fixture in the 09.2 corpus, not just one.
+    if windows_skips() {
+        return;
+    }
+    for (name, capture) in [
+        ("tree", tree_fixture()),
+        ("gre", gre_fixture()),
+        ("dual_parent", dual_parent_fixture()),
+        ("overflow", overflow_fixture()),
+        ("bidi_tcp_session", bidi_tcp_session()),
+        ("encrypted_udp_no_phantom", encrypted_udp_no_phantom()),
+        ("vxlan_nested", vxlan_nested()),
+        ("dual_parent_ip", dual_parent_ip()),
+        ("dns_over_udp_session", dns_over_udp_session()),
+        ("dhcp_dora", dhcp_dora()),
+        ("idle_eviction", idle_eviction()),
+        ("lru_pressure", lru_pressure()),
+        ("qinq_stack", qinq_stack()),
+        ("malformed_zoo", malformed_zoo()),
+        ("mixed_stop_reasons", mixed_stop_reasons()),
+    ] {
+        let path = tmp_pcap(&format!("corpus-determinism-{name}"), &capture);
+        let p = path.to_string_lossy();
+        let run = || {
+            let out = pktflow(&["streams", "-r", p.as_ref(), "--format", "json"]);
+            assert_eq!(out.status.code(), Some(0), "{name}: {}", stderr(&out));
+            stdout(&out)
+        };
+        let (first, second) = (run(), run());
+        assert_eq!(first, second, "{name}: two runs must be byte-identical");
+        let _ = std::fs::remove_file(&path);
+    }
 }
 
 #[test]

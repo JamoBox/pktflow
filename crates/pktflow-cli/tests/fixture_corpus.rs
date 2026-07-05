@@ -305,3 +305,29 @@ fn every_named_fixture_dissects_without_panicking() {
         }
     }
 }
+
+#[test]
+fn every_named_fixture_is_deterministic_in_process() {
+    // 09.3's determinism e2e, in-process half: every fixture run twice
+    // through the real engine + aggregator must produce an identical
+    // snapshot (streams, stats, rollups, summary — everything). The
+    // CLI/JSON half is `repeated_offline_runs_produce_byte_identical_json`
+    // (json_output.rs), which already covers the subprocess path.
+    for (name, capture) in [
+        ("bidi_tcp_session", bidi_tcp_session()),
+        ("encrypted_udp_no_phantom", encrypted_udp_no_phantom()),
+        ("gre_nested", gre_fixture()),
+        ("vxlan_nested", vxlan_nested()),
+        ("dual_parent_ip", dual_parent_ip()),
+        ("dns_over_udp_session", dns_over_udp_session()),
+        ("dhcp_dora", dhcp_dora()),
+        ("idle_eviction", idle_eviction()),
+        ("lru_pressure", lru_pressure()),
+        ("qinq_stack", qinq_stack()),
+        ("malformed_zoo", malformed_zoo()),
+        ("mixed_stop_reasons", mixed_stop_reasons()),
+    ] {
+        let (a, b) = (run(&capture), run(&capture));
+        assert_eq!(a, b, "{name}: two in-process runs must be identical");
+    }
+}

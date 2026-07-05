@@ -86,7 +86,7 @@ pub struct DirStats {
 }
 
 /// One conversation node (D10: unique per parent + protocol + key).
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Stream {
     pub id: StreamId,
     pub protocol: ProtocolName,
@@ -185,7 +185,7 @@ pub struct AggregateSummary {
 
 /// Deep, immutable copy for cross-thread reads (D5): the aggregation
 /// thread owns the `Aggregator`; UI threads consume snapshots.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AggregatorSnapshot {
     /// Every live stream, `created_seq` order.
     pub streams: Vec<Stream>,
