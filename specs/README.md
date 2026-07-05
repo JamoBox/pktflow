@@ -30,6 +30,7 @@ flow aggregator.
 | 07 | [Capture I/O](07-capture/README.md) | pcap file replay, live capture, interface listing | 00 |
 | 08 | [CLI](08-cli/README.md) | `pktflow` binary: streams view, drill-down, packet mode, JSON | 05, 06, 07 |
 | 09 | [Validation](09-validation/README.md) | Plugin test kit, fixtures, e2e stream tests, benchmarks | all |
+| 10 | [Developer diagnostics](10-diagnostics/README.md) | `pktflow unknown`: grouped unclassified traffic, near-miss scores, export/scaffold | 03, 04, 05, 08 |
 
 ## Dependency graph
 
@@ -38,10 +39,12 @@ flow aggregator.
               │                  ├──► 05 ──► 06 ──► 08 ──► 09
               └──────────────────┘          ▲
 00 ─────────────────────────► 07 ───────────┘
+              03,04,05,08 ──────────────────► 10
 ```
 
 Recommended build order: 00 → 01 → 02 → 03 → 04 → 05 → 06 → 07 → 08 → 09, with 07 parallel
-to 03–05 and 09's test kit (09.1) started alongside 06.
+to 03–05 and 09's test kit (09.1) started alongside 06. Task 10 is a leaf (like 09) started
+once 08 exists.
 
 ## Definition of done (project)
 
@@ -50,4 +53,5 @@ to 03–05 and 09's test kit (09.1) started alongside 06.
    tunnel nesting, zero phantom streams on the encrypted fixture, and a measured cost gap
    between `Keys` and `Full` extraction depth.
 3. A new protocol plugin can be added end-to-end (dissection + streams in CLI) touching only
-   its own file plus one registration list (PRD §8 "time-to-new-protocol").
+   its own file plus one registration list (PRD §8 "time-to-new-protocol") — and `pktflow
+   unknown` (task 10) can point a developer at the evidence that motivated adding it.

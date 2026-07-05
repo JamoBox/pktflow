@@ -81,3 +81,15 @@ the same IP pair under two different MAC conversations yields two nodes, keeping
 well-formed and tunnel nesting automatic. The layer-listing query (FR-24) lists nodes; an
 optional *merged* view that folds same-key nodes across parents is a query-time concern
 (05.7), not a storage concern.
+
+## D11 — Unknown-diagnostics scope and bounding
+Diagnostic probing (10.1) is **opt-in per parse session** (`ParseOpts.diagnose_unknown`,
+default `false`) and is the one documented exception to the gated-termination rule (03.4):
+it may score every fallback-pool plugin's `probe()` against bytes stopped at by an unclaimed
+route or exhausted heuristics, purely for reporting — it can never select a plugin or emit a
+`LayerRecord`. In the shipped CLI, only `pktflow unknown` (10.3) turns it on; every other
+subcommand pays no cost for the feature's existence. The resulting registry (10.2) is bounded
+independently of stream storage — default caps 500 distinct unknown "shapes" (LRU over
+last-updated) and 5 retained raw samples per shape (overwrite-oldest) — and survives stream
+eviction (05.6), since a stream's bookkeeping lifecycle and the diagnostic value of "we saw
+this" are independent concerns.

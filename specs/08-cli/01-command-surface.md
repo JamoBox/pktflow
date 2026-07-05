@@ -12,6 +12,7 @@ selection and shared flags factored once.
 pktflow streams  (-r FILE | -i IFACE) [--layer PROTO] [--merged] [--watch] [shared]   # default lens (08.2)
 pktflow stream   (-r FILE | -i IFACE) <STREAM-SELECTOR>                    [shared]   # drill-down (08.3)
 pktflow packets  (-r FILE | -i IFACE) [-v...]                              [shared]   # debug lens (08.4)
+pktflow unknown  (-r FILE | -i IFACE) [SELECTOR] [...]                     [shared]   # dev lens (10.3)
 pktflow ifaces                                                                         # FR-23 (07.3)
 
 shared flags:

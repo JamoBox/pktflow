@@ -16,6 +16,9 @@ rendering belongs in a library crate.
 - [ ] [08.4 Packets mode](04-packets-mode.md) — debug lens (FR-26)
 - [ ] [08.5 Rendering & JSON](05-rendering-json.md) — FR-28, D8 schema
 
+A sixth lens, `pktflow unknown`, is specified separately as its own task since it also
+requires new core capability beyond rendering: see [10 Developer diagnostics](../10-diagnostics/README.md).
+
 ## Definition of done
 
 Every FR-22…28 demonstrable from the shipped binary against 09.2 fixtures; `--format json`

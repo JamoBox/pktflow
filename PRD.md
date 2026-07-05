@@ -81,6 +81,9 @@ stream, at every layer of the stack.
 - **Encapsulation/tunneling** as a first-class case (inner stream nested under the tunnel).
 - A **reference plugin set** and a **CLI** for live capture and offline replay that reports
   at the stream level, not just packet by packet.
+- **Developer diagnostics for the unknown.** A dev/debug surface that discovers and groups
+  unclassified traffic — sample bytes, near-miss plugin scores, per-shape counts — so writing
+  the next plugin starts from evidence pulled out of a real capture, not guesswork.
 
 ### Non-goals (for the first build)
 - Full application-layer **content reconstruction** (reassembling and parsing TCP payload
@@ -89,6 +92,10 @@ stream, at every layer of the stack.
 - Deep protocol *analytics* beyond metadata aggregation (e.g. anomaly detection, alerting) —
   the engine should make these buildable on top, but they are out of scope for v1.
 - A GUI. The deliverable UI is a CLI; a library API is the primary surface.
+- **Automatic protocol inference or plugin code generation.** The unknown-diagnostics surface
+  (§6 "Diagnostics") produces evidence — grouped occurrences, sample bytes, near-miss scores —
+  and a scaffold file copied from the plugin template; a human still writes the actual parsing
+  logic. It is a starting point, not a decoder generator.
 
 > Note: earlier framing treated flow/stream tracking as a non-goal. That is now the core of
 > the product. Per-packet dissection is retained as the necessary substrate beneath it.
@@ -217,6 +224,9 @@ nest conversations.
 6. Correctly attribute tunneled inner traffic as a **nested** stream under the tunnel session.
 7. Safely **stop** at the last understood layer on encrypted/unknown payloads — without
    inventing a phantom conversation.
+8. As a plugin author, run a dev command over a capture to see every distinct *shape* of
+   traffic the engine couldn't classify — grouped, counted, with sample bytes and near-miss
+   plugin scores — to decide what to write next and to seed that plugin's first test fixture.
 
 ---
 
@@ -284,6 +294,17 @@ nest conversations.
 - **FR-27** Optional cap on packets processed; report totals, stream counts, and parse
   failures at the end.
 - **FR-28** Human-friendly rendering of well-known fields (MAC, IPv4, IPv6) and typed values.
+
+### Diagnostics
+- **FR-29** An opt-in diagnostic mode that, only when requested, surfaces every point where
+  dissection safely stopped on the unknown (an unclaimed route or no confident heuristic
+  winner) — grouped by shape, sampled, and scored against every registered plugin's probe —
+  without weakening the routing/safety gate (§4.B.4) that produced the stop in the first
+  place. Off by default; zero cost when not requested.
+- **FR-30** A dedicated CLI command exposing that diagnostic data: a capture-wide table of
+  unclassified-traffic groups, per-group drill-down with raw byte samples and near-miss
+  scores, an export of retained samples for fixture curation, and a scaffold command that
+  copies the plugin template into a new starter file for the developer to fill in.
 
 ---
 
