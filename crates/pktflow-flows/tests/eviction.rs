@@ -9,7 +9,9 @@ use pktflow_core::{
     LifecycleSpec, LinkType, PacketDirection, PacketMeta, ParseCtx, ParseError, ParsedLayer,
     ProtocolName, StateName, StopReason, StreamIdentity, Value,
 };
-use pktflow_flows::{Aggregator, AggregatorConfig, CloseReason, EvictionPolicy};
+use pktflow_flows::{
+    Aggregator, AggregatorConfig, CloseReason, EvictionPolicy, UnknownRegistryConfig,
+};
 
 static PAIR_KEY: &[KeyField] = &[KeyField {
     a: "src",
@@ -97,6 +99,7 @@ fn live_aggregator(max_streams: usize) -> (Aggregator, SinkLog) {
                 .push((evicted.stream.protocol, evicted.reason));
         })),
         rollup_series_default_cap: 1024,
+        unknown: UnknownRegistryConfig::default(),
     };
     (Aggregator::new(&engine(), config), log)
 }
@@ -251,6 +254,7 @@ fn offline_finish_retains_closed_streams_for_the_final_report() {
                 .push((evicted.stream.protocol, evicted.reason));
         })),
         rollup_series_default_cap: 1024,
+        unknown: UnknownRegistryConfig::default(),
     };
     let mut agg = Aggregator::new(&engine(), config);
     agg.ingest(&packet(

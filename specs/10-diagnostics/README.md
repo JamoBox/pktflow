@@ -24,7 +24,7 @@ like 09.
 
 - [x] [10.1 Unknown-occurrence diagnostics](01-unknown-diagnostics.md) — opt-in probing pass,
       `UnknownDiagnostics` on a stop (FR-29)
-- [ ] [10.2 Unknown registry & query API](02-unknown-registry.md) — bounded grouping,
+- [x] [10.2 Unknown registry & query API](02-unknown-registry.md) — bounded grouping,
       `Aggregator::unknowns()` (FR-29)
 - [ ] [10.3 `pktflow unknown` command](03-unknown-command.md) — the CLI lens: table,
       drill-down, export, scaffold (FR-30)

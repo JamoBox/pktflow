@@ -11,7 +11,7 @@ use core::fmt;
 /// Well-known spaces are enum variants (fast, `Copy`, exhaustive matching);
 /// unforeseen spaces go through [`RouteId::Custom`] so adding a protocol
 /// never requires editing this enum.
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 pub enum RouteId {
     /// pcap DLT space — entry routing (04.2).
     LinkType(u16),
