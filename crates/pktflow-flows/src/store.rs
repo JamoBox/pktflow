@@ -822,6 +822,7 @@ mod tests {
             layers,
             stop: StopReason::Complete,
             opaque_len,
+            unknown: None,
         }
     }
 

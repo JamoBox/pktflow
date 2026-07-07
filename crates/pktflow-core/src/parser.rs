@@ -6,6 +6,7 @@
 
 use crate::context::ParseCtx;
 use crate::depth::ParseOpts;
+use crate::diagnostics::UnknownDiagnostics;
 use crate::engine::Engine;
 use crate::error::StopReason;
 use crate::packet::{DissectedPacket, LayerRecord, LinkType, PacketMeta};
@@ -38,6 +39,8 @@ pub struct LayerIter<'a> {
     pending: Option<Hint>,
     started: bool,
     stop: Option<StopReason>,
+    /// Populated on a `resolve_next`-driven unknown stop, opt-in (10.1).
+    unknown: Option<UnknownDiagnostics>,
 }
 
 impl Engine {
@@ -70,6 +73,7 @@ impl Engine {
             pending: None,
             started: false,
             stop: None,
+            unknown: None,
         }
     }
 
@@ -147,6 +151,7 @@ impl<'a> LayerIter<'a> {
             opaque_len: self.bytes.len().saturating_sub(self.cursor),
             stop: self.stop.unwrap_or(StopReason::Complete),
             layers: self.records,
+            unknown: self.unknown,
         }
     }
 }
@@ -173,6 +178,10 @@ impl<'a> Iterator for LayerIter<'a> {
 
         let depth = self.opts.effective_depth();
         let ctx = ParseCtx::new(&self.records, depth, &self.meta);
+        // Diagnostics (10.1) only ever apply to a `resolve_next`-driven
+        // stop — captured before `started` flips so entry-tier stops
+        // (04.2) are correctly excluded.
+        let via_resolve_next = self.started;
         let outcome = if self.started {
             let Some(hint) = self.pending.take() else {
                 self.stop = Some(StopReason::PluginError);
@@ -209,6 +218,9 @@ impl<'a> Iterator for LayerIter<'a> {
             }
             StepOutcome::Stop(reason) => {
                 self.stop = Some(reason);
+                if via_resolve_next && self.opts.diagnose_unknown {
+                    self.unknown = self.engine.diagnose_unknown(reason, remaining, &ctx);
+                }
                 None
             }
         }
@@ -226,6 +238,7 @@ mod tests {
     use super::*;
     use crate::bytes::ByteReader;
     use crate::depth::Depth;
+    use crate::diagnostics::UnknownContext;
     use crate::error::ParseError;
     use crate::packet::ProtocolName;
     use crate::plugin::{Confidence, LayerPlugin, ParsedLayer};
@@ -861,5 +874,142 @@ mod tests {
                 assert_eq!(eager.opaque_len, 0, "Complete means nothing left");
             }
         }
+    }
+
+    // ---- 10.1: opt-in unknown diagnostics, end to end through dissect() ----
+
+    /// Probing-only plugin: never claims a route, always declines to
+    /// parse, counts every `probe()` call it receives.
+    struct Prober {
+        name: ProtocolName,
+        confidence: u8,
+        calls: Arc<AtomicUsize>,
+    }
+
+    impl LayerPlugin for Prober {
+        fn name(&self) -> ProtocolName {
+            self.name
+        }
+
+        fn parse(&self, _bytes: &[u8], _ctx: &ParseCtx) -> Result<ParsedLayer, ParseError> {
+            Err(ParseError::Malformed("never routed"))
+        }
+
+        fn has_probe(&self) -> bool {
+            true
+        }
+
+        fn probe(&self, _bytes: &[u8], _ctx: &ParseCtx) -> Option<Confidence> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            Some(Confidence::new(self.confidence))
+        }
+    }
+
+    #[test]
+    fn diagnose_unknown_false_is_free_true_reports_the_unclaimed_gate() {
+        let probe_calls = Arc::new(AtomicUsize::new(0));
+        let engine = Engine::builder()
+            .plugin(Eth)
+            .plugin(Ipv4::new())
+            .plugin(Tcp {
+                parse_calls: Arc::new(AtomicUsize::new(0)),
+            })
+            .plugin(Udp)
+            .plugin(Prober {
+                name: "guess",
+                confidence: 30,
+                calls: Arc::clone(&probe_calls),
+            })
+            .build()
+            .expect("valid registry");
+
+        // eth/ipv4/udp, both ports unclaimed: the 03.4 gate fires on
+        // `Hint::Candidates`, a path `heuristic_fallback` never runs on.
+        let mut pkt = vec![0xAA; 6];
+        pkt.extend_from_slice(&[0xBB; 6]);
+        pkt.extend_from_slice(&[0x08, 0x00]);
+        pkt.extend_from_slice(&ipv4_header(17));
+        pkt.extend_from_slice(&[0x11, 0x51, 0x11, 0x51, 0x00, 0x08, 0x00, 0x00]);
+        pkt.extend_from_slice(&[0xDE, 0xAD, 0xBE, 0xEF]); // "encrypted" payload
+        let m = meta(LinkType::ETHERNET, pkt.len());
+
+        let off = engine.dissect(&pkt, m, ParseOpts::default());
+        assert!(off.unknown.is_none(), "diagnose_unknown defaults to false");
+        assert_eq!(
+            probe_calls.load(Ordering::SeqCst),
+            0,
+            "false path calls probe() zero times — provably free"
+        );
+
+        let opts = ParseOpts {
+            diagnose_unknown: true,
+            ..ParseOpts::default()
+        };
+        let on = engine.dissect(&pkt, m, opts);
+        assert_eq!(on.stop, StopReason::UnclaimedRoute(RouteId::UdpPort(4433)));
+        let diag = on
+            .unknown
+            .expect("UnclaimedRoute is StopClass::UnknownPayload");
+        assert_eq!(
+            diag.context,
+            UnknownContext::UnclaimedRoute {
+                predecessor: "udp",
+                route: RouteId::UdpPort(4433),
+            }
+        );
+        assert_eq!(
+            diag.near_misses.as_slice(),
+            [("guess", Confidence::new(30))],
+            "the sub-MIN_CONFIDENCE score surfaces even though nothing claimed this route"
+        );
+        assert_eq!(probe_calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn no_heuristic_winner_near_misses_match_the_033_scoring_round() {
+        // Two probers under the floor plus one over it that always
+        // declines to parse: `heuristic_fallback` exhausts its candidates
+        // and reaches `UnknownHint` on its own (03.3), independent of 10.1.
+        let engine = Engine::builder()
+            .plugin(Vague)
+            .plugin(Prober {
+                name: "below",
+                confidence: 20,
+                calls: Arc::new(AtomicUsize::new(0)),
+            })
+            .plugin(Prober {
+                name: "flaky",
+                confidence: 90,
+                calls: Arc::new(AtomicUsize::new(0)),
+            })
+            .build()
+            .expect("valid registry");
+
+        let pkt = [0xAAu8, 0x01, 0x02, 0x03];
+        let m = meta(LinkType(200), pkt.len());
+        let opts = ParseOpts {
+            diagnose_unknown: true,
+            ..ParseOpts::default()
+        };
+        let packet = engine.dissect(&pkt, m, opts);
+
+        assert_eq!(packet.stop, StopReason::UnknownHint);
+        let diag = packet
+            .unknown
+            .expect("UnknownHint is StopClass::UnknownPayload");
+        assert_eq!(
+            diag.context,
+            UnknownContext::NoHeuristicWinner {
+                predecessor: "vague"
+            }
+        );
+        assert_eq!(
+            diag.near_misses.as_slice(),
+            [
+                ("flaky", Confidence::new(90)),
+                ("below", Confidence::new(20))
+            ],
+            "identical ranked top-5 whether recomputed here or threaded through 03.3's round"
+        );
     }
 }

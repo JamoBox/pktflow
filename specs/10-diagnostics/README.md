@@ -22,7 +22,7 @@ like 09.
 
 ## Sub-tasks
 
-- [ ] [10.1 Unknown-occurrence diagnostics](01-unknown-diagnostics.md) — opt-in probing pass,
+- [x] [10.1 Unknown-occurrence diagnostics](01-unknown-diagnostics.md) — opt-in probing pass,
       `UnknownDiagnostics` on a stop (FR-29)
 - [ ] [10.2 Unknown registry & query API](02-unknown-registry.md) — bounded grouping,
       `Aggregator::unknowns()` (FR-29)

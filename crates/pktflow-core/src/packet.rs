@@ -6,6 +6,7 @@
 
 use std::time::SystemTime;
 
+use crate::diagnostics::UnknownDiagnostics;
 use crate::error::StopReason;
 use crate::value::FieldMap;
 
@@ -69,6 +70,9 @@ pub struct DissectedPacket {
     pub stop: StopReason,
     /// Payload bytes beyond the last parsed layer (D9 opaque accounting).
     pub opaque_len: usize,
+    /// `Some` iff `ParseOpts::diagnose_unknown` and `stop.class() ==
+    /// StopClass::UnknownPayload` (10.1, D11). Opt-in and off the hot path.
+    pub unknown: Option<UnknownDiagnostics>,
 }
 
 #[cfg(test)]
@@ -112,6 +116,7 @@ mod tests {
             layers,
             stop: StopReason::Complete,
             opaque_len: 0,
+            unknown: None,
         };
 
         let names: Vec<_> = packet.layers.iter().map(|l| l.protocol).collect();
