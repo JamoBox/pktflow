@@ -7,6 +7,9 @@ flow aggregator.
 
 ## How this tree works
 
+Governed by [CONSTITUTION.md](CONSTITUTION.md): specs precede implementation, and every
+merged behavior change is reflected back into its spec in the same PR. The summary:
+
 - Each numbered folder is a **task**. Its `README.md` states the goal, dependencies, the
   sub-task checklist, and the task-level definition of done.
 - Each numbered file inside is a **sub-task spec**: goal, specification, acceptance criteria.
