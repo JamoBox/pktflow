@@ -90,7 +90,8 @@ docker run --rm pktflow-test
 
 Built task-by-task against the specs in [`specs/`](specs/); each sub-task's acceptance
 criteria are tracked as checkboxes in its own file. See `specs/README.md`/`specs/*/README.md`
-for the current breakdown.
+for the current breakdown, and [`specs/CONSTITUTION.md`](specs/CONSTITUTION.md) for the rules
+governing how specs and code stay in sync.
 
 ## License
 
