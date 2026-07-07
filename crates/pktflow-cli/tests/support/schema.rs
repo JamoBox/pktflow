@@ -13,7 +13,18 @@ use std::path::Path;
 use serde_json::Value as Json;
 
 pub fn load_schema() -> Json {
-    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../schema/streams-v1.json");
+    load_schema_file("streams-v1.json")
+}
+
+/// 10.3's table/drill-down/manifest schema.
+pub fn load_unknown_schema() -> Json {
+    load_schema_file("unknown-v1.json")
+}
+
+fn load_schema_file(name: &str) -> Json {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../schema")
+        .join(name);
     let text =
         std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
     serde_json::from_str(&text).expect("schema file is valid JSON")
@@ -180,6 +191,13 @@ mod tests {
     fn schema_loads_and_accepts_a_minimal_valid_document() {
         let schema = load_schema();
         let doc = json!({"pktflow": 1, "mode": "offline", "source": "f.pcap"});
+        validate(&schema, "", &doc).expect("minimal document is valid");
+    }
+
+    #[test]
+    fn unknown_schema_loads_and_accepts_a_minimal_valid_document() {
+        let schema = load_unknown_schema();
+        let doc = json!({"pktflow": 1, "groups": []});
         validate(&schema, "", &doc).expect("minimal document is valid");
     }
 

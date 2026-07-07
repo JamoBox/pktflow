@@ -129,6 +129,7 @@ fn resolve_opts(
     shared: &SharedArgs,
     engine: &pktflow_core::Engine,
     aggregate: bool,
+    diagnose_unknown: bool,
 ) -> Result<ParseOpts, CliError> {
     let entry = match &shared.entry {
         Some(name) => Some(
@@ -145,6 +146,7 @@ fn resolve_opts(
         depth: shared.depth.to_depth(),
         aggregation: aggregate,
         entry,
+        diagnose_unknown,
         ..ParseOpts::default()
     })
 }
@@ -192,7 +194,7 @@ pub fn run_packets(
     mut on_packet: impl FnMut(u64, &PacketEvent),
 ) -> Result<RunOutcome, CliError> {
     let engine = Arc::new(pktflow_plugins::default_engine());
-    let opts = resolve_opts(shared, &engine, aggregate)?;
+    let opts = resolve_opts(shared, &engine, aggregate, false)?;
     let (mut src, mode, source_name) = open_source(shared, stop)?;
     let limit = shared.count;
 
@@ -273,7 +275,14 @@ pub fn run(
     aggregate: bool,
     on_packet: impl FnMut(u64, &DissectedPacket),
 ) -> Result<RunOutcome, CliError> {
-    run_observed(shared, stop, aggregate, on_packet, |_| {})
+    run_observed(shared, stop, aggregate, false, on_packet, |_| {})
+}
+
+/// The `unknown` subcommand's pipeline (10.3): the *only* place
+/// `ParseOpts::diagnose_unknown` is set — every other lens leaves it off
+/// so the probing cost this enables stays scoped to this one command.
+pub fn run_unknown(shared: &SharedArgs, stop: &StopFlags) -> Result<RunOutcome, CliError> {
+    run_observed(shared, stop, true, true, |_, _| {}, |_| {})
 }
 
 /// [`run`] plus an after-ingest observer: the default live view (08.2)
@@ -283,11 +292,12 @@ pub fn run_observed(
     shared: &SharedArgs,
     stop: &StopFlags,
     aggregate: bool,
+    diagnose_unknown: bool,
     mut on_packet: impl FnMut(u64, &DissectedPacket),
     mut on_ingested: impl FnMut(&Aggregator),
 ) -> Result<RunOutcome, CliError> {
     let engine = Arc::new(pktflow_plugins::default_engine());
-    let opts = resolve_opts(shared, &engine, aggregate)?;
+    let opts = resolve_opts(shared, &engine, aggregate, diagnose_unknown)?;
     let (mut src, mode, source_name) = open_source(shared, stop)?;
 
     let started = Instant::now();
@@ -343,7 +353,7 @@ pub fn run_live(
     on_evicted: impl FnMut(EvictedStream) + Send + 'static,
 ) -> Result<RunOutcome, CliError> {
     let engine = Arc::new(pktflow_plugins::default_engine());
-    let opts = resolve_opts(shared, &engine, true)?;
+    let opts = resolve_opts(shared, &engine, true, false)?;
     let (mut src, mode, source_name) = open_source(shared, stop)?;
 
     let started = Instant::now();

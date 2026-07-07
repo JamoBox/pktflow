@@ -199,6 +199,8 @@ pub struct AggregatorSnapshot {
     pub roots: Vec<StreamId>,
     pub summary: AggregateSummary,
     pub clock: SystemTime,
+    /// 10.2's registry, [`Aggregator::unknowns`] order (`count` desc).
+    pub unknowns: Vec<UnknownGroup>,
 }
 
 struct Slot {
@@ -728,6 +730,7 @@ impl Aggregator {
             roots: self.roots.clone(),
             summary: self.summary(),
             clock: self.clock,
+            unknowns: self.unknowns().into_iter().cloned().collect(),
         }
     }
 

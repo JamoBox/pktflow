@@ -8,6 +8,7 @@ Commands:
   stream   Everything about one stream
   packets  Per-packet debug lens
   ifaces   List capturable interfaces
+  unknown  Dev/debug lens over unclassified traffic (10)
   help     Print this message or the help of the given subcommand(s)
 
 Options:

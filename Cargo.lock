@@ -643,6 +643,7 @@ dependencies = [
  "pktflow-plugins",
  "pktflow-testkit",
  "serde_json",
+ "smallvec",
  "thiserror",
  "time",
 ]

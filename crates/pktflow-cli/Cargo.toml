@@ -23,6 +23,7 @@ time.workspace = true
 [dev-dependencies]
 criterion = { version = "0.8.2", features = ["html_reports"] }
 pktflow-testkit.workspace = true
+smallvec.workspace = true
 
 [[bench]]
 name = "dissect_only"
@@ -42,6 +43,10 @@ harness = false
 
 [[bench]]
 name = "snapshot_cost"
+harness = false
+
+[[bench]]
+name = "unknown_diagnostics"
 harness = false
 
 [lints]

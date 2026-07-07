@@ -63,19 +63,19 @@ pktflow unknown (-r FILE | -i IFACE) '#<n>' --scaffold NAME                     
   those) — a deliberate JSON/binary split, documented as such, not an oversight.
 
 ## Acceptance criteria
-- [ ] Table golden-tested against a fixture with two unknown groups (one `UnclaimedRoute`, one
+- [x] Table golden-tested against a fixture with two unknown groups (one `UnclaimedRoute`, one
       `NoHeuristicWinner` with near-misses) and separately against a clean fixture (zero
       groups ⇒ the explicit "none observed" line).
-- [ ] Drill-down selector resolves; hex dump matches 08.5's established shape on a sample
+- [x] Drill-down selector resolves; hex dump matches 08.5's established shape on a sample
       fixture; endpoint-overflow marker verified on a cap-exceeding fixture.
-- [ ] `--export` round-trip: exported `.bin` files are byte-identical to the retained samples;
+- [x] `--export` round-trip: exported `.bin` files are byte-identical to the retained samples;
       `manifest.json` validated against a checked-in JSON Schema file in CI (mirrors 08.5's
       schema-in-CI discipline).
-- [ ] `--scaffold`: the generated file compiles standalone (`cargo check -p pktflow-plugins`)
+- [x] `--scaffold`: the generated file compiles standalone (`cargo check -p pktflow-plugins`)
       and passes the 09.1 conformance kit's structural checks (name/claims present) even
       though `parse()` is still the template's placeholder body — the metric is "a human fills
       in real parsing next," not full auto-generation.
-- [ ] `--scaffold` refuses to clobber an existing file at the target path (exit 2), verified by
+- [x] `--scaffold` refuses to clobber an existing file at the target path (exit 2), verified by
       a test that pre-creates it.
-- [ ] `--format json` on the table view validated against a schema file; sample bytes
+- [x] `--format json` on the table view validated against a schema file; sample bytes
       deliberately absent from that schema (covered by the export test above instead).

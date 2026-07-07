@@ -26,7 +26,7 @@ like 09.
       `UnknownDiagnostics` on a stop (FR-29)
 - [x] [10.2 Unknown registry & query API](02-unknown-registry.md) — bounded grouping,
       `Aggregator::unknowns()` (FR-29)
-- [ ] [10.3 `pktflow unknown` command](03-unknown-command.md) — the CLI lens: table,
+- [x] [10.3 `pktflow unknown` command](03-unknown-command.md) — the CLI lens: table,
       drill-down, export, scaffold (FR-30)
 
 ## Definition of done

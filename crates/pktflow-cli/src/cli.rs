@@ -31,11 +31,13 @@ pub enum Command {
     Packets(PacketsArgs),
     /// List capturable interfaces
     Ifaces,
+    /// Dev/debug lens over unclassified traffic (10)
+    Unknown(UnknownArgs),
 }
 
 /// Names accepted as a subcommand, used by the bare-path shorthand to
 /// decide whether the first argument is a path.
-pub const SUBCOMMANDS: [&str; 4] = ["streams", "stream", "packets", "ifaces"];
+pub const SUBCOMMANDS: [&str; 5] = ["streams", "stream", "packets", "ifaces", "unknown"];
 
 #[derive(Args, Debug)]
 pub struct StreamsArgs {
@@ -82,6 +84,48 @@ pub struct PacketsArgs {
     /// Skip stream aggregation (maximum-throughput triage)
     #[arg(long)]
     pub no_streams: bool,
+}
+
+/// The dev/debug lens over the unknown registry (10.3).
+///
+/// No selector: the triage table. `'#n'`: drill-down, optionally paired
+/// with `--export` (dump retained samples) or `--scaffold` (starter
+/// plugin file) — both require a selector, since they act on one group.
+#[derive(Args, Debug)]
+pub struct UnknownArgs {
+    #[command(flatten)]
+    pub shared: SharedArgs,
+    /// `#n` from a prior table view; omit for the table itself
+    #[arg(value_name = "SELECTOR")]
+    pub selector: Option<String>,
+    /// Table: cap the number of rows shown
+    #[arg(long, value_name = "N", default_value_t = 20)]
+    pub top: usize,
+    /// Table: hide groups seen fewer than N times
+    #[arg(long, value_name = "N", default_value_t = 1)]
+    pub min_count: u64,
+    /// Drill-down: how many retained samples to hex-dump
+    #[arg(long, value_name = "N", default_value_t = 3)]
+    pub samples: usize,
+    /// Drill-down: lift the display cap on shown samples (still bounded
+    /// by what the registry actually retained)
+    #[arg(long, requires = "selector")]
+    pub full_samples: bool,
+    /// Drill-down: write every retained sample plus a manifest.json to DIR
+    #[arg(
+        long,
+        value_name = "DIR",
+        requires = "selector",
+        conflicts_with = "scaffold"
+    )]
+    pub export: Option<PathBuf>,
+    /// Drill-down: scaffold a starter plugin file named NAME from this group
+    #[arg(long, value_name = "NAME", requires = "selector")]
+    pub scaffold: Option<String>,
+    /// Testing hook: scaffold into this directory instead of the real
+    /// `pktflow-plugins` crate
+    #[arg(long, hide = true)]
+    pub plugins_dir: Option<PathBuf>,
 }
 
 /// Exactly one input: a capture file or a live interface.

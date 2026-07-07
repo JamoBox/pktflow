@@ -74,9 +74,6 @@ pub struct UnknownGroup {
     /// Bounded ring of full per-occurrence sample byte arrays,
     /// overwrite-oldest — 05.4's `Series` pattern, reused not reinvented.
     pub samples: VecDeque<Box<[u8]>>,
-    /// Insertion order, the deterministic LRU tiebreak (mirrors `Stream`'s
-    /// `created_seq`) — not part of the public contract, just ordering glue.
-    seq: u64,
 }
 
 /// D11's bounding knobs.
@@ -101,6 +98,10 @@ impl Default for UnknownRegistryConfig {
 #[derive(Debug, Default)]
 pub(crate) struct UnknownRegistry {
     groups: DetHashMap<UnknownKey, UnknownGroup>,
+    /// Insertion order per key, the deterministic LRU tiebreak (mirrors
+    /// `Stream`'s `created_seq`) — kept out of the public `UnknownGroup` so
+    /// downstream crates can construct one freely for fixtures/tests.
+    seqs: DetHashMap<UnknownKey, u64>,
     next_seq: u64,
 }
 
@@ -120,8 +121,10 @@ impl UnknownRegistry {
         config: UnknownRegistryConfig,
     ) {
         let key = UnknownKey::from(&diag.context);
-        let seq = self.next_seq;
-        self.next_seq += 1;
+        if !self.seqs.contains_key(&key) {
+            self.seqs.insert(key.clone(), self.next_seq);
+            self.next_seq += 1;
+        }
 
         let group = self
             .groups
@@ -138,7 +141,6 @@ impl UnknownRegistry {
                 endpoints_overflow: false,
                 near_misses: SmallVec::new(),
                 samples: VecDeque::new(),
-                seq,
             });
 
         group.count += 1;
@@ -173,18 +175,20 @@ impl UnknownRegistry {
     }
 
     /// While over the cap, evicts the group least-recently updated (packet
-    /// time), `seq` breaking ties — same LRU discipline as 05.6's stream
-    /// cap, applied here independently.
+    /// time), insertion order breaking ties — same LRU discipline as
+    /// 05.6's stream cap, applied here independently.
     fn enforce_max_groups(&mut self, max_groups: usize) {
         while self.groups.len() > max_groups {
+            let seqs = &self.seqs;
             let coldest = self
                 .groups
                 .values()
-                .min_by_key(|g| (g.last_seen, g.seq))
+                .min_by_key(|g| (g.last_seen, seqs.get(&g.key).copied().unwrap_or(0)))
                 .map(|g| g.key.clone());
             match coldest {
                 Some(k) => {
                     self.groups.remove(&k);
+                    self.seqs.remove(&k);
                 }
                 None => break,
             }

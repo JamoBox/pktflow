@@ -187,6 +187,20 @@ pub fn time_of_day(t: SystemTime) -> String {
     )
 }
 
+/// Offset-prefixed hex dump lines (10.3): 16 bytes/line, 4-hex-digit
+/// offset, lowercase byte pairs — the shared shape every hex-dumping view
+/// builds on.
+pub fn hex_dump_lines(bytes: &[u8]) -> Vec<String> {
+    bytes
+        .chunks(16)
+        .enumerate()
+        .map(|(i, chunk)| {
+            let hex: Vec<String> = chunk.iter().map(|b| format!("{b:02x}")).collect();
+            format!("{:04x}  {}", i * 16, hex.join(" "))
+        })
+        .collect()
+}
+
 /// Decimal with thousands separators for tables.
 pub fn thousands(n: u64) -> String {
     let digits = n.to_string();
@@ -203,6 +217,18 @@ pub fn thousands(n: u64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn hex_dump_lines_are_offset_prefixed_sixteen_per_line() {
+        let bytes: Vec<u8> = (0..20u8).collect();
+        let lines = hex_dump_lines(&bytes);
+        assert_eq!(lines.len(), 2);
+        assert_eq!(
+            lines[0],
+            "0000  00 01 02 03 04 05 06 07 08 09 0a 0b 0c 0d 0e 0f"
+        );
+        assert_eq!(lines[1], "0010  10 11 12 13");
+    }
 
     #[test]
     fn thousands_grouping() {
