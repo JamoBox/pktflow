@@ -37,6 +37,13 @@ Invariants:
    (PRD §4.B.4) — must be encoded as fixture test `encrypted_udp_no_phantom`: UDP layer with
    an unclaimed port route ⇒ dissection ends at UDP, exactly one UDP stream, zero TCP streams.
 
+> **Diagnostics exception (10.1, D11):** an opt-in, off-by-default diagnostic mode may score
+> fallback-pool plugins against bytes at any `StopClass::Unknown` stop — including
+> `UnclaimedRoute`, where this table forbids fallback from *routing* — purely to report
+> near-miss confidence to a developer. This never calls `parse()` and never produces a
+> `LayerRecord`; the no-phantom-streams invariant above is unaffected. See 10.1 for the exact
+> boundary.
+
 ## Acceptance criteria
 - [x] Decision table implemented in one place (single `resolve_next` function — not spread
       across the parser) and unit-tested row by row.
