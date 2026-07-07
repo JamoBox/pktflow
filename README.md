@@ -24,6 +24,10 @@ picture, not just decoding bytes. See [`PRD.md`](PRD.md) for the full product ra
   cost of full field extraction, or ask for everything (`--depth full`).
 - **No phantom streams.** Unclaimed/encrypted payloads land as opaque bytes on their
   innermost recognized parent, never a fabricated child stream.
+- **Unknown traffic is a first-class lens, not a grep exercise.** `pktflow unknown` groups
+  everything no plugin claimed or no heuristic was confident about, ranked with near-miss
+  scores and real sample bytes — with `--export` and `--scaffold` as the on-ramp to writing
+  the plugin that's missing. See [`docs/unknown-diagnostics.md`](docs/unknown-diagnostics.md).
 - 13 reference protocol plugins today: Ethernet, 802.1Q VLAN, ARP, IPv4, IPv6, ICMPv4, IGMP,
   TCP, UDP, GRE, VXLAN, DNS, DHCP, NTP.
 
@@ -35,6 +39,7 @@ cargo build --release
 ./target/release/pktflow streams -r capture.pcap --batch --format json  # one JSON document, for scripting
 ./target/release/pktflow stream -r capture.pcap '#3'      # drill into one stream (by id from a streams view)
 ./target/release/pktflow packets -r capture.pcap -v       # per-packet debug lens
+./target/release/pktflow unknown -r capture.pcap          # triage unclaimed/unrecognized traffic
 ./target/release/pktflow ifaces                           # list capturable interfaces
 sudo ./target/release/pktflow streams -i eth0             # live, full-screen view (the default)
 ```
