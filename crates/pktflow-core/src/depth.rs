@@ -46,6 +46,10 @@ pub struct ParseOpts {
     /// type is a configuration gap the user should see, not silently
     /// guess around.
     pub allow_entry_heuristics: bool,
+    /// Opt-in unknown-occurrence diagnostics (10.1, D11). Default
+    /// **false** — off the hot path; every caller but `pktflow unknown`
+    /// (10.3) leaves this unset so the feature's existence costs nothing.
+    pub diagnose_unknown: bool,
 }
 
 impl Default for ParseOpts {
@@ -56,6 +60,7 @@ impl Default for ParseOpts {
             max_layers: 32,
             entry: None,
             allow_entry_heuristics: false,
+            diagnose_unknown: false,
         }
     }
 }
@@ -130,5 +135,6 @@ mod tests {
         assert_eq!(opts.max_layers, 32);
         assert_eq!(opts.entry, None);
         assert!(!opts.allow_entry_heuristics);
+        assert!(!opts.diagnose_unknown);
     }
 }

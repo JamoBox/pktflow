@@ -16,6 +16,9 @@ use pktflow_core::{
 
 use crate::key::flow_key;
 use crate::rollup::RollupSet;
+use crate::unknown::{
+    EndpointKey, UnknownGroup, UnknownKey, UnknownRegistry, UnknownRegistryConfig,
+};
 
 /// Deterministic hasher (PRD §7): correctness never depends on iteration
 /// order (05.7 sorts explicitly), but debugging and snapshots benefit from
@@ -55,6 +58,8 @@ pub struct AggregatorConfig {
     pub sink: Option<Box<dyn FnMut(EvictedStream) + Send>>,
     /// D4 override point for `Series { cap: 0 }`-defaulted rollups.
     pub rollup_series_default_cap: usize,
+    /// 10.2/D11 bounding knobs for the unknown-occurrence registry.
+    pub unknown: UnknownRegistryConfig,
 }
 
 impl Default for AggregatorConfig {
@@ -63,6 +68,7 @@ impl Default for AggregatorConfig {
             eviction: EvictionPolicy::None,
             sink: None,
             rollup_series_default_cap: 1024,
+            unknown: UnknownRegistryConfig::default(),
         }
     }
 }
@@ -193,6 +199,8 @@ pub struct AggregatorSnapshot {
     pub roots: Vec<StreamId>,
     pub summary: AggregateSummary,
     pub clock: SystemTime,
+    /// 10.2's registry, [`Aggregator::unknowns`] order (`count` desc).
+    pub unknowns: Vec<UnknownGroup>,
 }
 
 struct Slot {
@@ -235,6 +243,8 @@ pub struct Aggregator {
     /// Recyclable slot indices (generation already bumped at evict).
     free: Vec<u32>,
     live_count: usize,
+    /// 10.2: capture-wide, independent of stream storage/eviction (D11).
+    unknowns: UnknownRegistry,
 }
 
 impl Aggregator {
@@ -253,6 +263,7 @@ impl Aggregator {
             expiry: BinaryHeap::new(),
             free: Vec::new(),
             live_count: 0,
+            unknowns: UnknownRegistry::new(),
         }
     }
 
@@ -272,6 +283,11 @@ impl Aggregator {
         let engine = Arc::clone(&self.engine);
 
         let mut parent: Option<StreamId> = None;
+        // 10.2: the innermost identity-bearing layer's (protocol, key) at
+        // the point dissection stopped — best-effort context for an
+        // unknown occurrence, reusing the key already computed here rather
+        // than re-deriving one.
+        let mut last_endpoint: Option<EndpointKey> = None;
         for layer in &pkt.layers {
             // A layer without a plugin or identity forms no stream and is
             // skipped in nesting (02.4) — the parent chain stays intact.
@@ -291,6 +307,10 @@ impl Aggregator {
                 }
             };
 
+            last_endpoint = Some(EndpointKey {
+                protocol: layer.protocol,
+                key: key.clone(),
+            });
             let id = self.get_or_insert(parent, key, identity, layer, dir, ts);
             let mut became_eligible = false;
             if let Some(stream) = self.get_mut(id) {
@@ -333,6 +353,13 @@ impl Aggregator {
             if let Some(stream) = self.get_mut(innermost) {
                 stream.opaque_bytes += pkt.opaque_len as u64;
             }
+        }
+
+        // 10.2: additive to this same ingest, not a separate pipeline stage.
+        if let Some(diag) = &pkt.unknown {
+            let bytes = u32::try_from(pkt.opaque_len).unwrap_or(u32::MAX);
+            self.unknowns
+                .ingest(diag, bytes, ts, last_endpoint, self.config.unknown);
         }
 
         // Hard LRU cap (D2): evict least-recently-updated leaves.
@@ -703,6 +730,7 @@ impl Aggregator {
             roots: self.roots.clone(),
             summary: self.summary(),
             clock: self.clock,
+            unknowns: self.unknowns().into_iter().cloned().collect(),
         }
     }
 
@@ -714,6 +742,17 @@ impl Aggregator {
     /// Current packet-time clock.
     pub fn clock(&self) -> SystemTime {
         self.clock
+    }
+
+    /// The unknown-occurrence registry (10.2), sorted by `count` descending
+    /// with `UnknownKey` as a deterministic tiebreak.
+    pub fn unknowns(&self) -> Vec<&UnknownGroup> {
+        self.unknowns.groups()
+    }
+
+    /// One unknown group by its shape key (10.2).
+    pub fn unknown_group(&self, key: &UnknownKey) -> Option<&UnknownGroup> {
+        self.unknowns.group(key)
     }
 }
 
@@ -822,6 +861,7 @@ mod tests {
             layers,
             stop: StopReason::Complete,
             opaque_len,
+            unknown: None,
         }
     }
 

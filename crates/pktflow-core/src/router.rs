@@ -6,6 +6,13 @@
 //! Heuristics never run on a named-but-unclaimed route, because a
 //! misidentified layer fabricates a bogus conversation (no phantom
 //! streams, FR-15).
+//!
+//! **One documented exception (10.1, D11):** an opt-in diagnostic pass may
+//! score the fallback pool's `probe()` against bytes at *any*
+//! `StopClass::UnknownPayload` stop, including an unclaimed route this
+//! table forbids from routing — purely to report near-miss confidence to a
+//! developer. It never calls anything that yields a `LayerRecord`, so this
+//! invariant is unaffected; see [`crate::diagnostics::UnknownContext`].
 
 use crate::bytes::Truncated;
 use crate::context::ParseCtx;
@@ -146,6 +153,35 @@ impl Engine {
         }
     }
 
+    /// Scores every fallback-pool plugin's `probe()` against `bytes`, prior
+    /// boost applied, **unfiltered by `MIN_CONFIDENCE`**. Shared by
+    /// [`Engine::heuristic_fallback`] (which then filters to the routing
+    /// floor) and 10.1's diagnostic near-miss ranking (which deliberately
+    /// doesn't) — one scoring pass, so the two can never disagree on a
+    /// plugin's score for the same bytes.
+    pub(crate) fn score_fallback_pool(
+        &self,
+        bytes: &[u8],
+        ctx: &ParseCtx,
+    ) -> Vec<(u8, &dyn LayerPlugin)> {
+        let prev = ctx.prev().map(|l| l.protocol);
+
+        // Pool order is registration order (03.2) — position doubles as
+        // the deterministic tie-break.
+        let mut scored: Vec<(u8, &dyn LayerPlugin)> = Vec::new();
+        for p in self.fallback_pool() {
+            let Some(confidence) = p.probe(bytes, ctx) else {
+                continue;
+            };
+            let mut score = confidence.get();
+            if prev.is_some_and(|prev| p.expected_predecessors().contains(&prev)) {
+                score = score.saturating_add(PRIOR_BOOST).min(100);
+            }
+            scored.push((score, p));
+        }
+        scored
+    }
+
     /// Heuristic fallback (03.3): probing plugins score the bytes, the
     /// predecessor prior weighs in, the best scorer that also *parses*
     /// wins. Deterministic: ties break by registration order, never map
@@ -155,25 +191,13 @@ impl Engine {
         bytes: &[u8],
         ctx: &ParseCtx,
     ) -> Option<(ProtocolName, ParsedLayer)> {
-        let prev = ctx.prev().map(|l| l.protocol);
-
-        // Pool order is registration order (03.2) — position doubles as
-        // the deterministic tie-break.
-        let mut candidates: Vec<(u8, &dyn LayerPlugin)> = Vec::new();
-        for p in self.fallback_pool() {
-            let Some(confidence) = p.probe(bytes, ctx) else {
-                continue;
-            };
-            let mut score = confidence.get();
-            if prev.is_some_and(|prev| p.expected_predecessors().contains(&prev)) {
-                score = score.saturating_add(PRIOR_BOOST).min(100);
-            }
-            // Below the floor a guess is worse than stopping — and a
-            // next-best below the floor after a failed winner is no better.
-            if score >= MIN_CONFIDENCE {
-                candidates.push((score, p));
-            }
-        }
+        // Below the floor a guess is worse than stopping — and a next-best
+        // below the floor after a failed winner is no better.
+        let mut candidates: Vec<(u8, &dyn LayerPlugin)> = self
+            .score_fallback_pool(bytes, ctx)
+            .into_iter()
+            .filter(|&(score, _)| score >= MIN_CONFIDENCE)
+            .collect();
 
         // Winner = max score, earliest registration on ties. A winner
         // whose parse fails is dropped and never re-offered these bytes

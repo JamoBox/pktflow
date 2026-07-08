@@ -115,6 +115,7 @@ fn packet(layers: Vec<LayerRecord>, ms: u64) -> DissectedPacket {
         layers,
         stop: StopReason::Complete,
         opaque_len: 0,
+        unknown: None,
     }
 }
 

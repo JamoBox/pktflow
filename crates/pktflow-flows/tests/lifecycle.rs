@@ -106,6 +106,7 @@ fn pkt(protocol: ProtocolName, client_to_server: bool, flag: u64, ms: u64) -> Di
         }],
         stop: StopReason::Complete,
         opaque_len: 0,
+        unknown: None,
     }
 }
 

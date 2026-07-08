@@ -3,6 +3,12 @@
 The whole job is one new file plus one registration line. Budget: well
 under an hour (PRD §8 — the template exists to keep it that way).
 
+**Not sure what to add yet?** Run `pktflow unknown -r capture.pcap` against real traffic
+first — it groups everything no plugin claimed or no heuristic was confident about, ranked
+with near-miss scores and real sample bytes. `pktflow unknown '#n' --scaffold NAME` does step
+1 below for you, pre-filled with the group's route — see
+[`docs/unknown-diagnostics.md`](unknown-diagnostics.md).
+
 1. **Copy the template.** `cp crates/pktflow-plugins/src/template.rs
    crates/pktflow-plugins/src/<your_protocol>.rs`, rename `Template` and
    the `name()` string (lowercase snake_case, unique).

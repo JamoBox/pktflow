@@ -77,18 +77,18 @@ Mechanics:
   story (PRD §7, 09.4) is untouched by this feature merely existing in the codebase.
 
 ## Acceptance criteria
-- [ ] `diagnose_unknown: false` (default): `DissectedPacket.unknown` is always `None`, and an
+- [x] `diagnose_unknown: false` (default): `DissectedPacket.unknown` is always `None`, and an
       instrumented test plugin proves zero extra `probe()` calls beyond what a clean
       `UnknownHint` resolution already makes (03.3) — the false path is provably free.
-- [ ] `diagnose_unknown: true` on an `UnclaimedRoute` stop: near-misses populate from the full
+- [x] `diagnose_unknown: true` on an `UnclaimedRoute` stop: near-misses populate from the full
       fallback pool even though no route/candidate ever named those plugins. Fixture: an
       unclaimed UDP port with one probing plugin scoring 30 — the sub-`MIN_CONFIDENCE` score
       surfaces in `near_misses`.
-- [ ] Property test: for `NoHeuristicWinner` stops, this spec's near-miss list and 03.3's
+- [x] Property test: for `NoHeuristicWinner` stops, this spec's near-miss list and 03.3's
       actual scoring round produce an identical ranked top-5 regardless of implementation
       path (recompute vs. thread-through).
-- [ ] `sample` never exceeds `SAMPLE_CAP` and never panics when fewer bytes remain than the
+- [x] `sample` never exceeds `SAMPLE_CAP` and never panics when fewer bytes remain than the
       cap (edge case: 3-byte remainder at stop).
-- [ ] The gate exception is documented on `UnknownContext`'s doc comment and cross-referenced
+- [x] The gate exception is documented on `UnknownContext`'s doc comment and cross-referenced
       from 03.4 so a future reader of the gate spec finds this immediately (not a surprise
       discovered by reading two files independently).

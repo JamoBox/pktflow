@@ -78,14 +78,14 @@ Mechanics:
   05.7).
 
 ## Acceptance criteria
-- [ ] Ingest correctly updates an existing group / creates a new one; count, byte min/max/
+- [x] Ingest correctly updates an existing group / creates a new one; count, byte min/max/
       total, first/last seen all correct across a multi-packet synthetic fixture with two
       distinct unknown shapes interleaved.
-- [ ] `max_groups` cap test: inserting `max_groups + k` distinct unknown shapes evicts exactly
+- [x] `max_groups` cap test: inserting `max_groups + k` distinct unknown shapes evicts exactly
       `k` coldest groups (samples gone with them).
-- [ ] `samples_per_group` ring test: `cap + k` samples into one group keeps the `k` most
+- [x] `samples_per_group` ring test: `cap + k` samples into one group keeps the `k` most
       recent, and retained sample bytes are byte-identical to the source packets.
-- [ ] Determinism test: two identical runs produce identical `unknowns()` ordering and
+- [x] Determinism test: two identical runs produce identical `unknowns()` ordering and
       identical group contents (05.7-style test, reused pattern).
-- [ ] Stream-eviction interaction test: an unknown attributed to a stream's context survives
+- [x] Stream-eviction interaction test: an unknown attributed to a stream's context survives
       in the registry after 05.6 evicts that stream.

@@ -76,6 +76,7 @@ fn packet(stream: u64, ms: u64) -> DissectedPacket {
         }],
         stop: StopReason::Complete,
         opaque_len: 0,
+        unknown: None,
     }
 }
 

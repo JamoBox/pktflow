@@ -5,7 +5,9 @@ pub mod cli;
 pub mod error;
 pub mod render;
 pub mod run;
+pub mod scaffold;
 pub mod summary;
+pub mod unknown_view;
 pub mod views;
 
 use std::io::Write;
@@ -117,6 +119,66 @@ pub fn dispatch(cli: Cli, stop: &StopFlags) -> Result<(), CliError> {
             print!("{}", views::ifaces_text(&interfaces));
             Ok(())
         }
+        Command::Unknown(args) => {
+            // 10.3: the only command that turns diagnose_unknown on.
+            let outcome = run::run_unknown(&args.shared, stop)?;
+            let Some(snapshot) = &outcome.snapshot else {
+                return Err(CliError::Internal("unknown run without snapshot".into()));
+            };
+            match &args.selector {
+                None => match args.shared.format {
+                    Format::Text => {
+                        print!(
+                            "{}",
+                            unknown_view::table_text(snapshot, args.top, args.min_count)
+                        )
+                    }
+                    Format::Json => print_json(&unknown_view::table_json(
+                        snapshot,
+                        args.top,
+                        args.min_count,
+                    ))?,
+                },
+                Some(selector) => {
+                    let group =
+                        unknown_view::resolve_group(snapshot, selector, args.top, args.min_count)?;
+                    let n: usize = selector
+                        .strip_prefix('#')
+                        .and_then(|s| s.parse().ok())
+                        .unwrap_or(0);
+                    if let Some(dir) = &args.export {
+                        let path = unknown_view::export_group(group, dir, &outcome.source_name)?;
+                        println!("exported {} to {}", n, path.display());
+                    } else if let Some(name) = &args.scaffold {
+                        let dir = args.plugins_dir.clone().unwrap_or_else(|| {
+                            std::path::PathBuf::from("crates/pktflow-plugins/src")
+                        });
+                        let path = scaffold::scaffold_plugin(&dir, name, Some(group))?;
+                        println!("scaffolded {}", path.display());
+                        println!(
+                            "next: add `.plugin({name}::{})` to default_engine() in \
+                             crates/pktflow-plugins/src/lib.rs",
+                            scaffold::pascal_case(name),
+                        );
+                    } else {
+                        match args.shared.format {
+                            Format::Text => print!(
+                                "{}",
+                                unknown_view::drilldown_text(
+                                    n,
+                                    group,
+                                    args.samples,
+                                    args.full_samples
+                                )
+                            ),
+                            Format::Json => print_json(&unknown_view::drilldown_json(n, group))?,
+                        }
+                    }
+                }
+            }
+            eprint!("{}", summary::render(&outcome));
+            Ok(())
+        }
     }
 }
 
@@ -155,6 +217,7 @@ fn watch(args: &cli::StreamsArgs, stop: &StopFlags) -> Result<(), CliError> {
         &args.shared,
         stop,
         true,
+        false,
         move |_, _| {
             if let Some(d) = pace {
                 std::thread::sleep(d);

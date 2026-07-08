@@ -1,0 +1,81 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://pktflow/schema/unknown-v1.json",
+  "title": "pktflow unknown table/drill-down/manifest JSON (10.3, schema version 1)",
+  "description": "The `pktflow unknown --format json` document (table and drill-down share the same envelope) and the `--export` manifest.json shape.",
+  "type": "object",
+  "required": ["pktflow", "groups"],
+  "properties": {
+    "pktflow": { "const": 1 },
+    "groups": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/group" }
+    }
+  },
+  "$defs": {
+    "group": {
+      "type": "object",
+      "required": [
+        "selector", "predecessor", "route", "kind", "count", "bytes_total",
+        "bytes_min", "bytes_max", "first_seen", "last_seen", "near_misses",
+        "endpoints_overflow"
+      ],
+      "properties": {
+        "selector": { "type": "integer", "minimum": 1 },
+        "predecessor": { "type": "string" },
+        "route": { "type": ["string", "null"] },
+        "kind": { "enum": ["unclaimed_route", "no_heuristic_winner"] },
+        "count": { "type": "integer", "minimum": 0 },
+        "bytes_total": { "type": "integer", "minimum": 0 },
+        "bytes_min": { "type": "integer", "minimum": 0 },
+        "bytes_max": { "type": "integer", "minimum": 0 },
+        "first_seen": { "type": "string", "format": "date-time" },
+        "last_seen": { "type": "string", "format": "date-time" },
+        "near_misses": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/near_miss" }
+        },
+        "endpoints_overflow": { "type": "boolean" }
+      }
+    },
+    "near_miss": {
+      "type": "object",
+      "required": ["protocol", "score"],
+      "properties": {
+        "protocol": { "type": "string" },
+        "score": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "manifest": {
+      "type": "object",
+      "required": ["pktflow", "key", "source", "count", "bytes_min", "bytes_max", "samples"],
+      "properties": {
+        "pktflow": { "const": 1 },
+        "key": {
+          "type": "object",
+          "required": ["predecessor", "route"],
+          "properties": {
+            "predecessor": { "type": "string" },
+            "route": { "type": ["string", "null"] }
+          }
+        },
+        "source": { "type": "string" },
+        "count": { "type": "integer", "minimum": 0 },
+        "bytes_min": { "type": "integer", "minimum": 0 },
+        "bytes_max": { "type": "integer", "minimum": 0 },
+        "samples": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/manifest_sample" }
+        }
+      }
+    },
+    "manifest_sample": {
+      "type": "object",
+      "required": ["file", "bytes"],
+      "properties": {
+        "file": { "type": "string" },
+        "bytes": { "type": "integer", "minimum": 0 }
+      }
+    }
+  }
+}

@@ -53,6 +53,7 @@ fn help_snapshots_are_stable() {
     assert_help_matches(&["stream", "--help"], "help-stream.txt");
     assert_help_matches(&["packets", "--help"], "help-packets.txt");
     assert_help_matches(&["ifaces", "--help"], "help-ifaces.txt");
+    assert_help_matches(&["unknown", "--help"], "help-unknown.txt");
 }
 
 // ---- exit codes that never touch libpcap ------------------------------
