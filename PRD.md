@@ -282,6 +282,18 @@ nest conversations.
 - **FR-21** At least one plugin demonstrating each of: a MAC conversation, an IP conversation,
   a TCP session with lifecycle state, a UDP stream, and a tunneled nested stream.
 
+### Standard plugin library (extension)
+- **FR-31** Beyond the fixed v1 reference set (FR-19, D6), a broader **standard plugin
+  library** — link/discovery, wireless, IPv6 control-plane, routing, tunnels/VPN, transport
+  extensions, security/AAA, web/RPC, file/mail transfer, voice/video, network management,
+  service discovery, industrial/OT, data-center messaging, and telco/cellular protocols —
+  giving the project a "batteries included" standard library spanning home, enterprise,
+  data-center, private, and internet-facing networks. Delivered in tiers (D13): Tier 1
+  protocols are fully specified and built; Tier 2/3 are named for scope but spec'd later.
+  Every plugin's spec cites its governing standard document (D14); encrypted/opaque
+  protocols are parsed to their handshake/metadata boundary only, then decline (D12,
+  consistent with D7's metadata-only stance).
+
 ### CLI
 - **FR-22** Read packets from a capture file **or** live-capture from a named interface.
 - **FR-23** List available interfaces.
