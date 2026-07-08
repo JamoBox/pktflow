@@ -20,6 +20,18 @@ fn stdout(out: &std::process::Output) -> String {
     String::from_utf8_lossy(&out.stdout).into_owned()
 }
 
+/// Every test below spawns the real `pktflow` binary against a capture
+/// file (`support::pktflow`'s libpcap-linked child process) — the same
+/// class of test `surface.rs` skips on Windows CI, which has the Npcap
+/// SDK for linking but no runtime DLL.
+macro_rules! windows_skips {
+    () => {
+        if cfg!(windows) {
+            return;
+        }
+    };
+}
+
 fn ipv4_checksum(header: &[u8]) -> u16 {
     let mut sum: u32 = 0;
     let mut i = 0;
@@ -171,6 +183,7 @@ fn clean_fixture() -> PathBuf {
 
 #[test]
 fn table_lists_both_group_kinds_each_with_a_near_miss() {
+    windows_skips!();
     let path = mixed_fixture();
     let out = pktflow(&["unknown", "-r", &path.to_string_lossy()]);
     assert_eq!(out.status.code(), Some(0));
@@ -191,6 +204,7 @@ fn table_lists_both_group_kinds_each_with_a_near_miss() {
 
 #[test]
 fn clean_fixture_prints_the_explicit_none_observed_line() {
+    windows_skips!();
     let path = clean_fixture();
     let out = pktflow(&["unknown", "-r", &path.to_string_lossy()]);
     assert_eq!(out.status.code(), Some(0));
@@ -200,6 +214,7 @@ fn clean_fixture_prints_the_explicit_none_observed_line() {
 
 #[test]
 fn drilldown_shows_the_full_near_miss_ranking() {
+    windows_skips!();
     let path = mixed_fixture();
     let table = stdout(&pktflow(&["unknown", "-r", &path.to_string_lossy()]));
     // Row 1 is whichever group sorts first by count desc; the unclaimed
@@ -224,6 +239,7 @@ fn drilldown_shows_the_full_near_miss_ranking() {
 
 #[test]
 fn drilldown_shows_the_endpoint_overflow_marker_past_the_cap() {
+    windows_skips!();
     // D4's ACCUMULATE_SET_CAP is 64; 66 distinct source ports on the same
     // unclaimed dest port fold into one unknown group but 66 distinct udp
     // stream keys (D10: udp's key is ports only) — past the cap.
@@ -250,6 +266,7 @@ fn drilldown_shows_the_endpoint_overflow_marker_past_the_cap() {
 
 #[test]
 fn table_and_drilldown_json_validate_against_the_schema() {
+    windows_skips!();
     let path = mixed_fixture();
     let schema = load_unknown_schema();
 
@@ -288,6 +305,7 @@ fn table_and_drilldown_json_validate_against_the_schema() {
 
 #[test]
 fn export_round_trips_byte_identical_samples_and_a_valid_manifest() {
+    windows_skips!();
     let path = mixed_fixture();
     let dir = std::env::temp_dir().join(format!("pktflow-unknown-export-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
@@ -324,6 +342,7 @@ fn export_round_trips_byte_identical_samples_and_a_valid_manifest() {
 
 #[test]
 fn scaffold_writes_exactly_one_file_prefilled_from_the_route() {
+    windows_skips!();
     let path = mixed_fixture();
     let plugins_dir =
         std::env::temp_dir().join(format!("pktflow-unknown-scaffold-{}", std::process::id()));
@@ -386,6 +405,7 @@ fn scaffold_writes_exactly_one_file_prefilled_from_the_route() {
 
 #[test]
 fn scaffold_refuses_to_clobber_an_existing_file() {
+    windows_skips!();
     let path = mixed_fixture();
     let plugins_dir = std::env::temp_dir().join(format!(
         "pktflow-unknown-scaffold-clobber-{}",
@@ -446,8 +466,11 @@ fn assert_scaffold_compiles(generated_source: &str) {
     std::fs::write(crate_dir.join("Cargo.toml"), manifest).expect("test setup");
     std::fs::write(src_dir.join("lib.rs"), generated_source).expect("test setup");
 
+    // --offline: pktflow-core's own dependencies are already in the local
+    // registry cache from building the workspace itself, so this never
+    // needs the network — faster, and one less way this test can flake.
     let status = std::process::Command::new("cargo")
-        .args(["check", "--manifest-path"])
+        .args(["check", "--offline", "--manifest-path"])
         .arg(crate_dir.join("Cargo.toml"))
         .env_remove("CARGO_TARGET_DIR") // don't fight the workspace's own target dir
         .status()

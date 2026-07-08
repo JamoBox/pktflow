@@ -87,7 +87,7 @@ impl Engine {
         // Stable sort: ties keep registration order, so ranking is
         // deterministic for identical byte input without needing a
         // selection tie-break (this is reporting, not routing).
-        scored.sort_by(|a, b| b.0.cmp(&a.0));
+        scored.sort_by_key(|&(score, _)| std::cmp::Reverse(score));
         let near_misses = scored
             .into_iter()
             .take(5)
