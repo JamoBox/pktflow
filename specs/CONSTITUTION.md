@@ -1,6 +1,6 @@
 # pktflow Specs Constitution
 
-**Version 1.0.0 — Ratified 2026-07-07**
+**Version 1.1.0 — Ratified 2026-07-07 — Last amended 2026-07-08**
 
 Governs the relationship between [`specs/`](README.md) and the code in `crates/`. Every
 contributor (human or agent) planning or reviewing a change to this repository is bound by
@@ -125,6 +125,15 @@ not and cannot enforce that the spec tree itself stayed honest — that responsi
 to whoever writes and reviews the PR. Any invariant that becomes worth a CI gate is written
 down as a spec/decision first, then wired into `just ci` — not the reverse.
 
+**Green before proposed, not green-eventually.** Whoever (human or agent) proposes a PR runs
+`just ci` locally first and does not open the PR — or push further commits to an open one —
+until it passes clean. A red `just ci` is a sign the change isn't finished, not a note for the
+reviewer to look past. Exceptions are explicit, not assumed: a deliberate draft/WIP PR marked
+as such, or a documented pre-existing failure on the base branch unrelated to this change (in
+which case the PR description names the failure and why it's not this PR's to fix). Silence
+about a known-red run is never acceptable — an agent that skips `just ci`, or runs it and
+opens the PR anyway without saying so, has violated this article.
+
 ## Article X — Amending This Constitution
 
 This document versions independently of the project's crate versions, using semantic
@@ -148,3 +157,5 @@ next touch to an older spec brings it into compliance.
 - [ ] New/changed decision, if cross-cutting, has a `D#` entry (Article V).
 - [ ] Acceptance-criteria checkboxes flipped match what this PR actually proves (Article VI).
 - [ ] New spec cites its PRD `FR-#`/`§#` and any `D#` it relies on (Article IV).
+- [ ] `just ci` was run locally and is green, or the PR is explicitly marked draft/WIP, or a
+      pre-existing base-branch failure is named and disclaimed (Article IX).
