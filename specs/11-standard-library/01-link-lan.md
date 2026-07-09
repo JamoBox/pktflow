@@ -85,15 +85,34 @@ rather than treating "check the dst_mac" as one undifferentiated improvement:
    instead of `Unknown`, promoting `llc` to the explicit tier entirely. Left as `Unknown` for
    now — that would mean editing an already-specified/built task-06 file, out of scope for
    this purely-additive task unless a later PR decides it's worth it.
-2. **Confirmatory only, for everything already explicitly routed.** `lldp`/`eapol`/`lacp`
-   already route deterministically via `EtherType` (the explicit tier, PRD §4.B.3); `stp`/
-   `cdp` already route deterministically via `llc`'s DSAP/SNAP-PID `Custom` routes. `dst_mac`
-   doesn't change *whether* these are found — a mismatch (EtherType `0x888E` arriving with a
-   destination that isn't the PAE address) is a legitimate anomaly worth being able to see,
-   not a routing decision. **Not** modeled as a new per-plugin field in v1 (would mean adding
-   the same boilerplate to four plugins for a diagnostic nicety); flagged as a natural
-   `pktflow unknown`-adjacent (task 10) enhancement — cross-layer consistency checking — if
-   it's ever wanted, not a gap in this task.
+2. **Confirmatory only, for everything already explicitly routed — and correctly absent from
+   `Claims`, not just deprioritized.** `lldp`/`eapol`/`lacp` already route deterministically
+   via `EtherType` (the explicit tier, PRD §4.B.3); `stp`/`cdp` already route deterministically
+   via `llc`'s DSAP/SNAP-PID `Custom` routes. `dst_mac` genuinely cannot appear in any of
+   their `Claims` rows, for a structural reason, not a style choice: `RouteId` is
+   single-dimension per space (03.1 — `EtherType(u16)`, `Custom{space,id}`, ... one payload
+   each), and the *outer* layer (`ethernet`, 06.2) is what decides which `RouteId` gets looked
+   up — its `Hint::Route(EtherType(ethertype))` never inspects `dst_mac` at all. A `Custom`
+   dst-mac-keyed claim on `eapol` would be unreachable dead code (the same reasoning that kept
+   `rtp` from getting a pointless `probe()`, 11.10/D15), not a weaker version of routing —
+   `llc` is different only because *it* has no `Claims` at all and reaches the router purely
+   through `probe()`, where `dst_mac` genuinely can move the needle.
+
+   `dst_mac` still has a real, but strictly diagnostic, role here: a mismatch is *sometimes*
+   worth surfacing, but the exact expectation differs per protocol, and it's worth being
+   precise rather than treating all three alike. `lacp` (802.3 Clause 43) and `lldp`'s three
+   scopes (802.1AB) are always sent to a fixed group address with no standard unicast
+   alternative — a non-matching `dst_mac` there is a clean anomaly signal. `eapol` is
+   different: IEEE 802.1X explicitly permits **either** the PAE group address **or** a
+   unicast destination (the peer's individual MAC) — supplicant-initiated frames typically use
+   the group address, but authenticator *responses* commonly use the supplicant's unicast MAC.
+   So "non-PAE `dst_mac`" is **not**, by itself, anomalous for `eapol` the way it would be for
+   `lacp`/`lldp` — any future consistency-check feature would need to know that distinction,
+   not treat all three uniformly. **Not** modeled as a new per-plugin field in v1 either way
+   (would mean adding the same boilerplate to three plugins, with different correct behavior
+   for one of them, for a diagnostic nicety); flagged as a natural `pktflow unknown`-adjacent
+   (task 10) enhancement — cross-layer consistency checking — if it's ever wanted, not a gap
+   in this task.
 3. **Honest counterexample, so the table above isn't read as "dst_mac always disambiguates":**
    within the Cisco block, `cdp`/`vtp`/`udld`/`dtp` (and PAgP, not currently in this domain's
    taxonomy at all — see below) all share the *same* destination address
