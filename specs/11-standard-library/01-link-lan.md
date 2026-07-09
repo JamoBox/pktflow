@@ -46,12 +46,29 @@ unused `dst_mac` field:
 
 | Destination MAC | Family | Carries (this domain) |
 |---|---|---|
-| `01:80:C2:00:00:00` | IEEE Bridge Group | `stp` (generic 802.1D/w STP/RSTP) |
+| `01:80:C2:00:00:00` | IEEE Bridge Group | `stp` (generic 802.1D/w STP/RSTP); **also** LLDP's "nearest customer bridge" scope (see note below) |
 | `01:80:C2:00:00:02` | IEEE Bridge Group ("Slow Protocols") | `lacp` (EtherType-routed already, see below) |
-| `01:80:C2:00:00:03` | IEEE Bridge Group (PAE) | `eapol` (EtherType-routed already) |
-| `01:80:C2:00:00:0E` | IEEE Bridge Group (nearest bridge) | `lldp` (EtherType-routed already) |
-| `01:00:0C:CC:CC:CC` | Cisco multicast | `cdp`, and (Tier 2) `vtp`, `udld` — same address, disambiguated by SNAP PID, **not** by destination MAC (see below) |
+| `01:80:C2:00:00:03` | IEEE Bridge Group (PAE) | `eapol` (EtherType-routed already); **also** LLDP's "nearest non-TPMR bridge" scope (see note below) |
+| `01:80:C2:00:00:0E` | IEEE Bridge Group (nearest bridge) | `lldp`'s default/most common scope (EtherType-routed already) |
+| `01:00:0C:CC:CC:CC` | Cisco multicast | `cdp`, and (Tier 2) `vtp`, `udld`, `dtp` — same address, disambiguated by SNAP PID, **not** by destination MAC (see below) |
 | `01:00:0C:CC:CC:CD` | Cisco multicast | `pvst+` (below) |
+
+**Correction from an earlier draft, worth being explicit about:** IEEE 802.1AB actually
+defines *three* possible LLDP destination addresses depending on propagation scope, not one
+— `01:80:C2:00:00:0E` (nearest-bridge, the default and by far the most common), but also
+`01:80:C2:00:00:03` (nearest-non-TPMR-bridge) and `01:80:C2:00:00:00` (nearest-customer-
+bridge) for provider-bridge/PBB environments. The latter two are the *exact same addresses*
+as `eapol`'s PAE address and `stp`'s Bridge Group Address — so the table above is not a clean
+1:1 mapping the way the first draft of this spec implied. **This does not create actual
+routing ambiguity in this design**, and it's worth being precise about why: `lldp` is always
+`EtherType(0x88CC)`-framed (Ethernet II, never LLC), while `stp` is always 802.3-length +
+LLC-DSAP-`0x42`-framed (no EtherType at all) and `eapol` is always `EtherType(0x888E)`-framed
+— three structurally distinct wire shapes that are already fully disambiguated by the
+EtherType-presence/DSAP signal *before* `dst_mac` is ever consulted. `dst_mac` in this
+design is only ever an additive confidence booster on `llc`'s `probe()` (item 1 below), never
+the sole or first disambiguator for any plugin — so the address reuse is a real fact worth
+documenting (a diagnostic reading dst_mac in isolation, outside this codebase, could
+misattribute a frame) but not a design defect here.
 
 Two different roles fall out of this, and it's worth being precise about which is which
 rather than treating "check the dst_mac" as one undifferentiated improvement:
@@ -78,7 +95,8 @@ rather than treating "check the dst_mac" as one undifferentiated improvement:
    `pktflow unknown`-adjacent (task 10) enhancement — cross-layer consistency checking — if
    it's ever wanted, not a gap in this task.
 3. **Honest counterexample, so the table above isn't read as "dst_mac always disambiguates":**
-   within the Cisco block, `cdp`/`vtp`/`udld` all share the *same* destination address
+   within the Cisco block, `cdp`/`vtp`/`udld`/`dtp` (and PAgP, not currently in this domain's
+   taxonomy at all — see below) all share the *same* destination address
    (`01:00:0C:CC:CC:CC`) — SNAP PID is what actually tells them apart (already how `cdp`'s
    `Custom{space:"snap_pid",...}` claim works). `dst_mac` there narrows "this is Cisco
    control-plane traffic" but does no finer-grained work.
@@ -156,8 +174,10 @@ note).
 | Protocol | Standard | Note |
 |---|---|---|
 | MSTP | IEEE 802.1Q-2018 | Multiple Spanning Tree — `stp` plugin's `version == 3` case, region/instance TLVs unparsed in v1 |
-| UDLD | *No open standard* (Cisco) | Unidirectional link detection — SNAP PID 0x0111, same `01:00:0C:CC:CC:CC` destination as `cdp`/`vtp` |
-| VTP | *No open standard* (Cisco) | VLAN trunking protocol — SNAP PID 0x2003, same `01:00:0C:CC:CC:CC` destination as `cdp`/`udld` |
+| UDLD | RFC 5171 (informational, Cisco) | Unidirectional link detection — SNAP PID 0x0111, same `01:00:0C:CC:CC:CC` destination as `cdp`/`vtp`/`dtp` |
+| VTP | *No open standard* (Cisco) | VLAN trunking protocol — SNAP PID 0x2003, same `01:00:0C:CC:CC:CC` destination as `cdp`/`udld`/`dtp` |
+| DTP | *No open standard* (Cisco) | Dynamic Trunking Protocol — automatic trunk negotiation; same `01:00:0C:CC:CC:CC` destination as `cdp`/`vtp`/`udld`, own SNAP PID |
+| PAgP | *No open standard* (Cisco) | Port Aggregation Protocol — Cisco's pre-standard LACP equivalent; same `01:00:0C:CC:CC:CC` destination, own SNAP PID |
 | LACP Marker protocol | IEEE 802.3-2018 Clause 43 | Slow Protocols subtype 0x02 |
 
 ## Acceptance criteria
