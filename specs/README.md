@@ -34,20 +34,22 @@ merged behavior change is reflected back into its spec in the same PR. The summa
 | 08 | [CLI](08-cli/README.md) | `pktflow` binary: streams view, drill-down, packet mode, JSON | 05, 06, 07 |
 | 09 | [Validation](09-validation/README.md) | Plugin test kit, fixtures, e2e stream tests, benchmarks | all |
 | 10 | [Developer diagnostics](10-diagnostics/README.md) | `pktflow unknown`: grouped unclassified traffic, near-miss scores, export/scaffold | 03, 04, 05, 08 |
+| 11 | [Standard plugin library](11-standard-library/README.md) | Batteries-included protocol coverage: link/wireless/routing/tunnels/transport/security/web/file/voice/telemetry/discovery/OT/DC-messaging/telco, tiered (D13) | 02–06 |
 
 ## Dependency graph
 
 ```
 00 ──► 01 ──► 02 ──► 03 ──► 04 ──┐
               │                  ├──► 05 ──► 06 ──► 08 ──► 09
-              └──────────────────┘          ▲
-00 ─────────────────────────► 07 ───────────┘
+              └──────────────────┘          ▲   │
+00 ─────────────────────────► 07 ───────────┘   └──► 11
               03,04,05,08 ──────────────────► 10
 ```
 
 Recommended build order: 00 → 01 → 02 → 03 → 04 → 05 → 06 → 07 → 08 → 09, with 07 parallel
 to 03–05 and 09's test kit (09.1) started alongside 06. Task 10 is a leaf (like 09) started
-once 08 exists.
+once 08 exists. Task 11 is a leaf on 06: its domain sub-tasks are independent of each other
+and independent of 07–10, so they can be built in any order (or in parallel) once 06 lands.
 
 ## Definition of done (project)
 
