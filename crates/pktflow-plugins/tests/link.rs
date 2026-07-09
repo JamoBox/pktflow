@@ -160,3 +160,69 @@ fn lldp_route_id_is_the_registered_ethertype() {
         &[RouteId::EtherType(0x88CC)]
     );
 }
+
+#[test]
+fn eth_802_3_length_field_falls_back_to_llc_via_the_heuristic_pool() {
+    // ethertype 0x0003 is an 802.3 *length* (< 0x0600), so ethernet
+    // (06.2) emits Hint::Unknown rather than guessing — this is exactly
+    // the case 11.1's llc plugin exists to catch. Bridge Group Address
+    // destination (STP's fixed multicast target) also exercises the
+    // cross-layer dst_mac boost on llc's probe.
+    const IEEE_BRIDGE_GROUP: [u8; 6] = [0x01, 0x80, 0xC2, 0x00, 0x00, 0x00];
+
+    let engine = Arc::new(default_engine());
+    let mut pkt = eth_frame(IEEE_BRIDGE_GROUP, MAC_A, 0x0003);
+    pkt.extend_from_slice(&[0x42, 0x42, 0x03]); // STP-shaped LLC: dsap=ssap=0x42, U-format control
+                                                // A BPDU would follow in a real capture; stp isn't
+                                                // implemented yet (later PR), so this is opaque
+                                                // payload proving the route lookup itself, not a
+                                                // zero-remaining-payload `Complete` short-circuit.
+    pkt.extend_from_slice(&[0xDE, 0xAD, 0xBE, 0xEF]);
+
+    let m = meta(pkt.len(), 0);
+    let packet = engine.dissect(&pkt, m, ParseOpts::default());
+    let protocols: Vec<_> = packet.layers.iter().map(|l| l.protocol).collect();
+    assert_eq!(protocols, ["ethernet", "llc"], "llc wins the fallback pool");
+    assert_eq!(packet.layers[1].fields.get("dsap"), Some(&Value::U64(0x42)));
+
+    // No plugin claims llc_dsap:0x42 yet (stp/cdp land in a later PR) —
+    // an honest unclaimed stop, not a phantom layer.
+    assert_eq!(
+        packet.stop,
+        StopReason::UnclaimedRoute(RouteId::Custom {
+            space: "llc_dsap",
+            id: 0x42,
+        })
+    );
+}
+
+#[test]
+fn eth_802_3_length_field_falls_back_to_llc_for_a_snap_frame_too() {
+    // Cisco's multicast control-plane destination, and a SNAP frame
+    // (OUI 00-00-0C Cisco, PID 0x2000 CDP) — the snap_pid Custom space.
+    const CISCO_MULTICAST: [u8; 6] = [0x01, 0x00, 0x0C, 0xCC, 0xCC, 0xCC];
+
+    let engine = Arc::new(default_engine());
+    let mut pkt = eth_frame(CISCO_MULTICAST, MAC_A, 0x0008);
+    pkt.extend_from_slice(&[0xAA, 0xAA, 0x03, 0x00, 0x00, 0x0C, 0x20, 0x00]);
+    // Opaque trailing payload — proves the route lookup itself, same
+    // reasoning as the llc_dsap case above.
+    pkt.extend_from_slice(&[0xDE, 0xAD, 0xBE, 0xEF]);
+
+    let m = meta(pkt.len(), 0);
+    let packet = engine.dissect(&pkt, m, ParseOpts::default());
+    let protocols: Vec<_> = packet.layers.iter().map(|l| l.protocol).collect();
+    assert_eq!(protocols, ["ethernet", "llc"]);
+    assert_eq!(packet.layers[1].fields.get("oui"), Some(&Value::U64(0x0C)));
+    assert_eq!(
+        packet.layers[1].fields.get("pid"),
+        Some(&Value::U64(0x2000))
+    );
+    assert_eq!(
+        packet.stop,
+        StopReason::UnclaimedRoute(RouteId::Custom {
+            space: "snap_pid",
+            id: (0x0Cu64 << 16) | 0x2000,
+        })
+    );
+}

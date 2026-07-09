@@ -14,6 +14,7 @@ use pktflow_plugins::icmpv4::Icmpv4;
 use pktflow_plugins::igmp::Igmp;
 use pktflow_plugins::ipv4::{internet_checksum, Ipv4};
 use pktflow_plugins::ipv6::Ipv6;
+use pktflow_plugins::llc::Llc;
 use pktflow_plugins::lldp::Lldp;
 use pktflow_plugins::ntp::Ntp;
 use pktflow_plugins::tcp::Tcp;
@@ -634,6 +635,48 @@ fn lldp_conforms() {
             ],
             expected_hint: Hint::Terminal,
         }],
+        outer_ctx: Vec::new(),
+    });
+}
+
+#[test]
+fn llc_conforms() {
+    // STP-shaped: dsap=ssap=0x42 (802.1D Bridge Group SAP), U-format
+    // control 0x03 -> routes via the llc_dsap Custom space.
+    let stp_shaped = vec![0x42, 0x42, 0x03];
+    // RFC 1042 IP-over-SNAP: dsap=ssap=0xAA, control 0x03, OUI 0 (reuses
+    // the real EtherType space), PID 0x0800 (IPv4).
+    let rfc1042_ip = vec![0xAA, 0xAA, 0x03, 0x00, 0x00, 0x00, 0x08, 0x00];
+
+    run_conformance(&ConformanceCase {
+        plugin: Box::new(Llc),
+        good: vec![
+            GoodPacket {
+                bytes: stp_shaped,
+                expected_header_len: 3,
+                expected_full_fields: vec![
+                    ("dsap", Value::U64(0x42)),
+                    ("ssap", Value::U64(0x42)),
+                    ("control", Value::U64(0x03)),
+                ],
+                expected_hint: Hint::Route(RouteId::Custom {
+                    space: "llc_dsap",
+                    id: 0x42,
+                }),
+            },
+            GoodPacket {
+                bytes: rfc1042_ip,
+                expected_header_len: 8,
+                expected_full_fields: vec![
+                    ("dsap", Value::U64(0xAA)),
+                    ("ssap", Value::U64(0xAA)),
+                    ("control", Value::U64(0x03)),
+                    ("oui", Value::U64(0)),
+                    ("pid", Value::U64(0x0800)),
+                ],
+                expected_hint: Hint::Route(RouteId::EtherType(0x0800)),
+            },
+        ],
         outer_ctx: Vec::new(),
     });
 }
