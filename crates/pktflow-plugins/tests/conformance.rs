@@ -14,6 +14,7 @@ use pktflow_plugins::icmpv4::Icmpv4;
 use pktflow_plugins::igmp::Igmp;
 use pktflow_plugins::ipv4::{internet_checksum, Ipv4};
 use pktflow_plugins::ipv6::Ipv6;
+use pktflow_plugins::lldp::Lldp;
 use pktflow_plugins::ntp::Ntp;
 use pktflow_plugins::tcp::Tcp;
 use pktflow_plugins::template::Template;
@@ -571,6 +572,65 @@ fn ntp_conforms() {
                 ("orig_ts", Value::U64(0)),
                 ("recv_ts", Value::U64(0)),
                 ("xmit_ts", Value::U64(0)),
+            ],
+            expected_hint: Hint::Terminal,
+        }],
+        outer_ctx: Vec::new(),
+    });
+}
+
+/// One TLV: 2-byte header (7-bit type, 9-bit length) + value.
+fn lldp_tlv(t: u8, value: &[u8]) -> Vec<u8> {
+    let header = (u16::from(t) << 9) | (value.len() as u16);
+    let mut out = header.to_be_bytes().to_vec();
+    out.extend_from_slice(value);
+    out
+}
+
+/// A real-shaped LLDPDU (IEEE 802.1AB-2016): MAC-address chassis ID,
+/// interface-name port ID, TTL, system name/description, capabilities,
+/// and a management address TLV, terminated by End-of-LLDPDU.
+fn lldp_bytes() -> Vec<u8> {
+    let mut b = Vec::new();
+    b.extend_from_slice(&lldp_tlv(1, &[4, 0x00, 0x1A, 0x2B, 0x3C, 0x4D, 0x5E])); // chassis: MAC
+    b.extend_from_slice(&lldp_tlv(2, b"\x05Gi0/1")); // port: interface name
+    b.extend_from_slice(&lldp_tlv(3, &120u16.to_be_bytes())); // ttl
+    b.extend_from_slice(&lldp_tlv(5, b"switch1.example.net")); // system name
+    b.extend_from_slice(&lldp_tlv(6, b"ExampleOS 1.0, Enterprise Switch")); // system description
+    b.extend_from_slice(&lldp_tlv(7, &[0x00, 0x14, 0x00, 0x04])); // capabilities: bridge+router / bridge
+    b.extend_from_slice(&lldp_tlv(8, &[5, 1, 192, 0, 2, 1, 2, 0, 0, 0, 5, 0])); // mgmt addr
+    b.extend_from_slice(&lldp_tlv(0, &[])); // end
+    b
+}
+
+#[test]
+fn lldp_conforms() {
+    let bytes = lldp_bytes();
+    let expected_header_len = bytes.len();
+    run_conformance(&ConformanceCase {
+        plugin: Box::new(Lldp),
+        good: vec![GoodPacket {
+            bytes,
+            expected_header_len,
+            expected_full_fields: vec![
+                ("chassis_id_subtype", Value::U64(4)),
+                (
+                    "chassis_id",
+                    Value::from(&[0x00, 0x1A, 0x2B, 0x3C, 0x4D, 0x5E][..]),
+                ),
+                ("port_id_subtype", Value::U64(5)),
+                ("port_id", Value::from(&b"Gi0/1"[..])),
+                ("ttl", Value::U64(120)),
+                ("system_name", Value::from("switch1.example.net")),
+                (
+                    "system_description",
+                    Value::from("ExampleOS 1.0, Enterprise Switch"),
+                ),
+                ("capabilities", Value::U64(0x04)),
+                (
+                    "management_address",
+                    Value::from(&[5u8, 1, 192, 0, 2, 1, 2, 0, 0, 0, 5, 0][..]),
+                ),
             ],
             expected_hint: Hint::Terminal,
         }],

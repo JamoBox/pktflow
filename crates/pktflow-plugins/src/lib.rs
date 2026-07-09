@@ -14,6 +14,7 @@ pub mod icmpv4;
 pub mod igmp;
 pub mod ipv4;
 pub mod ipv6;
+pub mod lldp;
 pub mod ntp;
 pub mod tcp;
 pub mod template;
@@ -40,6 +41,7 @@ pub fn default_engine() -> Engine {
         .plugin(dns::Dns)
         .plugin(dhcp::Dhcp)
         .plugin(ntp::Ntp)
+        .plugin(lldp::Lldp)
         .build()
         // Not input-derived: a collision here is a bug in this very list,
         // caught by the registry's build-time validation (03.2).
