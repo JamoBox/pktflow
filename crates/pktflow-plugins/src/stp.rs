@@ -11,22 +11,134 @@ use pktflow_core::{
     ProtocolName, RouteId, StreamIdentity, Value,
 };
 
-const PROTOCOL_ID: FieldName = "protocol_id";
-const VERSION: FieldName = "version";
-const BPDU_TYPE: FieldName = "bpdu_type";
-const FLAGS: FieldName = "flags";
-const ROOT_ID: FieldName = "root_id";
-const ROOT_PATH_COST: FieldName = "root_path_cost";
-const BRIDGE_ID: FieldName = "bridge_id";
-const PORT_ID: FieldName = "port_id";
-const MESSAGE_AGE: FieldName = "message_age";
-const MAX_AGE: FieldName = "max_age";
-const HELLO_TIME: FieldName = "hello_time";
-const FORWARD_DELAY: FieldName = "forward_delay";
+pub(crate) const PROTOCOL_ID: FieldName = "protocol_id";
+pub(crate) const VERSION: FieldName = "version";
+pub(crate) const BPDU_TYPE: FieldName = "bpdu_type";
+pub(crate) const FLAGS: FieldName = "flags";
+pub(crate) const ROOT_ID: FieldName = "root_id";
+pub(crate) const ROOT_PATH_COST: FieldName = "root_path_cost";
+pub(crate) const BRIDGE_ID: FieldName = "bridge_id";
+pub(crate) const PORT_ID: FieldName = "port_id";
+pub(crate) const MESSAGE_AGE: FieldName = "message_age";
+pub(crate) const MAX_AGE: FieldName = "max_age";
+pub(crate) const HELLO_TIME: FieldName = "hello_time";
+pub(crate) const FORWARD_DELAY: FieldName = "forward_delay";
 
 /// §9.3.2: Topology Change Notification — 4 bytes total, none of the
 /// Configuration/RST fields below.
 const TCN_BPDU_TYPE: u8 = 0x80;
+
+/// Configuration/RST BPDU fields (§9.3.1, §9.3.3) — absent for a TCN BPDU.
+pub(crate) struct ConfigFields<'a> {
+    pub flags: u8,
+    pub root_id: &'a [u8],
+    pub root_path_cost: u32,
+    pub bridge_id: &'a [u8],
+    pub port_id: u16,
+    pub message_age: u16,
+    pub max_age: u16,
+    pub hello_time: u16,
+    pub forward_delay: u16,
+}
+
+/// The BPDU shape shared by classic STP/RSTP and Cisco's PVST+ (which
+/// wraps the same §9.3 fields under its own SNAP PID plus a trailing
+/// VLAN TLV) — factored out so `pvst_plus` doesn't duplicate this walk.
+pub(crate) struct Bpdu<'a> {
+    pub protocol_id: u16,
+    pub version: u8,
+    pub bpdu_type: u8,
+    pub config: Option<ConfigFields<'a>>,
+}
+
+/// Parses the common BPDU header through the optional RSTP/MSTP Version 1
+/// Length trailer. Returns the parsed fields alongside how many bytes
+/// were consumed, so a caller with its own trailing data (PVST+'s VLAN
+/// TLV) knows exactly where its own fields start.
+pub(crate) fn parse_bpdu(bytes: &[u8]) -> Result<(Bpdu<'_>, usize), ParseError> {
+    let mut r = ByteReader::new(bytes);
+    let protocol_id = r.u16_be()?;
+    if protocol_id != 0x0000 {
+        return Err(ParseError::Malformed(
+            "STP: unrecognized protocol identifier",
+        ));
+    }
+    let version = r.u8()?;
+    let bpdu_type = r.u8()?;
+
+    // Configuration BPDU (§9.3.1, type 0x00) and RST BPDU (§9.3.3, type
+    // 0x02) share this shape; TCN (§9.3.2, type 0x80) carries nothing
+    // beyond the 4-byte common header parsed above — same
+    // conditional-field discipline as DNS query-vs-response (06.6).
+    let mut config = None;
+    if bpdu_type != TCN_BPDU_TYPE {
+        let flags = r.u8()?;
+        let root_id = r.take(8)?;
+        let root_path_cost = r.u32_be()?;
+        let bridge_id = r.take(8)?;
+        let port_id = r.u16_be()?;
+        let message_age = r.u16_be()?;
+        let max_age = r.u16_be()?;
+        let hello_time = r.u16_be()?;
+        let forward_delay = r.u16_be()?;
+
+        // RSTP/MSTP (version >= 2, §9.3.3 / 802.1Q MSTP): a 1-byte
+        // "Version 1 Length" trailer, 0 for pure RSTP. MSTP appends
+        // region/instance TLVs after it — Tier 2, unparsed in v1 (11.1's
+        // Planned table); left as opaque trailing bytes beyond
+        // header_len rather than consumed here.
+        if version >= 2 {
+            let _version_1_length = r.u8()?;
+        }
+
+        config = Some(ConfigFields {
+            flags,
+            root_id,
+            root_path_cost,
+            bridge_id,
+            port_id,
+            message_age,
+            max_age,
+            hello_time,
+            forward_delay,
+        });
+    }
+
+    Ok((
+        Bpdu {
+            protocol_id,
+            version,
+            bpdu_type,
+            config,
+        },
+        bytes.len() - r.remaining(),
+    ))
+}
+
+/// Inserts the shared BPDU fields at their depth tiers — shared by `stp`
+/// and `pvst_plus`.
+pub(crate) fn insert_bpdu_fields(fields: &mut FieldMap, depth: Depth, bpdu: &Bpdu<'_>) {
+    if depth >= Depth::Structural {
+        fields.insert(PROTOCOL_ID, Value::U64(u64::from(bpdu.protocol_id)));
+        fields.insert(VERSION, Value::U64(u64::from(bpdu.version)));
+        fields.insert(BPDU_TYPE, Value::U64(u64::from(bpdu.bpdu_type)));
+        if let Some(c) = &bpdu.config {
+            fields.insert(FLAGS, Value::U64(u64::from(c.flags)));
+            fields.insert(ROOT_ID, Value::from(c.root_id));
+            fields.insert(BRIDGE_ID, Value::from(c.bridge_id));
+        }
+    }
+    if depth >= Depth::Full {
+        if let Some(c) = &bpdu.config {
+            fields.insert(ROOT_PATH_COST, Value::U64(u64::from(c.root_path_cost)));
+            fields.insert(PORT_ID, Value::U64(u64::from(c.port_id)));
+            fields.insert(MESSAGE_AGE, Value::U64(u64::from(c.message_age)));
+            fields.insert(MAX_AGE, Value::U64(u64::from(c.max_age)));
+            fields.insert(HELLO_TIME, Value::U64(u64::from(c.hello_time)));
+            fields.insert(FORWARD_DELAY, Value::U64(u64::from(c.forward_delay)));
+        }
+    }
+}
 
 pub struct Stp;
 
@@ -36,89 +148,12 @@ impl LayerPlugin for Stp {
     }
 
     fn parse(&self, bytes: &[u8], ctx: &ParseCtx) -> Result<ParsedLayer, ParseError> {
-        let mut r = ByteReader::new(bytes);
-        let protocol_id = r.u16_be()?;
-        if protocol_id != 0x0000 {
-            return Err(ParseError::Malformed(
-                "STP: unrecognized protocol identifier",
-            ));
-        }
-        let version = r.u8()?;
-        let bpdu_type = r.u8()?;
-
-        // Configuration BPDU (§9.3.1, type 0x00) and RST BPDU (§9.3.3,
-        // type 0x02) share this shape; TCN (§9.3.2, type 0x80) carries
-        // nothing beyond the 4-byte common header parsed above — same
-        // conditional-field discipline as DNS query-vs-response (06.6).
-        let mut rest = None;
-        if bpdu_type != TCN_BPDU_TYPE {
-            let flags = r.u8()?;
-            let root_id = r.take(8)?;
-            let root_path_cost = r.u32_be()?;
-            let bridge_id = r.take(8)?;
-            let port_id = r.u16_be()?;
-            let message_age = r.u16_be()?;
-            let max_age = r.u16_be()?;
-            let hello_time = r.u16_be()?;
-            let forward_delay = r.u16_be()?;
-
-            // RSTP/MSTP (version >= 2, §9.3.3 / 802.1Q MSTP): a 1-byte
-            // "Version 1 Length" trailer, 0 for pure RSTP. MSTP appends
-            // region/instance TLVs after it — Tier 2, unparsed in v1
-            // (11.1's Planned table); left as opaque trailing bytes
-            // beyond header_len rather than consumed here.
-            if version >= 2 {
-                let _version_1_length = r.u8()?;
-            }
-
-            rest = Some((
-                flags,
-                root_id,
-                root_path_cost,
-                bridge_id,
-                port_id,
-                message_age,
-                max_age,
-                hello_time,
-                forward_delay,
-            ));
-        }
-
+        let (bpdu, consumed) = parse_bpdu(bytes)?;
         let mut fields = FieldMap::new();
-        if ctx.depth() >= Depth::Structural {
-            fields.insert(PROTOCOL_ID, Value::U64(u64::from(protocol_id)));
-            fields.insert(VERSION, Value::U64(u64::from(version)));
-            fields.insert(BPDU_TYPE, Value::U64(u64::from(bpdu_type)));
-            if let Some((flags, root_id, _, bridge_id, ..)) = rest {
-                fields.insert(FLAGS, Value::U64(u64::from(flags)));
-                fields.insert(ROOT_ID, Value::from(root_id));
-                fields.insert(BRIDGE_ID, Value::from(bridge_id));
-            }
-        }
-        if ctx.depth() >= Depth::Full {
-            if let Some((
-                _,
-                _,
-                root_path_cost,
-                _,
-                port_id,
-                message_age,
-                max_age,
-                hello_time,
-                forward_delay,
-            )) = rest
-            {
-                fields.insert(ROOT_PATH_COST, Value::U64(u64::from(root_path_cost)));
-                fields.insert(PORT_ID, Value::U64(u64::from(port_id)));
-                fields.insert(MESSAGE_AGE, Value::U64(u64::from(message_age)));
-                fields.insert(MAX_AGE, Value::U64(u64::from(max_age)));
-                fields.insert(HELLO_TIME, Value::U64(u64::from(hello_time)));
-                fields.insert(FORWARD_DELAY, Value::U64(u64::from(forward_delay)));
-            }
-        }
+        insert_bpdu_fields(&mut fields, ctx.depth(), &bpdu);
 
         Ok(ParsedLayer {
-            header_len: bytes.len() - r.remaining(),
+            header_len: consumed,
             fields,
             hint: Hint::Terminal,
         })

@@ -200,22 +200,22 @@ note).
 | LACP Marker protocol | IEEE 802.3-2018 Clause 43 | Slow Protocols subtype 0x02 |
 
 ## Acceptance criteria
-- [ ] `llc` real-frame fixtures (STP-carrying and CDP-carrying) route to `stp`/`cdp`
+- [x] `llc` real-frame fixtures (STP-carrying and CDP-carrying) route to `stp`/`cdp`
       correctly via both `llc_dsap` and `snap_pid` `Custom` spaces; a non-LLC 802.3-length
       frame (bad dsap/ssap) declines from the fallback pool rather than mis-routing.
-- [ ] `llc` probe cross-layer boost: a fixture with a reserved `dst_mac` (either block) but a
+- [x] `llc` probe cross-layer boost: a fixture with a reserved `dst_mac` (either block) but a
       slightly atypical DSAP/control byte still wins the fallback pool (90 beats other
       candidates' base-signal scores); a fixture with a well-formed DSAP/control pattern but
       an *unreserved* `dst_mac` still gets in via the base 55 score — the boost is additive
       confidence, not a hard requirement, tested as both cases independently.
-- [ ] `stp`, `pvst+`, `cdp`, `lldp` fixtures parse to exact expected fields; each contributes
+- [x] `stp`, `pvst+`, `cdp`, `lldp` fixtures parse to exact expected fields; each contributes
       stats to its parent MAC conversation with no stream of its own (identity-less pattern
       verified, matching 06.3's ARP precedent). `pvst+` fixture specifically verifies
       `originating_vlan` and correct disambiguation from generic `stp` via SNAP PID.
-- [ ] `lacp` fixture: negotiation stream forms keyed on `(actor_system, partner_system)`,
+- [x] `lacp` fixture: negotiation stream forms keyed on `(actor_system, partner_system)`,
       folds both directions, `actor_state` accumulate populated across a multi-PDU exchange.
-- [ ] `eapol` fixture covers all named `packet_type`s; the `Key` body fields parse exactly on
+- [x] `eapol` fixture covers all named `packet_type`s; the `Key` body fields parse exactly on
       a real 4-way-handshake message 1 capture; a non-Key EAPOL frame emits none of the Key
       fields (depth/conditional-field discipline, same as DNS query-vs-response, 06.6).
-- [ ] TLV-walk bound tests for `cdp` and `lldp` (malformed/oversized length ⇒ clean
+- [x] TLV-walk bound tests for `cdp` and `lldp` (malformed/oversized length ⇒ clean
       `PluginError`, no loop) registered alongside a fuzz target.

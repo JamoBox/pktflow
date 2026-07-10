@@ -6,17 +6,21 @@ mod kit;
 use pktflow_core::{Canonicalize, FieldMap, KeyField, LayerRecord, StreamIdentity};
 use pktflow_core::{Hint, RouteId, Value};
 use pktflow_plugins::arp::Arp;
+use pktflow_plugins::cdp::Cdp;
 use pktflow_plugins::dhcp::Dhcp;
 use pktflow_plugins::dns::Dns;
+use pktflow_plugins::eapol::Eapol;
 use pktflow_plugins::ethernet::Ethernet;
 use pktflow_plugins::gre::Gre;
 use pktflow_plugins::icmpv4::Icmpv4;
 use pktflow_plugins::igmp::Igmp;
 use pktflow_plugins::ipv4::{internet_checksum, Ipv4};
 use pktflow_plugins::ipv6::Ipv6;
+use pktflow_plugins::lacp::Lacp;
 use pktflow_plugins::llc::Llc;
 use pktflow_plugins::lldp::Lldp;
 use pktflow_plugins::ntp::Ntp;
+use pktflow_plugins::pvst_plus::PvstPlus;
 use pktflow_plugins::stp::Stp;
 use pktflow_plugins::tcp::Tcp;
 use pktflow_plugins::template::Template;
@@ -739,6 +743,200 @@ fn stp_conforms() {
                 expected_hint: Hint::Terminal,
             },
         ],
+        outer_ctx: Vec::new(),
+    });
+}
+
+#[test]
+fn pvst_plus_conforms() {
+    // Per-VLAN Configuration BPDU (version 0) for VLAN 100, same
+    // root/bridge shape as stp's fixture, plus the Origin VLAN TLV.
+    let mut bytes = vec![0x00, 0x00, 0x00, 0x00];
+    bytes.push(0x00); // flags
+    bytes.extend_from_slice(&[0x80, 0x00, 0x00, 0x1A, 0x2B, 0x3C, 0x4D, 0x5E]); // root_id
+    bytes.extend_from_slice(&4u32.to_be_bytes()); // root_path_cost
+    bytes.extend_from_slice(&[0x80, 0x00, 0x00, 0x1B, 0x44, 0x11, 0x3A, 0xB7]); // bridge_id
+    bytes.extend_from_slice(&0x8001u16.to_be_bytes()); // port_id
+    bytes.extend_from_slice(&0u16.to_be_bytes()); // message_age
+    bytes.extend_from_slice(&0x1400u16.to_be_bytes()); // max_age
+    bytes.extend_from_slice(&0x0200u16.to_be_bytes()); // hello_time
+    bytes.extend_from_slice(&0x0F00u16.to_be_bytes()); // forward_delay
+    bytes.extend_from_slice(&0x0000u16.to_be_bytes()); // TLV type
+    bytes.extend_from_slice(&0x0002u16.to_be_bytes()); // TLV length
+    bytes.extend_from_slice(&100u16.to_be_bytes()); // TLV value: VLAN 100
+
+    run_conformance(&ConformanceCase {
+        plugin: Box::new(PvstPlus),
+        good: vec![GoodPacket {
+            expected_header_len: bytes.len(),
+            bytes,
+            expected_full_fields: vec![
+                ("protocol_id", Value::U64(0)),
+                ("version", Value::U64(0)),
+                ("bpdu_type", Value::U64(0)),
+                ("flags", Value::U64(0)),
+                (
+                    "root_id",
+                    Value::from(&[0x80, 0x00, 0x00, 0x1A, 0x2B, 0x3C, 0x4D, 0x5E][..]),
+                ),
+                ("root_path_cost", Value::U64(4)),
+                (
+                    "bridge_id",
+                    Value::from(&[0x80, 0x00, 0x00, 0x1B, 0x44, 0x11, 0x3A, 0xB7][..]),
+                ),
+                ("port_id", Value::U64(0x8001)),
+                ("message_age", Value::U64(0)),
+                ("max_age", Value::U64(0x1400)),
+                ("hello_time", Value::U64(0x0200)),
+                ("forward_delay", Value::U64(0x0F00)),
+                ("originating_vlan", Value::U64(100)),
+            ],
+            expected_hint: Hint::Terminal,
+        }],
+        outer_ctx: Vec::new(),
+    });
+}
+
+#[test]
+fn cdp_conforms() {
+    fn tlv(t: u16, value: &[u8]) -> Vec<u8> {
+        let mut out = t.to_be_bytes().to_vec();
+        out.extend_from_slice(
+            &u16::try_from(4 + value.len())
+                .expect("tlv fits")
+                .to_be_bytes(),
+        );
+        out.extend_from_slice(value);
+        out
+    }
+
+    // Device id — the only TLV the plugin requires — is placed last so
+    // every strict prefix is unambiguously truncated (CDP has no
+    // explicit end-of-message marker the way LLDP/DHCP do).
+    let mut bytes = vec![0x02, 0x3C, 0x00, 0x00]; // version 2, ttl 60s, checksum placeholder
+    bytes.extend_from_slice(&tlv(0x0003, b"GigabitEthernet0/1")); // port id
+    bytes.extend_from_slice(&tlv(0x0001, b"switch1.example.net")); // device id
+
+    run_conformance(&ConformanceCase {
+        plugin: Box::new(Cdp),
+        good: vec![GoodPacket {
+            expected_header_len: bytes.len(),
+            bytes,
+            expected_full_fields: vec![
+                ("version", Value::U64(2)),
+                ("ttl", Value::U64(60)),
+                ("checksum", Value::U64(0)),
+                ("port_id", Value::from("GigabitEthernet0/1")),
+                ("device_id", Value::from("switch1.example.net")),
+            ],
+            expected_hint: Hint::Terminal,
+        }],
+        outer_ctx: Vec::new(),
+    });
+}
+
+#[test]
+fn lacp_conforms() {
+    fn endpoint_tlv(t: u8, system: [u8; 6], key: u16, port: u16, state: u8) -> Vec<u8> {
+        let mut b = vec![t, 0x14];
+        b.extend_from_slice(&0x8000u16.to_be_bytes());
+        b.extend_from_slice(&system);
+        b.extend_from_slice(&key.to_be_bytes());
+        b.extend_from_slice(&0x8000u16.to_be_bytes());
+        b.extend_from_slice(&port.to_be_bytes());
+        b.push(state);
+        b.extend_from_slice(&[0, 0, 0]);
+        b
+    }
+
+    let mut bytes = vec![0x01, 0x01]; // subtype LACP, version 1
+    bytes.extend_from_slice(&endpoint_tlv(
+        0x01,
+        [0x00, 0x1A, 0x2B, 0x3C, 0x4D, 0x5E],
+        1,
+        1,
+        0x3D,
+    ));
+    bytes.extend_from_slice(&endpoint_tlv(
+        0x02,
+        [0x00, 0x1B, 0x44, 0x11, 0x3A, 0xB7],
+        2,
+        2,
+        0x3D,
+    ));
+    bytes.push(0x03); // collector TLV
+    bytes.push(0x10);
+    bytes.extend_from_slice(&[0; 14]);
+    bytes.push(0x00); // terminator TLV
+    bytes.push(0x00);
+    bytes.extend_from_slice(&[0; 50]); // reserved trailer
+
+    run_conformance(&ConformanceCase {
+        plugin: Box::new(Lacp),
+        good: vec![GoodPacket {
+            expected_header_len: bytes.len(),
+            bytes,
+            expected_full_fields: vec![
+                (
+                    "actor_system",
+                    Value::from(&[0x00, 0x1A, 0x2B, 0x3C, 0x4D, 0x5E][..]),
+                ),
+                (
+                    "partner_system",
+                    Value::from(&[0x00, 0x1B, 0x44, 0x11, 0x3A, 0xB7][..]),
+                ),
+                ("actor_key", Value::U64(1)),
+                ("actor_port", Value::U64(1)),
+                ("actor_state", Value::U64(0x3D)),
+                ("partner_key", Value::U64(2)),
+                ("partner_port", Value::U64(2)),
+                ("partner_state", Value::U64(0x3D)),
+            ],
+            expected_hint: Hint::Terminal,
+        }],
+        outer_ctx: Vec::new(),
+    });
+}
+
+#[test]
+fn eapol_conforms() {
+    let mut body = Vec::new();
+    body.push(0x02); // key_descriptor_type: RSN
+    body.extend_from_slice(&0x008Au16.to_be_bytes()); // key_info
+    body.extend_from_slice(&16u16.to_be_bytes()); // key_length
+    body.extend_from_slice(&1u64.to_be_bytes()); // replay_counter
+    body.extend_from_slice(&[0xAA; 32]); // nonce
+    body.extend_from_slice(&[0; 16]); // key_iv
+    body.extend_from_slice(&0u64.to_be_bytes()); // key_rsc
+    body.extend_from_slice(&[0; 8]); // key id / reserved
+    body.extend_from_slice(&[0; 16]); // key_mic
+    body.extend_from_slice(&0u16.to_be_bytes()); // key_data_length
+
+    let mut bytes = vec![0x01, 0x03]; // version 1, packet_type Key
+    bytes.extend_from_slice(&u16::try_from(body.len()).expect("fits").to_be_bytes());
+    bytes.extend_from_slice(&body);
+
+    run_conformance(&ConformanceCase {
+        plugin: Box::new(Eapol),
+        good: vec![GoodPacket {
+            expected_header_len: bytes.len(),
+            bytes,
+            expected_full_fields: vec![
+                ("version", Value::U64(1)),
+                ("packet_type", Value::U64(3)),
+                ("body_length", Value::U64(95)),
+                ("key_descriptor_type", Value::U64(2)),
+                ("key_info", Value::U64(0x008A)),
+                ("key_length", Value::U64(16)),
+                ("replay_counter", Value::U64(1)),
+                ("nonce", Value::from(&[0xAAu8; 32][..])),
+                ("key_iv", Value::from(&[0u8; 16][..])),
+                ("key_rsc", Value::U64(0)),
+                ("key_mic", Value::from(&[0u8; 16][..])),
+                ("key_data_length", Value::U64(0)),
+            ],
+            expected_hint: Hint::Terminal,
+        }],
         outer_ctx: Vec::new(),
     });
 }
