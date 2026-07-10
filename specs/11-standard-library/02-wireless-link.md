@@ -77,21 +77,27 @@ across two different physical media without either side knowing about the other.
   is always the declared `it_len`, not however far the local field walk went — the walk is
   cross-checked to never claim to have read past it.
 - `crates/pktflow-plugins/src/dot11.rs` — one MAC-header parse branching on frame
-  type/subtype (management/control/data), all multi-octet fields read little-endian (802.11
-  is LSB-first on the wire, unlike Ethernet/IP). `header_len` is the fixed address/sequence/QoS
-  shape for control and data frames (the boundary `llc` starts from); for management frames —
-  always `Hint::Terminal`, so nothing ever reads past this layer — the whole frame including
-  the bounded SSID information-element walk is the header, same stance as CDP/LLDP/STP (11.1).
-- Conformance-kit coverage (`tests/conformance.rs`) is deliberately a representative subset,
-  not the full acceptance-criteria breadth: management frames read their entire remaining
-  buffer as `Hint::Terminal` "header" with no required terminator, so a truncated prefix can
-  legitimately still parse (a smaller, self-consistent `header_len`) — which the kit's
-  truncation-sweep rule cannot distinguish from a lying plugin. ACK/CTS control frames carry
-  no `addr2`, which the kit's flow-key-presence rule requires for every sample once a plugin
-  declares a `{addr1, addr2}` identity. Both cases are exhaustively covered by `dot11.rs`'s own
-  `#[cfg(test)]` module instead (matches `llc_conforms`'s existing precedent of a narrower
-  kit subset plus full in-file breadth).
-- `tests/wireless.rs` — the domain's cross-medium composition claim, exercised end to end via
-  `Engine::dissect`/`Aggregator`: the 802.11 link stream fold, the real
-  radiotap ▸ dot11 ▸ llc ▸ eapol chain for all four handshake messages, and the protected-frame
-  stop.
+  type/subtype (management/control/data). Both `radiotap` and `dot11` read their little-endian
+  multi-octet fields (802.11 and radiotap.org are both LSB-first on the wire, unlike
+  Ethernet/IP) via `ByteReader::u16_le`/`u32_le` (`crates/pktflow-core/src/bytes.rs`), added
+  alongside the existing big-endian readers rather than duplicated as private per-file helpers.
+  For Beacon/Probe Request/Probe Response, the SSID information element is read as a
+  *required* part of the header (802.11-2020 §9.4.2.2 mandates it present, possibly
+  zero-length, as the first element after each subtype's fixed fields) — its absence or
+  truncation declines the whole parse rather than degrading to a missing field. This keeps
+  `header_len` fully deterministic for every frame shape (control, data, and management alike),
+  so the 09.1 conformance kit's truncation-sweep rule holds uniformly with no per-plugin
+  carve-out, and a beacon-with-SSID sample sits directly in `dot11_conforms`'s `ConformanceCase`
+  alongside the QoS-data sample. Control frames use an explicit allow-list of subtypes that
+  carry Address 2 (Block Ack Request/Response, PS-Poll, RTS) rather than a deny-list of the
+  ones that don't (ACK, CTS) — safer under the header-shape ambiguity of the many control
+  subtypes this task doesn't otherwise specify, since a false "no addr2" only loses a field,
+  while a false "has addr2" would misattribute six bytes of payload as an address. Reserved/
+  Extension frame types (802.11-2020's later amendments, not modeled) decline outright rather
+  than returning a fabricated partial header.
+- `tests/link.rs` carries the 802.11-only coverage (management/control/data fixtures inside
+  `dot11.rs`'s own tests; the AP↔STA link-stream fold and the `dot11 ▸ llc ▸ eapol` composition
+  — message 1, unprotected, reached directly via `LinkType(105)` — as integration tests
+  alongside 06.2's Ethernet equivalents). `tests/wireless.rs` carries the pieces only `radiotap`
+  adds: entry via `LinkType(127)`, the full `radiotap ▸ dot11 ▸ llc ▸ eapol` chain for all four
+  handshake messages, and the protected-frame stop reached through the `radiotap` prefix.

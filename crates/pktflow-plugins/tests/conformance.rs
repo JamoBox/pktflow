@@ -990,94 +990,73 @@ fn radiotap_conforms() {
     });
 }
 
-const DOT11_AP: [u8; 6] = [0x02, 0x00, 0x00, 0x00, 0x00, 0x01];
-const DOT11_STA: [u8; 6] = [0x02, 0x00, 0x00, 0x00, 0x00, 0x02];
-const DOT11_DA: [u8; 6] = [0x0A, 0x00, 0x00, 0x00, 0x00, 0x09];
-
-fn dot11_fc(frame_type: u8, subtype: u8) -> u8 {
-    (subtype << 4) | (frame_type << 2)
-}
-
 #[test]
 fn dot11_conforms() {
-    // RTS (control, subtype 0b1011): RA + TA, no body — the one control
-    // subtype besides ACK/CTS, and the only one of the three that carries
-    // both addresses the declared stream identity needs.
-    let mut rts = vec![dot11_fc(1, 0b1011), 0x00];
-    rts.extend_from_slice(&44u16.to_le_bytes());
-    rts.extend_from_slice(&DOT11_AP);
-    rts.extend_from_slice(&DOT11_STA);
+    const AP: [u8; 6] = [0x02, 0x1A, 0x2B, 0x3C, 0x4D, 0x5E];
+    const STA: [u8; 6] = [0x00, 0x1B, 0x44, 0x11, 0x3A, 0xB7];
 
-    // QoS Data (data, subtype 0b1000), unprotected, to-DS, carrying an
-    // RFC-1042 LLC/SNAP IPv4 payload — the "ordinary data frame" path
-    // that hands off to `llc`.
-    let mut qos_data = vec![dot11_fc(2, 0b1000), 0x01];
-    qos_data.extend_from_slice(&0u16.to_le_bytes());
-    qos_data.extend_from_slice(&DOT11_AP);
-    qos_data.extend_from_slice(&DOT11_STA);
-    qos_data.extend_from_slice(&DOT11_DA);
-    qos_data.extend_from_slice(&0x0030u16.to_le_bytes()); // seq_ctl: seq=3
-    qos_data.extend_from_slice(&0u16.to_le_bytes()); // qos_control
-    qos_data.extend_from_slice(&[0xAA, 0xAA, 0x03, 0x00, 0x00, 0x00, 0x08, 0x00]);
+    // Beacon (802.11-2020 §9.3.3.3): broadcast RA, AP as TA/BSSID, SSID
+    // "ExampleNet" as the mandated first information element.
+    let mut beacon = vec![0x80, 0x00]; // Management / Beacon
+    beacon.extend_from_slice(&0x0000u16.to_le_bytes()); // duration
+    beacon.extend_from_slice(&[0xFF; 6]); // addr1: broadcast
+    beacon.extend_from_slice(&AP); // addr2: TA
+    beacon.extend_from_slice(&AP); // addr3: BSSID
+    beacon.extend_from_slice(&0x1230u16.to_le_bytes()); // seq_ctrl: frag 0, seq 0x123
+    beacon.extend_from_slice(&[0u8; 8]); // timestamp
+    beacon.extend_from_slice(&0x0064u16.to_le_bytes()); // beacon interval
+    beacon.extend_from_slice(&0x0421u16.to_le_bytes()); // capability info
+    beacon.push(0); // SSID element id
+    beacon.push(10); // SSID length
+    beacon.extend_from_slice(b"ExampleNet");
 
-    // Same shape with the Protected Frame bit set: stops at dot11, the
-    // encrypted remainder is never handed to `llc`.
-    let mut qos_data_protected = vec![dot11_fc(2, 0b1000), 0x01 | 0x40];
-    qos_data_protected.extend_from_slice(&0u16.to_le_bytes());
-    qos_data_protected.extend_from_slice(&DOT11_AP);
-    qos_data_protected.extend_from_slice(&DOT11_STA);
-    qos_data_protected.extend_from_slice(&DOT11_DA);
-    qos_data_protected.extend_from_slice(&0x0030u16.to_le_bytes());
-    qos_data_protected.extend_from_slice(&0u16.to_le_bytes());
-    qos_data_protected.extend_from_slice(&[0xDE, 0xAD, 0xBE, 0xEF]);
+    // Unprotected QoS data, AP -> STA (from_ds), LLC/SNAP-encapsulated ARP
+    // payload trailing beyond `header_len` — proves `ByProtocol("llc")`
+    // hands off exactly where the fixed 802.11 header ends (11.1's `llc`
+    // reused unmodified, task 11.2's central composition claim).
+    let mut qos_data = vec![0x88, 0x02]; // Data / QoS Data, from_ds=1
+    qos_data.extend_from_slice(&0x0000u16.to_le_bytes()); // duration
+    qos_data.extend_from_slice(&STA); // addr1: DA
+    qos_data.extend_from_slice(&AP); // addr2: TA/BSSID
+    qos_data.extend_from_slice(&AP); // addr3: SA
+    qos_data.extend_from_slice(&0x0470u16.to_le_bytes()); // seq_ctrl: seq 0x047
+    qos_data.extend_from_slice(&0x0000u16.to_le_bytes()); // qos_control
+    qos_data.extend_from_slice(&[0xAA, 0xAA, 0x03, 0x00, 0x00, 0x00, 0x08, 0x06]); // LLC/SNAP -> ARP
 
     run_conformance(&ConformanceCase {
         plugin: Box::new(Dot11),
         good: vec![
             GoodPacket {
-                expected_header_len: rts.len(),
-                bytes: rts,
+                bytes: beacon,
+                expected_header_len: 48,
                 expected_full_fields: vec![
-                    ("addr1", Value::from(&DOT11_AP[..])),
-                    ("addr2", Value::from(&DOT11_STA[..])),
-                    ("frame_type", Value::U64(1)),
-                    ("frame_subtype", Value::U64(0b1011)),
+                    ("frame_type", Value::U64(0)),
+                    ("frame_subtype", Value::U64(0x8)),
                     ("flags", Value::U64(0)),
-                    ("duration", Value::U64(44)),
+                    ("duration", Value::U64(0)),
+                    ("addr1", Value::from(&[0xFF; 6][..])),
+                    ("addr2", Value::from(&AP[..])),
+                    ("addr3", Value::from(&AP[..])),
+                    ("seq_num", Value::U64(0x123)),
+                    ("ssid", Value::from("ExampleNet")),
                 ],
                 expected_hint: Hint::Terminal,
             },
             GoodPacket {
-                expected_header_len: 26,
                 bytes: qos_data,
+                expected_header_len: 26,
                 expected_full_fields: vec![
-                    ("addr1", Value::from(&DOT11_AP[..])),
-                    ("addr2", Value::from(&DOT11_STA[..])),
-                    ("addr3", Value::from(&DOT11_DA[..])),
                     ("frame_type", Value::U64(2)),
-                    ("frame_subtype", Value::U64(0b1000)),
-                    ("flags", Value::U64(0x01)),
+                    ("frame_subtype", Value::U64(0x8)),
+                    ("flags", Value::U64(0x02)),
                     ("duration", Value::U64(0)),
-                    ("seq_num", Value::U64(3)),
+                    ("addr1", Value::from(&STA[..])),
+                    ("addr2", Value::from(&AP[..])),
+                    ("addr3", Value::from(&AP[..])),
+                    ("seq_num", Value::U64(0x047)),
                     ("qos_control", Value::U64(0)),
                 ],
                 expected_hint: Hint::ByProtocol("llc"),
-            },
-            GoodPacket {
-                expected_header_len: 26,
-                bytes: qos_data_protected,
-                expected_full_fields: vec![
-                    ("addr1", Value::from(&DOT11_AP[..])),
-                    ("addr2", Value::from(&DOT11_STA[..])),
-                    ("addr3", Value::from(&DOT11_DA[..])),
-                    ("frame_type", Value::U64(2)),
-                    ("frame_subtype", Value::U64(0b1000)),
-                    ("flags", Value::U64(0x41)),
-                    ("duration", Value::U64(0)),
-                    ("seq_num", Value::U64(3)),
-                    ("qos_control", Value::U64(0)),
-                ],
-                expected_hint: Hint::Terminal,
             },
         ],
         outer_ctx: Vec::new(),

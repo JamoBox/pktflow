@@ -61,16 +61,6 @@ const BIT_RATE: u32 = 2;
 const BIT_CHANNEL: u32 = 3;
 const BIT_ANTENNA_SIGNAL: u32 = 5;
 
-fn u16_le(r: &mut ByteReader) -> Result<u16, ParseError> {
-    let b = r.take(2)?;
-    Ok(u16::from_le_bytes([b[0], b[1]]))
-}
-
-fn u32_le(r: &mut ByteReader) -> Result<u32, ParseError> {
-    let b = r.take(4)?;
-    Ok(u32::from_le_bytes([b[0], b[1], b[2], b[3]]))
-}
-
 pub struct Radiotap;
 
 impl LayerPlugin for Radiotap {
@@ -82,7 +72,7 @@ impl LayerPlugin for Radiotap {
         let mut r = ByteReader::new(bytes);
         let it_version = r.u8()?;
         let _it_pad = r.u8()?;
-        let it_len = u16_le(&mut r)?;
+        let it_len = r.u16_le()?;
         let header_len = usize::from(it_len);
         if header_len > bytes.len() {
             return Err(ParseError::Malformed(
@@ -92,7 +82,7 @@ impl LayerPlugin for Radiotap {
 
         // Present-word chain: word 0 always exists; further words only if
         // the previous word's bit 31 is set, bounded (see MAX_PRESENT_WORDS).
-        let it_present = u32_le(&mut r)?;
+        let it_present = r.u32_le()?;
         let mut word = it_present;
         let mut words_read = 1;
         while word & PRESENT_EXTENSION_BIT != 0 {
@@ -101,7 +91,7 @@ impl LayerPlugin for Radiotap {
                     "radiotap: present-word chain exceeds the 8-word bound",
                 ));
             }
-            word = u32_le(&mut r)?;
+            word = r.u32_le()?;
             words_read += 1;
         }
 
