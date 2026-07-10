@@ -58,14 +58,40 @@ across two different physical media without either side knowing about the other.
 | WPS | Wi-Fi Alliance WPS spec | Registrar/enrollee negotiation, EAP-WSC inner method |
 
 ## Acceptance criteria
-- [ ] `radiotap` fixtures across several present-word configurations parse to exact expected
+- [x] `radiotap` fixtures across several present-word configurations parse to exact expected
       fields; a present-word chain forced past the 8-word bound declines cleanly.
-- [ ] `dot11` fixtures cover management (beacon with SSID extracted), control (ACK/RTS/CTS —
+- [x] `dot11` fixtures cover management (beacon with SSID extracted), control (ACK/RTS/CTS —
       `Terminal`, no body), and data (both protected and unprotected) subtypes.
-- [ ] 802.11 link stream forms on `{addr1, addr2}`, folds both directions on an
+- [x] 802.11 link stream forms on `{addr1, addr2}`, folds both directions on an
       AP↔STA exchange fixture (mirrors 06.2's MAC-conversation criterion).
-- [ ] Real 4-way-handshake fixture (radiotap ▸ dot11 ▸ llc ▸ eapol, unprotected) parses all
+- [x] Real 4-way-handshake fixture (radiotap ▸ dot11 ▸ llc ▸ eapol, unprotected) parses all
       four `Key` messages with exact `key_info`/`nonce` fields via the unmodified 11.1
       `eapol` plugin — proves the cross-medium composition claim above, not just asserts it.
-- [ ] A protected (post-handshake) data frame fixture stops at `dot11` with
+- [x] A protected (post-handshake) data frame fixture stops at `dot11` with
       `StopReason::Terminal`, never attempting `llc` on encrypted bytes.
+
+## Implementation notes
+- `crates/pktflow-plugins/src/radiotap.rs` — walks the present-word chain (bounded to 8
+  words) and the fixed-order field layout for bits 0-5 only (the fields this plugin names),
+  each aligned to its own size from the start of the header, per radiotap.org. `header_len`
+  is always the declared `it_len`, not however far the local field walk went — the walk is
+  cross-checked to never claim to have read past it.
+- `crates/pktflow-plugins/src/dot11.rs` — one MAC-header parse branching on frame
+  type/subtype (management/control/data), all multi-octet fields read little-endian (802.11
+  is LSB-first on the wire, unlike Ethernet/IP). `header_len` is the fixed address/sequence/QoS
+  shape for control and data frames (the boundary `llc` starts from); for management frames —
+  always `Hint::Terminal`, so nothing ever reads past this layer — the whole frame including
+  the bounded SSID information-element walk is the header, same stance as CDP/LLDP/STP (11.1).
+- Conformance-kit coverage (`tests/conformance.rs`) is deliberately a representative subset,
+  not the full acceptance-criteria breadth: management frames read their entire remaining
+  buffer as `Hint::Terminal` "header" with no required terminator, so a truncated prefix can
+  legitimately still parse (a smaller, self-consistent `header_len`) — which the kit's
+  truncation-sweep rule cannot distinguish from a lying plugin. ACK/CTS control frames carry
+  no `addr2`, which the kit's flow-key-presence rule requires for every sample once a plugin
+  declares a `{addr1, addr2}` identity. Both cases are exhaustively covered by `dot11.rs`'s own
+  `#[cfg(test)]` module instead (matches `llc_conforms`'s existing precedent of a narrower
+  kit subset plus full in-file breadth).
+- `tests/wireless.rs` — the domain's cross-medium composition claim, exercised end to end via
+  `Engine::dissect`/`Aggregator`: the 802.11 link stream fold, the real
+  radiotap ▸ dot11 ▸ llc ▸ eapol chain for all four handshake messages, and the protected-frame
+  stop.

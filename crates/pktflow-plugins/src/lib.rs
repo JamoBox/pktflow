@@ -9,6 +9,7 @@ pub mod arp;
 pub mod cdp;
 pub mod dhcp;
 pub mod dns;
+pub mod dot11;
 pub mod eapol;
 pub mod ethernet;
 pub mod gre;
@@ -21,6 +22,7 @@ pub mod llc;
 pub mod lldp;
 pub mod ntp;
 pub mod pvst_plus;
+pub mod radiotap;
 pub mod stp;
 pub mod tcp;
 pub mod template;
@@ -54,6 +56,8 @@ pub fn default_engine() -> Engine {
         .plugin(stp::Stp)
         .plugin(pvst_plus::PvstPlus)
         .plugin(eapol::Eapol)
+        .plugin(radiotap::Radiotap)
+        .plugin(dot11::Dot11)
         .build()
         // Not input-derived: a collision here is a bug in this very list,
         // caught by the registry's build-time validation (03.2).

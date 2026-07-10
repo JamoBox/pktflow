@@ -9,6 +9,7 @@ use pktflow_plugins::arp::Arp;
 use pktflow_plugins::cdp::Cdp;
 use pktflow_plugins::dhcp::Dhcp;
 use pktflow_plugins::dns::Dns;
+use pktflow_plugins::dot11::Dot11;
 use pktflow_plugins::eapol::Eapol;
 use pktflow_plugins::ethernet::Ethernet;
 use pktflow_plugins::gre::Gre;
@@ -21,6 +22,7 @@ use pktflow_plugins::llc::Llc;
 use pktflow_plugins::lldp::Lldp;
 use pktflow_plugins::ntp::Ntp;
 use pktflow_plugins::pvst_plus::PvstPlus;
+use pktflow_plugins::radiotap::Radiotap;
 use pktflow_plugins::stp::Stp;
 use pktflow_plugins::tcp::Tcp;
 use pktflow_plugins::template::Template;
@@ -937,6 +939,147 @@ fn eapol_conforms() {
             ],
             expected_hint: Hint::Terminal,
         }],
+        outer_ctx: Vec::new(),
+    });
+}
+
+#[test]
+fn radiotap_conforms() {
+    // Minimal header: no fields present, it_present = 0.
+    let minimal = vec![
+        0x00, 0x00, // it_version, it_pad
+        0x08, 0x00, // it_len = 8 (LE)
+        0x00, 0x00, 0x00, 0x00, // it_present: nothing set
+    ];
+
+    // Rate (bit 2) + Antenna Signal (bit 5) present, both 1-byte aligned
+    // and contiguous right after the header.
+    let present = (1u32 << 2) | (1u32 << 5);
+    let mut rate_and_signal = vec![0x00, 0x00, 0x0A, 0x00];
+    rate_and_signal.extend_from_slice(&present.to_le_bytes());
+    rate_and_signal.push(0x02); // rate: 1 Mbps (500 kbps units)
+    rate_and_signal.push((-71i8) as u8); // antenna_signal: -71 dBm
+
+    run_conformance(&ConformanceCase {
+        plugin: Box::new(Radiotap),
+        good: vec![
+            GoodPacket {
+                expected_header_len: 8,
+                bytes: minimal,
+                expected_full_fields: vec![
+                    ("it_version", Value::U64(0)),
+                    ("it_len", Value::U64(8)),
+                    ("it_present", Value::U64(0)),
+                ],
+                expected_hint: Hint::ByProtocol("dot11"),
+            },
+            GoodPacket {
+                expected_header_len: 10,
+                bytes: rate_and_signal,
+                expected_full_fields: vec![
+                    ("it_version", Value::U64(0)),
+                    ("it_len", Value::U64(10)),
+                    ("it_present", Value::U64(0x24)),
+                    ("rate", Value::U64(2)),
+                    ("antenna_signal", Value::I64(-71)),
+                ],
+                expected_hint: Hint::ByProtocol("dot11"),
+            },
+        ],
+        outer_ctx: Vec::new(),
+    });
+}
+
+const DOT11_AP: [u8; 6] = [0x02, 0x00, 0x00, 0x00, 0x00, 0x01];
+const DOT11_STA: [u8; 6] = [0x02, 0x00, 0x00, 0x00, 0x00, 0x02];
+const DOT11_DA: [u8; 6] = [0x0A, 0x00, 0x00, 0x00, 0x00, 0x09];
+
+fn dot11_fc(frame_type: u8, subtype: u8) -> u8 {
+    (subtype << 4) | (frame_type << 2)
+}
+
+#[test]
+fn dot11_conforms() {
+    // RTS (control, subtype 0b1011): RA + TA, no body — the one control
+    // subtype besides ACK/CTS, and the only one of the three that carries
+    // both addresses the declared stream identity needs.
+    let mut rts = vec![dot11_fc(1, 0b1011), 0x00];
+    rts.extend_from_slice(&44u16.to_le_bytes());
+    rts.extend_from_slice(&DOT11_AP);
+    rts.extend_from_slice(&DOT11_STA);
+
+    // QoS Data (data, subtype 0b1000), unprotected, to-DS, carrying an
+    // RFC-1042 LLC/SNAP IPv4 payload — the "ordinary data frame" path
+    // that hands off to `llc`.
+    let mut qos_data = vec![dot11_fc(2, 0b1000), 0x01];
+    qos_data.extend_from_slice(&0u16.to_le_bytes());
+    qos_data.extend_from_slice(&DOT11_AP);
+    qos_data.extend_from_slice(&DOT11_STA);
+    qos_data.extend_from_slice(&DOT11_DA);
+    qos_data.extend_from_slice(&0x0030u16.to_le_bytes()); // seq_ctl: seq=3
+    qos_data.extend_from_slice(&0u16.to_le_bytes()); // qos_control
+    qos_data.extend_from_slice(&[0xAA, 0xAA, 0x03, 0x00, 0x00, 0x00, 0x08, 0x00]);
+
+    // Same shape with the Protected Frame bit set: stops at dot11, the
+    // encrypted remainder is never handed to `llc`.
+    let mut qos_data_protected = vec![dot11_fc(2, 0b1000), 0x01 | 0x40];
+    qos_data_protected.extend_from_slice(&0u16.to_le_bytes());
+    qos_data_protected.extend_from_slice(&DOT11_AP);
+    qos_data_protected.extend_from_slice(&DOT11_STA);
+    qos_data_protected.extend_from_slice(&DOT11_DA);
+    qos_data_protected.extend_from_slice(&0x0030u16.to_le_bytes());
+    qos_data_protected.extend_from_slice(&0u16.to_le_bytes());
+    qos_data_protected.extend_from_slice(&[0xDE, 0xAD, 0xBE, 0xEF]);
+
+    run_conformance(&ConformanceCase {
+        plugin: Box::new(Dot11),
+        good: vec![
+            GoodPacket {
+                expected_header_len: rts.len(),
+                bytes: rts,
+                expected_full_fields: vec![
+                    ("addr1", Value::from(&DOT11_AP[..])),
+                    ("addr2", Value::from(&DOT11_STA[..])),
+                    ("frame_type", Value::U64(1)),
+                    ("frame_subtype", Value::U64(0b1011)),
+                    ("flags", Value::U64(0)),
+                    ("duration", Value::U64(44)),
+                ],
+                expected_hint: Hint::Terminal,
+            },
+            GoodPacket {
+                expected_header_len: 26,
+                bytes: qos_data,
+                expected_full_fields: vec![
+                    ("addr1", Value::from(&DOT11_AP[..])),
+                    ("addr2", Value::from(&DOT11_STA[..])),
+                    ("addr3", Value::from(&DOT11_DA[..])),
+                    ("frame_type", Value::U64(2)),
+                    ("frame_subtype", Value::U64(0b1000)),
+                    ("flags", Value::U64(0x01)),
+                    ("duration", Value::U64(0)),
+                    ("seq_num", Value::U64(3)),
+                    ("qos_control", Value::U64(0)),
+                ],
+                expected_hint: Hint::ByProtocol("llc"),
+            },
+            GoodPacket {
+                expected_header_len: 26,
+                bytes: qos_data_protected,
+                expected_full_fields: vec![
+                    ("addr1", Value::from(&DOT11_AP[..])),
+                    ("addr2", Value::from(&DOT11_STA[..])),
+                    ("addr3", Value::from(&DOT11_DA[..])),
+                    ("frame_type", Value::U64(2)),
+                    ("frame_subtype", Value::U64(0b1000)),
+                    ("flags", Value::U64(0x41)),
+                    ("duration", Value::U64(0)),
+                    ("seq_num", Value::U64(3)),
+                    ("qos_control", Value::U64(0)),
+                ],
+                expected_hint: Hint::Terminal,
+            },
+        ],
         outer_ctx: Vec::new(),
     });
 }
