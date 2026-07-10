@@ -17,6 +17,7 @@ use pktflow_plugins::ipv6::Ipv6;
 use pktflow_plugins::llc::Llc;
 use pktflow_plugins::lldp::Lldp;
 use pktflow_plugins::ntp::Ntp;
+use pktflow_plugins::stp::Stp;
 use pktflow_plugins::tcp::Tcp;
 use pktflow_plugins::template::Template;
 use pktflow_plugins::udp::Udp;
@@ -675,6 +676,67 @@ fn llc_conforms() {
                     ("pid", Value::U64(0x0800)),
                 ],
                 expected_hint: Hint::Route(RouteId::EtherType(0x0800)),
+            },
+        ],
+        outer_ctx: Vec::new(),
+    });
+}
+
+#[test]
+fn stp_conforms() {
+    // Classic Configuration BPDU (802.1D-2004 §9.3.1): version 0, this
+    // bridge is not the root.
+    let mut config = vec![0x00, 0x00, 0x00, 0x00];
+    config.push(0x00); // flags
+    config.extend_from_slice(&[0x80, 0x00, 0x00, 0x1A, 0x2B, 0x3C, 0x4D, 0x5E]); // root_id
+    config.extend_from_slice(&4u32.to_be_bytes()); // root_path_cost
+    config.extend_from_slice(&[0x80, 0x00, 0x00, 0x1B, 0x44, 0x11, 0x3A, 0xB7]); // bridge_id
+    config.extend_from_slice(&0x8001u16.to_be_bytes()); // port_id
+    config.extend_from_slice(&0u16.to_be_bytes()); // message_age
+    config.extend_from_slice(&0x1400u16.to_be_bytes()); // max_age
+    config.extend_from_slice(&0x0200u16.to_be_bytes()); // hello_time
+    config.extend_from_slice(&0x0F00u16.to_be_bytes()); // forward_delay
+
+    // TCN BPDU (§9.3.2): 4 bytes total, nothing more.
+    let tcn = vec![0x00, 0x00, 0x00, 0x80];
+
+    run_conformance(&ConformanceCase {
+        plugin: Box::new(Stp),
+        good: vec![
+            GoodPacket {
+                expected_header_len: config.len(),
+                bytes: config,
+                expected_full_fields: vec![
+                    ("protocol_id", Value::U64(0)),
+                    ("version", Value::U64(0)),
+                    ("bpdu_type", Value::U64(0)),
+                    ("flags", Value::U64(0)),
+                    (
+                        "root_id",
+                        Value::from(&[0x80, 0x00, 0x00, 0x1A, 0x2B, 0x3C, 0x4D, 0x5E][..]),
+                    ),
+                    ("root_path_cost", Value::U64(4)),
+                    (
+                        "bridge_id",
+                        Value::from(&[0x80, 0x00, 0x00, 0x1B, 0x44, 0x11, 0x3A, 0xB7][..]),
+                    ),
+                    ("port_id", Value::U64(0x8001)),
+                    ("message_age", Value::U64(0)),
+                    ("max_age", Value::U64(0x1400)),
+                    ("hello_time", Value::U64(0x0200)),
+                    ("forward_delay", Value::U64(0x0F00)),
+                ],
+                expected_hint: Hint::Terminal,
+            },
+            GoodPacket {
+                expected_header_len: tcn.len(),
+                bytes: tcn,
+                expected_full_fields: vec![
+                    ("protocol_id", Value::U64(0)),
+                    ("version", Value::U64(0)),
+                    ("bpdu_type", Value::U64(0x80)),
+                ],
+                expected_hint: Hint::Terminal,
             },
         ],
         outer_ctx: Vec::new(),

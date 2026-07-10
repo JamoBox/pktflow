@@ -17,6 +17,7 @@ pub mod ipv6;
 pub mod llc;
 pub mod lldp;
 pub mod ntp;
+pub mod stp;
 pub mod tcp;
 pub mod template;
 pub mod udp;
@@ -44,6 +45,7 @@ pub fn default_engine() -> Engine {
         .plugin(ntp::Ntp)
         .plugin(lldp::Lldp)
         .plugin(llc::Llc)
+        .plugin(stp::Stp)
         .build()
         // Not input-derived: a collision here is a bug in this very list,
         // caught by the registry's build-time validation (03.2).
