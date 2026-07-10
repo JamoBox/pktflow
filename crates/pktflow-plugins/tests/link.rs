@@ -161,39 +161,63 @@ fn lldp_route_id_is_the_registered_ethertype() {
     );
 }
 
+/// Classic STP Configuration BPDU (802.1D-2004 §9.3.1): version 0, this
+/// bridge is not the root (root priority 0x8000, root mac
+/// 00:1a:2b:3c:4d:5e; bridge priority 0x8000, bridge mac
+/// 00:1b:44:11:3a:b7).
+fn stp_config_bpdu() -> Vec<u8> {
+    let mut b = vec![0x00, 0x00, 0x00, 0x00];
+    b.push(0x00); // flags
+    b.extend_from_slice(&[0x80, 0x00, 0x00, 0x1A, 0x2B, 0x3C, 0x4D, 0x5E]); // root_id
+    b.extend_from_slice(&4u32.to_be_bytes()); // root_path_cost
+    b.extend_from_slice(&[0x80, 0x00, 0x00, 0x1B, 0x44, 0x11, 0x3A, 0xB7]); // bridge_id
+    b.extend_from_slice(&0x8001u16.to_be_bytes()); // port_id
+    b.extend_from_slice(&0u16.to_be_bytes()); // message_age
+    b.extend_from_slice(&0x1400u16.to_be_bytes()); // max_age
+    b.extend_from_slice(&0x0200u16.to_be_bytes()); // hello_time
+    b.extend_from_slice(&0x0F00u16.to_be_bytes()); // forward_delay
+    b
+}
+
 #[test]
-fn eth_802_3_length_field_falls_back_to_llc_via_the_heuristic_pool() {
-    // ethertype 0x0003 is an 802.3 *length* (< 0x0600), so ethernet
-    // (06.2) emits Hint::Unknown rather than guessing — this is exactly
-    // the case 11.1's llc plugin exists to catch. Bridge Group Address
-    // destination (STP's fixed multicast target) also exercises the
-    // cross-layer dst_mac boost on llc's probe.
+fn eth_802_3_length_field_falls_back_through_llc_to_stp_end_to_end() {
+    // ethertype's low value is an 802.3 *length* (< 0x0600), so ethernet
+    // (06.2) emits Hint::Unknown rather than guessing; llc (11.1) wins
+    // the fallback pool and routes dsap 0x42 to stp via the llc_dsap
+    // Custom space. Bridge Group Address destination (STP's fixed
+    // multicast target) also exercises llc's cross-layer dst_mac probe
+    // boost along the way.
     const IEEE_BRIDGE_GROUP: [u8; 6] = [0x01, 0x80, 0xC2, 0x00, 0x00, 0x00];
 
     let engine = Arc::new(default_engine());
-    let mut pkt = eth_frame(IEEE_BRIDGE_GROUP, MAC_A, 0x0003);
-    pkt.extend_from_slice(&[0x42, 0x42, 0x03]); // STP-shaped LLC: dsap=ssap=0x42, U-format control
-                                                // A BPDU would follow in a real capture; stp isn't
-                                                // implemented yet (later PR), so this is opaque
-                                                // payload proving the route lookup itself, not a
-                                                // zero-remaining-payload `Complete` short-circuit.
-    pkt.extend_from_slice(&[0xDE, 0xAD, 0xBE, 0xEF]);
+    let mut agg = Aggregator::new(&engine, AggregatorConfig::default());
+
+    let bpdu = stp_config_bpdu();
+    let mut pkt = eth_frame(
+        IEEE_BRIDGE_GROUP,
+        MAC_A,
+        u16::try_from(3 + bpdu.len()).expect("fixture length fits in a u16"),
+    );
+    pkt.extend_from_slice(&[0x42, 0x42, 0x03]); // dsap=ssap=0x42, U-format control
+    pkt.extend_from_slice(&bpdu);
 
     let m = meta(pkt.len(), 0);
     let packet = engine.dissect(&pkt, m, ParseOpts::default());
     let protocols: Vec<_> = packet.layers.iter().map(|l| l.protocol).collect();
-    assert_eq!(protocols, ["ethernet", "llc"], "llc wins the fallback pool");
+    assert_eq!(protocols, ["ethernet", "llc", "stp"]);
     assert_eq!(packet.layers[1].fields.get("dsap"), Some(&Value::U64(0x42)));
-
-    // No plugin claims llc_dsap:0x42 yet (stp/cdp land in a later PR) —
-    // an honest unclaimed stop, not a phantom layer.
     assert_eq!(
-        packet.stop,
-        StopReason::UnclaimedRoute(RouteId::Custom {
-            space: "llc_dsap",
-            id: 0x42,
-        })
+        packet.layers[2].fields.get("root_path_cost"),
+        Some(&Value::U64(4))
     );
+    assert_eq!(packet.stop, StopReason::Complete);
+
+    agg.ingest(&packet);
+    // stp is identity-less like ARP/LLDP/CDP: one MAC-conversation
+    // stream, zero stp streams — llc bridges the identity-less chain the
+    // same way vlan does (06.2's deferred criterion).
+    assert_eq!(agg.len(), 1, "stp forms no stream of its own");
+    assert_eq!(agg.streams().next().expect("stream").protocol, "ethernet");
 }
 
 #[test]
