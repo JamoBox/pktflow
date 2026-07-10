@@ -9,6 +9,7 @@ use pktflow_plugins::arp::Arp;
 use pktflow_plugins::cdp::Cdp;
 use pktflow_plugins::dhcp::Dhcp;
 use pktflow_plugins::dns::Dns;
+use pktflow_plugins::dot11::Dot11;
 use pktflow_plugins::eapol::Eapol;
 use pktflow_plugins::ethernet::Ethernet;
 use pktflow_plugins::gre::Gre;
@@ -21,6 +22,7 @@ use pktflow_plugins::llc::Llc;
 use pktflow_plugins::lldp::Lldp;
 use pktflow_plugins::ntp::Ntp;
 use pktflow_plugins::pvst_plus::PvstPlus;
+use pktflow_plugins::radiotap::Radiotap;
 use pktflow_plugins::stp::Stp;
 use pktflow_plugins::tcp::Tcp;
 use pktflow_plugins::template::Template;
@@ -937,6 +939,126 @@ fn eapol_conforms() {
             ],
             expected_hint: Hint::Terminal,
         }],
+        outer_ctx: Vec::new(),
+    });
+}
+
+#[test]
+fn radiotap_conforms() {
+    // Minimal header: no fields present, it_present = 0.
+    let minimal = vec![
+        0x00, 0x00, // it_version, it_pad
+        0x08, 0x00, // it_len = 8 (LE)
+        0x00, 0x00, 0x00, 0x00, // it_present: nothing set
+    ];
+
+    // Rate (bit 2) + Antenna Signal (bit 5) present, both 1-byte aligned
+    // and contiguous right after the header.
+    let present = (1u32 << 2) | (1u32 << 5);
+    let mut rate_and_signal = vec![0x00, 0x00, 0x0A, 0x00];
+    rate_and_signal.extend_from_slice(&present.to_le_bytes());
+    rate_and_signal.push(0x02); // rate: 1 Mbps (500 kbps units)
+    rate_and_signal.push((-71i8) as u8); // antenna_signal: -71 dBm
+
+    run_conformance(&ConformanceCase {
+        plugin: Box::new(Radiotap),
+        good: vec![
+            GoodPacket {
+                expected_header_len: 8,
+                bytes: minimal,
+                expected_full_fields: vec![
+                    ("it_version", Value::U64(0)),
+                    ("it_len", Value::U64(8)),
+                    ("it_present", Value::U64(0)),
+                ],
+                expected_hint: Hint::ByProtocol("dot11"),
+            },
+            GoodPacket {
+                expected_header_len: 10,
+                bytes: rate_and_signal,
+                expected_full_fields: vec![
+                    ("it_version", Value::U64(0)),
+                    ("it_len", Value::U64(10)),
+                    ("it_present", Value::U64(0x24)),
+                    ("rate", Value::U64(2)),
+                    ("antenna_signal", Value::I64(-71)),
+                ],
+                expected_hint: Hint::ByProtocol("dot11"),
+            },
+        ],
+        outer_ctx: Vec::new(),
+    });
+}
+
+#[test]
+fn dot11_conforms() {
+    const AP: [u8; 6] = [0x02, 0x1A, 0x2B, 0x3C, 0x4D, 0x5E];
+    const STA: [u8; 6] = [0x00, 0x1B, 0x44, 0x11, 0x3A, 0xB7];
+
+    // Beacon (802.11-2020 §9.3.3.3): broadcast RA, AP as TA/BSSID, SSID
+    // "ExampleNet" as the mandated first information element.
+    let mut beacon = vec![0x80, 0x00]; // Management / Beacon
+    beacon.extend_from_slice(&0x0000u16.to_le_bytes()); // duration
+    beacon.extend_from_slice(&[0xFF; 6]); // addr1: broadcast
+    beacon.extend_from_slice(&AP); // addr2: TA
+    beacon.extend_from_slice(&AP); // addr3: BSSID
+    beacon.extend_from_slice(&0x1230u16.to_le_bytes()); // seq_ctrl: frag 0, seq 0x123
+    beacon.extend_from_slice(&[0u8; 8]); // timestamp
+    beacon.extend_from_slice(&0x0064u16.to_le_bytes()); // beacon interval
+    beacon.extend_from_slice(&0x0421u16.to_le_bytes()); // capability info
+    beacon.push(0); // SSID element id
+    beacon.push(10); // SSID length
+    beacon.extend_from_slice(b"ExampleNet");
+
+    // Unprotected QoS data, AP -> STA (from_ds), LLC/SNAP-encapsulated ARP
+    // payload trailing beyond `header_len` — proves `ByProtocol("llc")`
+    // hands off exactly where the fixed 802.11 header ends (11.1's `llc`
+    // reused unmodified, task 11.2's central composition claim).
+    let mut qos_data = vec![0x88, 0x02]; // Data / QoS Data, from_ds=1
+    qos_data.extend_from_slice(&0x0000u16.to_le_bytes()); // duration
+    qos_data.extend_from_slice(&STA); // addr1: DA
+    qos_data.extend_from_slice(&AP); // addr2: TA/BSSID
+    qos_data.extend_from_slice(&AP); // addr3: SA
+    qos_data.extend_from_slice(&0x0470u16.to_le_bytes()); // seq_ctrl: seq 0x047
+    qos_data.extend_from_slice(&0x0000u16.to_le_bytes()); // qos_control
+    qos_data.extend_from_slice(&[0xAA, 0xAA, 0x03, 0x00, 0x00, 0x00, 0x08, 0x06]); // LLC/SNAP -> ARP
+
+    run_conformance(&ConformanceCase {
+        plugin: Box::new(Dot11),
+        good: vec![
+            GoodPacket {
+                bytes: beacon,
+                expected_header_len: 48,
+                expected_full_fields: vec![
+                    ("frame_type", Value::U64(0)),
+                    ("frame_subtype", Value::U64(0x8)),
+                    ("flags", Value::U64(0)),
+                    ("duration", Value::U64(0)),
+                    ("addr1", Value::from(&[0xFF; 6][..])),
+                    ("addr2", Value::from(&AP[..])),
+                    ("addr3", Value::from(&AP[..])),
+                    ("seq_num", Value::U64(0x123)),
+                    ("ssid", Value::from("ExampleNet")),
+                ],
+                expected_hint: Hint::Terminal,
+            },
+            GoodPacket {
+                bytes: qos_data,
+                expected_header_len: 26,
+                expected_full_fields: vec![
+                    ("frame_type", Value::U64(2)),
+                    ("frame_subtype", Value::U64(0x8)),
+                    ("flags", Value::U64(0x02)),
+                    ("duration", Value::U64(0)),
+                    ("addr1", Value::from(&STA[..])),
+                    ("addr2", Value::from(&AP[..])),
+                    ("addr3", Value::from(&AP[..])),
+                    ("seq_num", Value::U64(0x047)),
+                    ("qos_control", Value::U64(0)),
+                ],
+                expected_hint: Hint::ByProtocol("llc"),
+            },
+        ],
         outer_ctx: Vec::new(),
     });
 }

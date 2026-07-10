@@ -1,5 +1,6 @@
-//! Link-layer stream behavior (06.2): MAC conversations with folded
-//! directions, and QinQ stacked tags with innermost-wins lookup.
+//! Link-layer stream behavior (06.2, 11.2): MAC conversations with folded
+//! directions, QinQ stacked tags with innermost-wins lookup, and the
+//! wireless-link sibling (802.11) entry point.
 
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
@@ -504,4 +505,166 @@ fn eth_802_3_length_field_with_unrecognized_saps_declines_rather_than_misrouting
         "no fallback-pool plugin mis-routes unrecognized SAPs"
     );
     assert_eq!(packet.stop, StopReason::UnknownHint);
+}
+
+// ---- 11.2: 802.11 link entry ----
+
+const AP: [u8; 6] = [0x02, 0x1A, 0x2B, 0x3C, 0x4D, 0x5E];
+const STA: [u8; 6] = [0x00, 0x1B, 0x44, 0x11, 0x3A, 0xB7];
+
+fn dot11_meta(len: usize, ms: u64) -> PacketMeta {
+    PacketMeta {
+        timestamp: SystemTime::UNIX_EPOCH + Duration::from_millis(ms),
+        caplen: len,
+        origlen: len,
+        link_type: LinkType(105), // DLT_IEEE802_11
+    }
+}
+
+/// A bodyless data frame (802.11-2020 §9.2.4.1.3's Null family, subtype
+/// bit 2 set): `to_ds`/`from_ds` and `qos` chosen by the caller so the
+/// same builder produces both directions of an AP<->STA exchange with
+/// two distinct `frame_subtype` values (plain Null vs QoS Null).
+fn dot11_null_frame(from_ds: bool, qos: bool) -> Vec<u8> {
+    let subtype: u8 = if qos { 0xC } else { 0x4 };
+    let fc0 = (subtype << 4) | (2 << 2); // type = Data
+    let fc1: u8 = if from_ds { 0x02 } else { 0x01 };
+    let (addr1, addr2) = if from_ds { (STA, AP) } else { (AP, STA) };
+
+    let mut b = vec![fc0, fc1];
+    b.extend_from_slice(&0x0000u16.to_le_bytes()); // duration
+    b.extend_from_slice(&addr1);
+    b.extend_from_slice(&addr2);
+    b.extend_from_slice(&AP); // addr3: BSSID
+    b.extend_from_slice(&0x0000u16.to_le_bytes()); // seq_ctrl
+    if qos {
+        b.extend_from_slice(&0x0000u16.to_le_bytes()); // qos_control
+    }
+    b
+}
+
+#[test]
+fn dot11_ap_sta_link_folds_directions() {
+    let engine = Arc::new(default_engine());
+    let mut agg = Aggregator::new(&engine, AggregatorConfig::default());
+
+    // AP -> STA (plain Null) then STA -> AP (QoS Null): opposite
+    // addr1/addr2 order, same {addr1, addr2} pair — the 802.11 sibling of
+    // Ethernet's MAC-conversation fold (06.2), mirrored here for the
+    // over-the-air link.
+    let forward = dot11_null_frame(true, false);
+    let reverse = dot11_null_frame(false, true);
+    agg.ingest(&engine.dissect(&forward, dot11_meta(forward.len(), 0), ParseOpts::default()));
+    agg.ingest(&engine.dissect(&reverse, dot11_meta(reverse.len(), 1), ParseOpts::default()));
+
+    assert_eq!(agg.len(), 1, "one folded 802.11 link stream");
+    let stream = agg.streams().next().expect("stream");
+    assert_eq!(stream.protocol, "dot11");
+    let total: u64 = stream.stats.iter().map(|s| s.packets).sum();
+    assert_eq!(total, 2, "both directions in one stream");
+
+    // The declared rollup: frame subtypes seen on this AP<->STA link.
+    match stream.rollups.get("frame_subtype") {
+        Some(Rollup::Accumulate { values, count, .. }) => {
+            assert_eq!(*count, 2);
+            let mut got = values.clone();
+            got.sort_by_key(|v| match v {
+                Value::U64(n) => *n,
+                other => panic!("unexpected rollup value: {other:?}"),
+            });
+            assert_eq!(got, [Value::U64(0x4), Value::U64(0xC)]);
+        }
+        other => panic!("wrong rollup: {other:?}"),
+    }
+}
+
+/// A structurally-real-shaped EAPOL-Key frame (802.1X-2020 §11.9), key
+/// descriptor type 2 (IEEE 802.11/RSN) — the same shape as 11.1's own
+/// `eapol` fixture, rebuilt here to travel over `dot11 ▸ llc` instead of
+/// `ethernet`.
+fn eapol_key_body() -> Vec<u8> {
+    let mut body = Vec::new();
+    body.push(0x02); // key_descriptor_type: RSN
+    body.extend_from_slice(&0x008Au16.to_be_bytes()); // key_info
+    body.extend_from_slice(&16u16.to_be_bytes()); // key_length
+    body.extend_from_slice(&1u64.to_be_bytes()); // replay_counter
+    body.extend_from_slice(&[0xAA; 32]); // nonce
+    body.extend_from_slice(&[0; 16]); // key_iv
+    body.extend_from_slice(&0u64.to_be_bytes()); // key_rsc
+    body.extend_from_slice(&[0; 8]); // key id / reserved
+    body.extend_from_slice(&[0; 16]); // key_mic (unset on message 1)
+    body.extend_from_slice(&0u16.to_be_bytes()); // key_data_length
+
+    let mut b = vec![0x01, 0x03]; // version 1, packet_type Key
+    b.extend_from_slice(
+        &u16::try_from(body.len())
+            .expect("eapol body fits")
+            .to_be_bytes(),
+    );
+    b.extend_from_slice(&body);
+    b
+}
+
+#[test]
+fn wpa_handshake_composes_dot11_llc_eapol_unmodified() {
+    // The domain's central claim (11.2): the WPA/WPA3 4-way handshake is
+    // *not* a separate plugin. EAPOL-Key message 1, unprotected (keys
+    // aren't installed yet), riding LLC/SNAP EtherType 0x888E over an
+    // ordinary QoS data frame — exactly 11.1's `llc` and `eapol`,
+    // unmodified, reused verbatim over a second physical medium.
+    let mut pkt = vec![0x88, 0x02]; // Data / QoS Data, from_ds=1 (AP -> STA)
+    pkt.extend_from_slice(&0x0000u16.to_le_bytes()); // duration
+    pkt.extend_from_slice(&STA); // addr1
+    pkt.extend_from_slice(&AP); // addr2
+    pkt.extend_from_slice(&AP); // addr3: BSSID
+    pkt.extend_from_slice(&0x0000u16.to_le_bytes()); // seq_ctrl
+    pkt.extend_from_slice(&0x0000u16.to_le_bytes()); // qos_control
+    pkt.extend_from_slice(&[0xAA, 0xAA, 0x03, 0x00, 0x00, 0x00, 0x88, 0x8E]); // LLC/SNAP -> EAPOL
+    pkt.extend_from_slice(&eapol_key_body());
+
+    let engine = Arc::new(default_engine());
+    let mut agg = Aggregator::new(&engine, AggregatorConfig::default());
+    let m = dot11_meta(pkt.len(), 0);
+    let packet = engine.dissect(&pkt, m, ParseOpts::default());
+
+    let protocols: Vec<_> = packet.layers.iter().map(|l| l.protocol).collect();
+    assert_eq!(protocols, ["dot11", "llc", "eapol"]);
+    assert_eq!(
+        packet.layers[2].fields.get("key_info"),
+        Some(&Value::U64(0x008A))
+    );
+    assert_eq!(
+        packet.layers[2].fields.get("nonce"),
+        Some(&Value::from(&[0xAA; 32][..]))
+    );
+    assert_eq!(packet.stop, StopReason::Complete);
+
+    agg.ingest(&packet);
+    // llc/eapol are identity-less (11.1); dot11 is the one stream, same
+    // shape as the ethernet+eapol composition above.
+    assert_eq!(agg.len(), 1, "llc/eapol form no stream of their own");
+    assert_eq!(agg.streams().next().expect("stream").protocol, "dot11");
+}
+
+#[test]
+fn dot11_protected_data_frame_never_reaches_llc() {
+    let mut pkt = vec![0x88, 0x42]; // Data / QoS Data, from_ds=1, protected=1
+    pkt.extend_from_slice(&0x0000u16.to_le_bytes());
+    pkt.extend_from_slice(&STA);
+    pkt.extend_from_slice(&AP);
+    pkt.extend_from_slice(&AP);
+    pkt.extend_from_slice(&0x0000u16.to_le_bytes());
+    pkt.extend_from_slice(&0x0000u16.to_le_bytes());
+    pkt.extend_from_slice(&[0xDE, 0xAD, 0xBE, 0xEF]); // opaque ciphertext
+
+    let engine = Arc::new(default_engine());
+    let m = dot11_meta(pkt.len(), 0);
+    let packet = engine.dissect(&pkt, m, ParseOpts::default());
+    assert_eq!(
+        packet.layers.iter().map(|l| l.protocol).collect::<Vec<_>>(),
+        ["dot11"],
+        "a protected frame's body is never handed to llc"
+    );
+    assert_eq!(packet.stop, StopReason::Terminal);
+    assert_eq!(packet.opaque_len, 4);
 }

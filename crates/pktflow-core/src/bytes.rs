@@ -42,9 +42,24 @@ impl<'a> ByteReader<'a> {
         Ok(u16::from_be_bytes(self.array()?))
     }
 
+    /// Reads a little-endian `u16`. Most link/network headers in this crate
+    /// are big-endian network-byte-order, but a few link-layer formats
+    /// (802.11's Frame Control/Duration/Sequence Control/QoS Control,
+    /// IEEE 802.11-2020 §9.2; radiotap.org's header) are little-endian —
+    /// this reader exists for those.
+    pub fn u16_le(&mut self) -> Result<u16, Truncated> {
+        Ok(u16::from_le_bytes(self.array()?))
+    }
+
     /// Reads a big-endian `u32`.
     pub fn u32_be(&mut self) -> Result<u32, Truncated> {
         Ok(u32::from_be_bytes(self.array()?))
+    }
+
+    /// Reads a little-endian `u32` (radiotap.org's `it_present` bitmask
+    /// words — see `u16_le`).
+    pub fn u32_le(&mut self) -> Result<u32, Truncated> {
+        Ok(u32::from_le_bytes(self.array()?))
     }
 
     /// Reads a big-endian `u64`.
@@ -114,6 +129,21 @@ mod tests {
     }
 
     #[test]
+    fn u16_le_boundaries() {
+        assert_eq!(
+            ByteReader::new(&[]).u16_le(),
+            Err(Truncated { needed: 2, have: 0 })
+        );
+        assert_eq!(
+            ByteReader::new(&[0x01]).u16_le(),
+            Err(Truncated { needed: 2, have: 1 })
+        );
+        let mut exact = ByteReader::new(&[0x01, 0x02]);
+        assert_eq!(exact.u16_le(), Ok(0x0201));
+        assert_eq!(exact.remaining(), 0);
+    }
+
+    #[test]
     fn u32_be_boundaries() {
         assert_eq!(
             ByteReader::new(&[]).u32_be(),
@@ -125,6 +155,21 @@ mod tests {
         );
         let mut exact = ByteReader::new(&[0x01, 0x02, 0x03, 0x04]);
         assert_eq!(exact.u32_be(), Ok(0x0102_0304));
+        assert_eq!(exact.remaining(), 0);
+    }
+
+    #[test]
+    fn u32_le_boundaries() {
+        assert_eq!(
+            ByteReader::new(&[]).u32_le(),
+            Err(Truncated { needed: 4, have: 0 })
+        );
+        assert_eq!(
+            ByteReader::new(&[1, 2, 3]).u32_le(),
+            Err(Truncated { needed: 4, have: 3 })
+        );
+        let mut exact = ByteReader::new(&[0x01, 0x02, 0x03, 0x04]);
+        assert_eq!(exact.u32_le(), Ok(0x0403_0201));
         assert_eq!(exact.remaining(), 0);
     }
 

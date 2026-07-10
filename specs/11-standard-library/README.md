@@ -18,7 +18,7 @@ stub table (name + standard + one-line rationale, not yet implementable per Arti
 D13).
 
 - [x] [11.1 Link & LAN control/discovery](01-link-lan.md) — STP/RSTP, PVST+, LLDP, CDP, LACP, EAPOL/802.1X
-- [ ] [11.2 Wireless link (802.11)](02-wireless-link.md) — 802.11 frame + radiotap, WPA2/3 handshake
+- [x] [11.2 Wireless link (802.11)](02-wireless-link.md) — 802.11 frame + radiotap, WPA2/3 handshake
 - [ ] [11.3 IPv6 control plane](03-ipv6-control-plane.md) — ICMPv6, NDP, MLDv1/v2, DHCPv6
 - [ ] [11.4 Routing protocols](04-routing-protocols.md) — BGP-4, OSPFv2/v3, VRRP, HSRP
 - [ ] [11.5 Tunnels, overlays & VPN](05-tunnels-overlays-vpn.md) — IPsec ESP/AH, WireGuard, L2TPv3, PPPoE, Geneve
