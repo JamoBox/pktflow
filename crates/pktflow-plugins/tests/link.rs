@@ -220,33 +220,288 @@ fn eth_802_3_length_field_falls_back_through_llc_to_stp_end_to_end() {
     assert_eq!(agg.streams().next().expect("stream").protocol, "ethernet");
 }
 
+/// One CDP TLV: 2-byte type + 2-byte length (including this header) +
+/// value.
+fn cdp_tlv(t: u16, value: &[u8]) -> Vec<u8> {
+    let mut out = t.to_be_bytes().to_vec();
+    out.extend_from_slice(&u16::try_from(4 + value.len()).expect("fits").to_be_bytes());
+    out.extend_from_slice(value);
+    out
+}
+
+/// A minimal CDP announcement (device id last — see cdp.rs's fixture
+/// doc comment for why).
+fn cdp_pdu() -> Vec<u8> {
+    let mut b = vec![0x02, 0x3C, 0x00, 0x00]; // version 2, ttl 60s, checksum placeholder
+    b.extend_from_slice(&cdp_tlv(0x0003, b"Gi0/1")); // port id
+    b.extend_from_slice(&cdp_tlv(0x0001, b"switch1")); // device id
+    b
+}
+
 #[test]
-fn eth_802_3_length_field_falls_back_to_llc_for_a_snap_frame_too() {
+fn eth_802_3_length_field_falls_back_through_llc_to_cdp_end_to_end() {
     // Cisco's multicast control-plane destination, and a SNAP frame
-    // (OUI 00-00-0C Cisco, PID 0x2000 CDP) — the snap_pid Custom space.
+    // (OUI 00-00-0C Cisco, PID 0x2000 CDP) — the snap_pid Custom space
+    // llc mints, now claimed by cdp.
     const CISCO_MULTICAST: [u8; 6] = [0x01, 0x00, 0x0C, 0xCC, 0xCC, 0xCC];
 
     let engine = Arc::new(default_engine());
-    let mut pkt = eth_frame(CISCO_MULTICAST, MAC_A, 0x0008);
-    pkt.extend_from_slice(&[0xAA, 0xAA, 0x03, 0x00, 0x00, 0x0C, 0x20, 0x00]);
-    // Opaque trailing payload — proves the route lookup itself, same
-    // reasoning as the llc_dsap case above.
-    pkt.extend_from_slice(&[0xDE, 0xAD, 0xBE, 0xEF]);
+    let mut agg = Aggregator::new(&engine, AggregatorConfig::default());
+
+    let cdp = cdp_pdu();
+    let mut pkt = eth_frame(
+        CISCO_MULTICAST,
+        MAC_A,
+        u16::try_from(4 + cdp.len()).expect("fixture length fits in a u16"),
+    );
+    pkt.extend_from_slice(&[0xAA, 0xAA, 0x03, 0x00, 0x00, 0x0C, 0x20, 0x00]); // SNAP: Cisco OUI, CDP PID
+    pkt.extend_from_slice(&cdp);
 
     let m = meta(pkt.len(), 0);
     let packet = engine.dissect(&pkt, m, ParseOpts::default());
     let protocols: Vec<_> = packet.layers.iter().map(|l| l.protocol).collect();
-    assert_eq!(protocols, ["ethernet", "llc"]);
-    assert_eq!(packet.layers[1].fields.get("oui"), Some(&Value::U64(0x0C)));
+    assert_eq!(protocols, ["ethernet", "llc", "cdp"]);
     assert_eq!(
-        packet.layers[1].fields.get("pid"),
-        Some(&Value::U64(0x2000))
+        packet.layers[2].fields.get("device_id"),
+        Some(&Value::from("switch1"))
+    );
+    assert_eq!(packet.stop, StopReason::Complete);
+
+    agg.ingest(&packet);
+    // cdp is identity-less like stp/lldp/arp: one MAC-conversation
+    // stream, zero cdp streams.
+    assert_eq!(agg.len(), 1, "cdp forms no stream of its own");
+    assert_eq!(agg.streams().next().expect("stream").protocol, "ethernet");
+}
+
+#[test]
+fn pvst_plus_disambiguates_from_cdp_by_snap_pid_alone() {
+    // Same OUI (Cisco) and same Cisco multicast destination as cdp's
+    // fixture above — SNAP PID (0x010B vs 0x2000) is the only thing that
+    // tells them apart, exactly as 11.1 specifies.
+    const CISCO_MULTICAST: [u8; 6] = [0x01, 0x00, 0x0C, 0xCC, 0xCC, 0xCC];
+
+    let mut bpdu = vec![0x00, 0x00, 0x00, 0x00]; // protocol_id, version 0, type 0x00
+    bpdu.push(0x00); // flags
+    bpdu.extend_from_slice(&[0x80, 0x00, 0x00, 0x1A, 0x2B, 0x3C, 0x4D, 0x5E]); // root_id
+    bpdu.extend_from_slice(&4u32.to_be_bytes()); // root_path_cost
+    bpdu.extend_from_slice(&[0x80, 0x00, 0x00, 0x1B, 0x44, 0x11, 0x3A, 0xB7]); // bridge_id
+    bpdu.extend_from_slice(&0x8001u16.to_be_bytes()); // port_id
+    bpdu.extend_from_slice(&0u16.to_be_bytes()); // message_age
+    bpdu.extend_from_slice(&0x1400u16.to_be_bytes()); // max_age
+    bpdu.extend_from_slice(&0x0200u16.to_be_bytes()); // hello_time
+    bpdu.extend_from_slice(&0x0F00u16.to_be_bytes()); // forward_delay
+    bpdu.extend_from_slice(&0x0000u16.to_be_bytes()); // TLV type
+    bpdu.extend_from_slice(&0x0002u16.to_be_bytes()); // TLV length
+    bpdu.extend_from_slice(&42u16.to_be_bytes()); // TLV value: VLAN 42
+
+    let engine = Arc::new(default_engine());
+    let mut pkt = eth_frame(
+        CISCO_MULTICAST,
+        MAC_A,
+        u16::try_from(8 + bpdu.len()).expect("fixture length fits in a u16"),
+    );
+    pkt.extend_from_slice(&[0xAA, 0xAA, 0x03, 0x00, 0x00, 0x0C, 0x01, 0x0B]); // SNAP: Cisco OUI, PVST+ PID
+    pkt.extend_from_slice(&bpdu);
+
+    let m = meta(pkt.len(), 0);
+    let packet = engine.dissect(&pkt, m, ParseOpts::default());
+    let protocols: Vec<_> = packet.layers.iter().map(|l| l.protocol).collect();
+    assert_eq!(protocols, ["ethernet", "llc", "pvst_plus"]);
+    assert_eq!(
+        packet.layers[2].fields.get("originating_vlan"),
+        Some(&Value::U64(42))
+    );
+    assert_eq!(packet.stop, StopReason::Complete);
+}
+
+fn lacp_endpoint_tlv(t: u8, system: [u8; 6], key: u16, port: u16, state: u8) -> Vec<u8> {
+    let mut b = vec![t, 0x14];
+    b.extend_from_slice(&0x8000u16.to_be_bytes());
+    b.extend_from_slice(&system);
+    b.extend_from_slice(&key.to_be_bytes());
+    b.extend_from_slice(&0x8000u16.to_be_bytes());
+    b.extend_from_slice(&port.to_be_bytes());
+    b.push(state);
+    b.extend_from_slice(&[0, 0, 0]);
+    b
+}
+
+/// A full LACPDU (802.3-2018 Clause 43) from `actor`'s point of view.
+fn lacpdu(actor: [u8; 6], actor_state: u8, partner: [u8; 6], partner_state: u8) -> Vec<u8> {
+    let mut b = vec![0x01, 0x01]; // subtype LACP, version 1
+    b.extend_from_slice(&lacp_endpoint_tlv(0x01, actor, 1, 1, actor_state));
+    b.extend_from_slice(&lacp_endpoint_tlv(0x02, partner, 2, 2, partner_state));
+    b.push(0x03); // collector TLV
+    b.push(0x10);
+    b.extend_from_slice(&[0; 14]);
+    b.push(0x00); // terminator TLV
+    b.push(0x00);
+    b.extend_from_slice(&[0; 50]); // reserved trailer
+    b
+}
+
+#[test]
+fn lacp_negotiation_stream_folds_both_directions_and_accumulates_actor_state() {
+    let engine = Arc::new(default_engine());
+    let mut agg = Aggregator::new(&engine, AggregatorConfig::default());
+
+    // A -> B: A hasn't seen a response yet (not yet synchronized). B ->
+    // A: both sides now synchronized/collecting/distributing. Same two
+    // systems, opposite actor/partner roles per direction.
+    let mut a_to_b = eth_frame(MAC_B, MAC_A, 0x8809);
+    a_to_b.extend_from_slice(&lacpdu(MAC_A, 0x07, MAC_B, 0x00));
+    let mut b_to_a = eth_frame(MAC_A, MAC_B, 0x8809);
+    b_to_a.extend_from_slice(&lacpdu(MAC_B, 0x3D, MAC_A, 0x3D));
+
+    agg.ingest(&engine.dissect(&a_to_b, meta(a_to_b.len(), 0), ParseOpts::default()));
+    agg.ingest(&engine.dissect(&b_to_a, meta(b_to_a.len(), 1), ParseOpts::default()));
+
+    // Two streams: the ethernet MAC conversation, and one folded lacp
+    // negotiation stream keyed on the unordered {A, B} system pair.
+    assert_eq!(agg.len(), 2);
+    let lacp_stream = agg.at_layer("lacp")[0];
+    assert_eq!(lacp_stream.protocol, "lacp");
+    let total: u64 = lacp_stream.stats.iter().map(|s| s.packets).sum();
+    assert_eq!(
+        total, 2,
+        "both directions folded into one negotiation stream"
+    );
+
+    match lacp_stream.rollups.get("actor_state") {
+        Some(Rollup::Accumulate { values, count, .. }) => {
+            assert_eq!(*count, 2);
+            let mut states: Vec<u64> = values
+                .iter()
+                .map(|v| match v {
+                    Value::U64(n) => *n,
+                    other => panic!("expected U64, got {other:?}"),
+                })
+                .collect();
+            states.sort_unstable();
+            assert_eq!(states, [0x07, 0x3D], "both PDUs' actor_state observed");
+        }
+        other => panic!("wrong rollup: {other:?}"),
+    }
+}
+
+#[test]
+fn lacp_non_lacp_slow_protocol_subtype_declines_as_plugin_error() {
+    let engine = Arc::new(default_engine());
+    let mut pkt = eth_frame(MAC_B, MAC_A, 0x8809);
+    pkt.extend_from_slice(&lacpdu(MAC_A, 0x3D, MAC_B, 0x3D));
+    pkt[14] = 0x02; // Marker protocol subtype, not LACP
+
+    let m = meta(pkt.len(), 0);
+    let packet = engine.dissect(&pkt, m, ParseOpts::default());
+    assert_eq!(
+        packet.layers.iter().map(|l| l.protocol).collect::<Vec<_>>(),
+        ["ethernet"]
     );
     assert_eq!(
         packet.stop,
-        StopReason::UnclaimedRoute(RouteId::Custom {
-            space: "snap_pid",
-            id: (0x0Cu64 << 16) | 0x2000,
-        })
+        StopReason::PluginError,
+        "explicit-route decline, not an unclaimed route"
     );
+}
+
+#[test]
+fn eapol_key_frame_parses_via_ethertype_and_forms_no_stream() {
+    let mut body = Vec::new();
+    body.push(0x02); // key_descriptor_type: RSN
+    body.extend_from_slice(&0x008Au16.to_be_bytes()); // key_info
+    body.extend_from_slice(&16u16.to_be_bytes()); // key_length
+    body.extend_from_slice(&1u64.to_be_bytes()); // replay_counter
+    body.extend_from_slice(&[0xAA; 32]); // nonce
+    body.extend_from_slice(&[0; 16]); // key_iv
+    body.extend_from_slice(&0u64.to_be_bytes()); // key_rsc
+    body.extend_from_slice(&[0; 8]); // key id / reserved
+    body.extend_from_slice(&[0; 16]); // key_mic
+    body.extend_from_slice(&0u16.to_be_bytes()); // key_data_length
+
+    let engine = Arc::new(default_engine());
+    let mut agg = Aggregator::new(&engine, AggregatorConfig::default());
+
+    let mut pkt = eth_frame(MAC_B, MAC_A, 0x888E);
+    pkt.push(0x01); // version 1
+    pkt.push(0x03); // packet_type Key
+    pkt.extend_from_slice(
+        &u16::try_from(body.len())
+            .expect("eapol body fits")
+            .to_be_bytes(),
+    );
+    pkt.extend_from_slice(&body);
+
+    let m = meta(pkt.len(), 0);
+    let packet = engine.dissect(&pkt, m, ParseOpts::default());
+    let protocols: Vec<_> = packet.layers.iter().map(|l| l.protocol).collect();
+    assert_eq!(protocols, ["ethernet", "eapol"]);
+    assert_eq!(
+        packet.layers[1].fields.get("key_info"),
+        Some(&Value::U64(0x008A))
+    );
+    assert_eq!(packet.stop, StopReason::Complete);
+
+    agg.ingest(&packet);
+    // eapol is per-port link-local signaling, identity-less like the
+    // rest of 11.1: one MAC-conversation stream, zero eapol streams.
+    assert_eq!(agg.len(), 1, "eapol forms no stream of its own");
+    assert_eq!(agg.streams().next().expect("stream").protocol, "ethernet");
+}
+
+#[test]
+fn pvst_plus_forms_no_stream_of_its_own() {
+    const CISCO_MULTICAST: [u8; 6] = [0x01, 0x00, 0x0C, 0xCC, 0xCC, 0xCC];
+
+    let mut bpdu = vec![0x00, 0x00, 0x00, 0x00];
+    bpdu.push(0x00); // flags
+    bpdu.extend_from_slice(&[0x80, 0x00, 0x00, 0x1A, 0x2B, 0x3C, 0x4D, 0x5E]); // root_id
+    bpdu.extend_from_slice(&4u32.to_be_bytes()); // root_path_cost
+    bpdu.extend_from_slice(&[0x80, 0x00, 0x00, 0x1B, 0x44, 0x11, 0x3A, 0xB7]); // bridge_id
+    bpdu.extend_from_slice(&0x8001u16.to_be_bytes()); // port_id
+    bpdu.extend_from_slice(&0u16.to_be_bytes()); // message_age
+    bpdu.extend_from_slice(&0x1400u16.to_be_bytes()); // max_age
+    bpdu.extend_from_slice(&0x0200u16.to_be_bytes()); // hello_time
+    bpdu.extend_from_slice(&0x0F00u16.to_be_bytes()); // forward_delay
+    bpdu.extend_from_slice(&0x0000u16.to_be_bytes()); // TLV type
+    bpdu.extend_from_slice(&0x0002u16.to_be_bytes()); // TLV length
+    bpdu.extend_from_slice(&7u16.to_be_bytes()); // TLV value: VLAN 7
+
+    let engine = Arc::new(default_engine());
+    let mut agg = Aggregator::new(&engine, AggregatorConfig::default());
+    let mut pkt = eth_frame(
+        CISCO_MULTICAST,
+        MAC_A,
+        u16::try_from(8 + bpdu.len()).expect("fixture length fits in a u16"),
+    );
+    pkt.extend_from_slice(&[0xAA, 0xAA, 0x03, 0x00, 0x00, 0x0C, 0x01, 0x0B]);
+    pkt.extend_from_slice(&bpdu);
+
+    let packet = engine.dissect(&pkt, meta(pkt.len(), 0), ParseOpts::default());
+    agg.ingest(&packet);
+    // Same identity-less shape as stp/cdp/lldp: one MAC-conversation
+    // stream, zero pvst_plus streams.
+    assert_eq!(agg.len(), 1, "pvst_plus forms no stream of its own");
+    assert_eq!(agg.streams().next().expect("stream").protocol, "ethernet");
+}
+
+#[test]
+fn eth_802_3_length_field_with_unrecognized_saps_declines_rather_than_misrouting() {
+    // A well-formed-looking 802.3-length frame whose LLC-shaped bytes
+    // have neither a recognized SAP pair nor a reserved dst_mac: llc's
+    // probe correctly scores nothing, no other fallback-pool plugin
+    // claims these bytes either, so dissection honestly stops at
+    // ethernet rather than fabricating a layer.
+    let engine = Arc::new(default_engine());
+    let mut pkt = eth_frame(MAC_B, MAC_A, 0x0004);
+    pkt.extend_from_slice(&[0x01, 0x01, 0x00, 0x00]); // dsap/ssap 0x01: not in the well-known set
+
+    let m = meta(pkt.len(), 0);
+    let packet = engine.dissect(&pkt, m, ParseOpts::default());
+    assert_eq!(
+        packet.layers.iter().map(|l| l.protocol).collect::<Vec<_>>(),
+        ["ethernet"],
+        "no fallback-pool plugin mis-routes unrecognized SAPs"
+    );
+    assert_eq!(packet.stop, StopReason::UnknownHint);
 }
