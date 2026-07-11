@@ -63,7 +63,7 @@ child stream just carries protocol-specific rollups.
 - [ ] `bgp` fixtures for OPEN, UPDATE (with withdrawn + NLRI prefixes), KEEPALIVE parse
       exactly; app-stream child forms under the TCP session (mirrors 06.6's DNS-under-UDP
       criterion, ported to TCP).
-- [ ] `ospf` fixtures for OSPFv2 and OSPFv3 Hello and DBD parse exactly, including the
+- [x] `ospf` fixtures for OSPFv2 and OSPFv3 Hello and DBD parse exactly, including the
       version-dependent field layout; multicast Hello contributes to its parent IP
       conversation with no OSPF stream of its own (identity-less, verified).
 - [x] `vrrp` and `hsrp` fixtures: a real master-election sequence (priority/state changes

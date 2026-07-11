@@ -27,6 +27,7 @@ use pktflow_plugins::mld::Mld;
 use pktflow_plugins::modbus::Modbus;
 use pktflow_plugins::ndp::Ndp;
 use pktflow_plugins::ntp::Ntp;
+use pktflow_plugins::ospf::Ospf;
 use pktflow_plugins::pvst_plus::PvstPlus;
 use pktflow_plugins::radiotap::Radiotap;
 use pktflow_plugins::stp::Stp;
@@ -667,6 +668,215 @@ fn hsrp_conforms() {
                 ("holdtime", Value::U64(10)),
                 ("virtual_ip", Value::from(&[192u8, 168, 1, 1][..])),
                 ("auth_data", Value::from(&b"cisco\0\0\0"[..])),
+            ],
+            expected_hint: Hint::Terminal,
+        }],
+        outer_ctx: Vec::new(),
+    });
+}
+
+/// The OSPF common header (RFC 2328 A.3.1 / RFC 5340 A.3.1) with a zero
+/// `packet_length` placeholder patched in by [`ospf_finish`].
+fn ospf_header_prefix(version: u8, msg_type: u8) -> Vec<u8> {
+    let mut b = vec![version, msg_type, 0, 0];
+    b.extend_from_slice(&[10, 0, 0, 1]); // router_id
+    b.extend_from_slice(&[0, 0, 0, 1]); // area_id
+    b.extend_from_slice(&[0, 0]); // checksum
+    if version == 2 {
+        b.extend_from_slice(&[0, 0]); // AuType: none
+        b.extend_from_slice(&[0; 8]); // Authentication
+    } else {
+        b.push(0); // Instance ID
+        b.push(0); // reserved
+    }
+    b
+}
+
+/// Patches `packet_length` (bytes 2-3) to `b`'s final length.
+fn ospf_finish(mut b: Vec<u8>) -> Vec<u8> {
+    let len = u16::try_from(b.len()).expect("fixture fits in u16");
+    b[2..4].copy_from_slice(&len.to_be_bytes());
+    b
+}
+
+#[test]
+fn ospf_conforms() {
+    // RFC 2328 A.3.2 Hello: network mask, hello_interval 10s, options
+    // 0x02, rtr_pri 1, router_dead_interval 40s, DR/BDR by interface
+    // address, two neighbors.
+    let mut hello_v2 = ospf_header_prefix(2, 1);
+    hello_v2.extend_from_slice(&[255, 255, 255, 0]);
+    hello_v2.extend_from_slice(&10u16.to_be_bytes());
+    hello_v2.push(0x02);
+    hello_v2.push(1);
+    hello_v2.extend_from_slice(&40u32.to_be_bytes());
+    hello_v2.extend_from_slice(&[10, 0, 0, 1]);
+    hello_v2.extend_from_slice(&[10, 0, 0, 2]);
+    hello_v2.extend_from_slice(&[10, 0, 0, 3]);
+    hello_v2.extend_from_slice(&[10, 0, 0, 4]);
+    let hello_v2 = ospf_finish(hello_v2);
+    let hello_v2_len = hello_v2.len();
+
+    run_conformance(&ConformanceCase {
+        plugin: Box::new(Ospf),
+        good: vec![GoodPacket {
+            bytes: hello_v2,
+            expected_header_len: hello_v2_len,
+            expected_full_fields: vec![
+                ("version", Value::U64(2)),
+                ("type", Value::U64(1)),
+                ("packet_length", Value::U64(hello_v2_len as u64)),
+                ("router_id", Value::from(&[10u8, 0, 0, 1][..])),
+                ("area_id", Value::from(&[0u8, 0, 0, 1][..])),
+                ("hello_interval", Value::U64(10)),
+                ("router_dead_interval", Value::U64(40)),
+                ("designated_router", Value::from(&[10u8, 0, 0, 1][..])),
+                (
+                    "neighbors",
+                    Value::List(vec![
+                        Value::from(&[10u8, 0, 0, 3][..]),
+                        Value::from(&[10u8, 0, 0, 4][..]),
+                    ]),
+                ),
+            ],
+            expected_hint: Hint::Terminal,
+        }],
+        outer_ctx: Vec::new(),
+    });
+
+    // RFC 5340 A.3.2 Hello: no network mask, 24-bit options, DR/BDR by
+    // Router ID, one neighbor.
+    let mut hello_v3 = ospf_header_prefix(3, 1);
+    hello_v3.extend_from_slice(&7u32.to_be_bytes()); // interface_id
+    hello_v3.push(1); // rtr_pri
+    hello_v3.extend_from_slice(&[0, 0, 0x02]); // options
+    hello_v3.extend_from_slice(&10u16.to_be_bytes()); // hello_interval
+    hello_v3.extend_from_slice(&40u16.to_be_bytes()); // router_dead_interval
+    hello_v3.extend_from_slice(&[10, 0, 0, 1]); // designated_router
+    hello_v3.extend_from_slice(&[10, 0, 0, 2]); // backup_designated_router
+    hello_v3.extend_from_slice(&[10, 0, 0, 5]); // neighbor
+    let hello_v3 = ospf_finish(hello_v3);
+    let hello_v3_len = hello_v3.len();
+
+    run_conformance(&ConformanceCase {
+        plugin: Box::new(Ospf),
+        good: vec![GoodPacket {
+            bytes: hello_v3,
+            expected_header_len: hello_v3_len,
+            expected_full_fields: vec![
+                ("version", Value::U64(3)),
+                ("type", Value::U64(1)),
+                ("packet_length", Value::U64(hello_v3_len as u64)),
+                ("router_id", Value::from(&[10u8, 0, 0, 1][..])),
+                ("area_id", Value::from(&[0u8, 0, 0, 1][..])),
+                ("hello_interval", Value::U64(10)),
+                ("router_dead_interval", Value::U64(40)),
+                ("designated_router", Value::from(&[10u8, 0, 0, 1][..])),
+                (
+                    "neighbors",
+                    Value::List(vec![Value::from(&[10u8, 0, 0, 5][..])]),
+                ),
+            ],
+            expected_hint: Hint::Terminal,
+        }],
+        outer_ctx: Vec::new(),
+    });
+
+    // RFC 2328 A.3.3 Database Description: interface_mtu 1500,
+    // dd_sequence, plus a trailing (unwalked) LSA-header entry —
+    // header_len still covers it via packet_length (module doc).
+    let mut dbd_v2 = ospf_header_prefix(2, 2);
+    dbd_v2.extend_from_slice(&1500u16.to_be_bytes());
+    dbd_v2.push(0x02); // options
+    dbd_v2.push(0x07); // bits: I|M|MS
+    dbd_v2.extend_from_slice(&0xAABB_CCDDu32.to_be_bytes());
+    dbd_v2.extend_from_slice(&[0xEE; 20]); // unwalked LSA-header trailer
+    let dbd_v2 = ospf_finish(dbd_v2);
+    let dbd_v2_len = dbd_v2.len();
+
+    run_conformance(&ConformanceCase {
+        plugin: Box::new(Ospf),
+        good: vec![GoodPacket {
+            bytes: dbd_v2,
+            expected_header_len: dbd_v2_len,
+            expected_full_fields: vec![
+                ("version", Value::U64(2)),
+                ("type", Value::U64(2)),
+                ("packet_length", Value::U64(dbd_v2_len as u64)),
+                ("router_id", Value::from(&[10u8, 0, 0, 1][..])),
+                ("area_id", Value::from(&[0u8, 0, 0, 1][..])),
+                ("interface_mtu", Value::U64(1500)),
+                ("dd_sequence", Value::U64(0xAABB_CCDD)),
+            ],
+            expected_hint: Hint::Terminal,
+        }],
+        outer_ctx: Vec::new(),
+    });
+
+    // RFC 5340 A.3.3 Database Description: leading reserved byte,
+    // 24-bit options, same interface_mtu/dd_sequence pair.
+    let mut dbd_v3 = ospf_header_prefix(3, 2);
+    dbd_v3.push(0); // reserved1
+    dbd_v3.extend_from_slice(&[0, 0, 0x02]); // options
+    dbd_v3.extend_from_slice(&1500u16.to_be_bytes());
+    dbd_v3.push(0); // reserved2
+    dbd_v3.push(0x07); // bits
+    dbd_v3.extend_from_slice(&0xAABB_CCDDu32.to_be_bytes());
+    let dbd_v3 = ospf_finish(dbd_v3);
+    let dbd_v3_len = dbd_v3.len();
+
+    run_conformance(&ConformanceCase {
+        plugin: Box::new(Ospf),
+        good: vec![GoodPacket {
+            bytes: dbd_v3,
+            expected_header_len: dbd_v3_len,
+            expected_full_fields: vec![
+                ("version", Value::U64(3)),
+                ("type", Value::U64(2)),
+                ("packet_length", Value::U64(dbd_v3_len as u64)),
+                ("router_id", Value::from(&[10u8, 0, 0, 1][..])),
+                ("area_id", Value::from(&[0u8, 0, 0, 1][..])),
+                ("interface_mtu", Value::U64(1500)),
+                ("dd_sequence", Value::U64(0xAABB_CCDD)),
+            ],
+            expected_hint: Hint::Terminal,
+        }],
+        outer_ctx: Vec::new(),
+    });
+
+    // RFC 2328 A.3.5 / RFC 5340 A.4.1/A.4.2.1 Link State Update: one LSA,
+    // a 20-byte header plus a 4-byte body this plugin skips by the
+    // header's own `length` field without decoding it. The kit's rule-1
+    // truncation sweep below exercises that internal length boundary.
+    let mut lsa_header = vec![0x00, 0x01]; // age
+    lsa_header.extend_from_slice(&[0x00, 0x01]); // type field (router-LSA)
+    lsa_header.extend_from_slice(&[10, 0, 0, 9]); // link_state_id
+    lsa_header.extend_from_slice(&[10, 0, 0, 1]); // advertising_router
+    lsa_header.extend_from_slice(&0x8000_0001u32.to_be_bytes()); // sequence
+    lsa_header.extend_from_slice(&[0xBE, 0xEF]); // checksum
+    lsa_header.extend_from_slice(&24u16.to_be_bytes()); // length: 20 + 4
+    let mut lsu = ospf_header_prefix(2, 4);
+    lsu.extend_from_slice(&1u32.to_be_bytes()); // num_lsas
+    lsu.extend_from_slice(&lsa_header);
+    lsu.extend_from_slice(&[0xDE, 0xAD, 0xBE, 0xEF]); // LSA body, undecoded
+    let lsu = ospf_finish(lsu);
+    let lsu_len = lsu.len();
+
+    run_conformance(&ConformanceCase {
+        plugin: Box::new(Ospf),
+        good: vec![GoodPacket {
+            bytes: lsu,
+            expected_header_len: lsu_len,
+            expected_full_fields: vec![
+                ("version", Value::U64(2)),
+                ("type", Value::U64(4)),
+                ("packet_length", Value::U64(lsu_len as u64)),
+                ("router_id", Value::from(&[10u8, 0, 0, 1][..])),
+                ("area_id", Value::from(&[0u8, 0, 0, 1][..])),
+                (
+                    "lsa_headers",
+                    Value::List(vec![Value::from(&lsa_header[..])]),
+                ),
             ],
             expected_hint: Hint::Terminal,
         }],

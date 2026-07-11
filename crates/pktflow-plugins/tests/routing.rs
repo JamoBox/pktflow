@@ -17,6 +17,13 @@
 //! acceptance criterion) instead uses raw `at_layer`, mirroring 06.5's
 //! two-VNIs-one-outer-stream test shape exactly (single outer
 //! conversation, two shared-qualifier keys).
+//!
+//! `ospf`'s own end-to-end case at the bottom of this file verifies the
+//! opposite shape: Hello is a periodic multicast beacon, not a
+//! conversation (11.4's domain spec, same stance `stp`/`lldp`/`cdp`
+//! already establish, 11.1), so it declares no identity at all and must
+//! contribute its activity to its parent `ipv4` stream rather than
+//! forming an `ospf` stream of its own.
 
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
@@ -319,4 +326,79 @@ fn hsrp_rollups_are_accumulate_on_state_and_priority() {
     assert_eq!(identity.rollups[0].kind, RollupKind::Accumulate);
     assert_eq!(identity.rollups[1].field, "priority");
     assert_eq!(identity.rollups[1].kind, RollupKind::Accumulate);
+}
+
+/// A minimal OSPFv2 Hello (RFC 2328 A.3.1/A.3.2): common header (version
+/// 2, router/area ids, no authentication) plus a bare Hello body (no
+/// neighbors yet — this is the first Hello of an adjacency forming).
+fn ospf_hello(router_id: [u8; 4]) -> Vec<u8> {
+    let mut b = vec![2, 1, 0, 0]; // version 2, type 1 (Hello), length placeholder
+    b.extend_from_slice(&router_id);
+    b.extend_from_slice(&[0, 0, 0, 0]); // area_id: backbone
+    b.extend_from_slice(&[0, 0]); // checksum
+    b.extend_from_slice(&[0, 0]); // AuType: none
+    b.extend_from_slice(&[0; 8]); // Authentication
+    b.extend_from_slice(&[255, 255, 255, 0]); // network_mask
+    b.extend_from_slice(&10u16.to_be_bytes()); // hello_interval
+    b.push(0x02); // options
+    b.push(1); // rtr_pri
+    b.extend_from_slice(&40u32.to_be_bytes()); // router_dead_interval
+    b.extend_from_slice(&[0, 0, 0, 0]); // designated_router: none yet
+    b.extend_from_slice(&[0, 0, 0, 0]); // backup_designated_router: none yet
+    let len = u16::try_from(b.len()).expect("fixture fits in u16");
+    b[2..4].copy_from_slice(&len.to_be_bytes());
+    b
+}
+
+/// RFC 2328 A.3.1: OSPF rides directly on IP protocol 89, no UDP/TCP
+/// framing.
+fn ipv4_ospf(src: [u8; 4], dst: [u8; 4]) -> Vec<u8> {
+    let mut h = vec![
+        0x45, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xFF, 89, 0, 0,
+    ];
+    h.extend_from_slice(&src);
+    h.extend_from_slice(&dst);
+    let ck = internet_checksum(&h);
+    h[10..12].copy_from_slice(&ck.to_be_bytes());
+    h
+}
+
+#[test]
+fn ospf_hello_is_identity_less_and_contributes_to_its_parent_ip_conversation() {
+    // RFC 2328 Appendix A "AllSPFRouters", 224.0.0.5, with its standard
+    // IPv4-multicast-to-MAC mapping 01:00:5E + low 23 bits of the group.
+    const ALL_SPF_ROUTERS_MAC: [u8; 6] = [0x01, 0x00, 0x5E, 0x00, 0x00, 0x05];
+    const ALL_SPF_ROUTERS_IP: [u8; 4] = [224, 0, 0, 5];
+
+    let engine = Arc::new(default_engine());
+    let mut agg = Aggregator::new(&engine, AggregatorConfig::default());
+
+    let speaker = [192, 168, 1, 1];
+    let mut f = vec![];
+    f.extend_from_slice(&ALL_SPF_ROUTERS_MAC);
+    f.extend_from_slice(&[0x00, 0x1A, 0x2B, 0x3C, 0x4D, speaker[3]]);
+    f.extend_from_slice(&0x0800u16.to_be_bytes());
+    f.extend_from_slice(&ipv4_ospf(speaker, ALL_SPF_ROUTERS_IP));
+    f.extend_from_slice(&ospf_hello(speaker));
+
+    let m = meta(f.len(), 0);
+    let packet = engine.dissect(&f, m, ParseOpts::default());
+    let protocols: Vec<_> = packet.layers.iter().map(|l| l.protocol).collect();
+    assert_eq!(protocols, ["ethernet", "ipv4", "ospf"]);
+
+    agg.ingest(&packet);
+    // Same beacon shape as stp/lldp/cdp (11.1) and vlan's identity-less
+    // bridging (06.2): ethernet + ipv4 each still form their own stream,
+    // ospf contributes to the ipv4 conversation rather than forming one
+    // of its own.
+    assert_eq!(agg.len(), 2, "ospf forms no stream of its own");
+    let eth_stream = agg.at_layer("ethernet")[0];
+    let ip_stream = agg.at_layer("ipv4")[0];
+    assert_eq!(ip_stream.parent, Some(eth_stream.id), "bridged across ospf");
+    assert!(agg.at_layer("ospf").is_empty(), "no ospf stream of its own");
+}
+
+#[test]
+fn ospf_declares_no_stream_identity() {
+    assert!(pktflow_plugins::ospf::Ospf.stream_identity().is_none());
 }

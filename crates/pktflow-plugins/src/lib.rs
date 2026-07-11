@@ -27,6 +27,7 @@ pub mod mld;
 pub mod modbus;
 pub mod ndp;
 pub mod ntp;
+pub mod ospf;
 pub mod pvst_plus;
 pub mod radiotap;
 pub mod stp;
@@ -55,6 +56,7 @@ pub fn default_engine() -> Engine {
         .plugin(igmp::Igmp)
         .plugin(vrrp::Vrrp)
         .plugin(hsrp::Hsrp)
+        .plugin(ospf::Ospf)
         .plugin(tcp::Tcp)
         .plugin(udp::Udp)
         .plugin(gre::Gre)
