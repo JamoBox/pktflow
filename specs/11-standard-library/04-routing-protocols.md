@@ -66,7 +66,7 @@ child stream just carries protocol-specific rollups.
 - [ ] `ospf` fixtures for OSPFv2 and OSPFv3 Hello and DBD parse exactly, including the
       version-dependent field layout; multicast Hello contributes to its parent IP
       conversation with no OSPF stream of its own (identity-less, verified).
-- [ ] `vrrp` and `hsrp` fixtures: a real master-election sequence (priority/state changes
+- [x] `vrrp` and `hsrp` fixtures: a real master-election sequence (priority/state changes
       across several advertisements) folds into one group stream per `vrid`/`group`; two
       different groups on the same LAN segment produce two independent streams (shared-key
       uniqueness verified, same test shape as 06.5's two-VNIs-one-outer-stream case).

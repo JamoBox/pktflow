@@ -14,6 +14,7 @@ use pktflow_plugins::dot11::Dot11;
 use pktflow_plugins::eapol::Eapol;
 use pktflow_plugins::ethernet::Ethernet;
 use pktflow_plugins::gre::Gre;
+use pktflow_plugins::hsrp::Hsrp;
 use pktflow_plugins::icmpv4::Icmpv4;
 use pktflow_plugins::icmpv6::Icmpv6;
 use pktflow_plugins::igmp::Igmp;
@@ -639,6 +640,36 @@ fn vrrp_conforms() {
             header_len: 20,
             fields: FieldMap::new(),
         }],
+    });
+}
+
+#[test]
+fn hsrp_conforms() {
+    // RFC 2281 §5 Hello message: version 0, group 1, priority 100,
+    // Active (16), hellotime 3s, holdtime 10s, "cisco" auth data padded
+    // to 8 bytes, virtual IP 192.168.1.1.
+    let mut bytes = vec![0, 0, 16, 3, 10, 100, 1, 0];
+    bytes.extend_from_slice(b"cisco\0\0\0");
+    bytes.extend_from_slice(&[192, 168, 1, 1]);
+    run_conformance(&ConformanceCase {
+        plugin: Box::new(Hsrp),
+        good: vec![GoodPacket {
+            bytes,
+            expected_header_len: 20,
+            expected_full_fields: vec![
+                ("group", Value::U64(1)),
+                ("version", Value::U64(0)),
+                ("opcode", Value::U64(0)),
+                ("state", Value::U64(16)),
+                ("priority", Value::U64(100)),
+                ("hellotime", Value::U64(3)),
+                ("holdtime", Value::U64(10)),
+                ("virtual_ip", Value::from(&[192u8, 168, 1, 1][..])),
+                ("auth_data", Value::from(&b"cisco\0\0\0"[..])),
+            ],
+            expected_hint: Hint::Terminal,
+        }],
+        outer_ctx: Vec::new(),
     });
 }
 

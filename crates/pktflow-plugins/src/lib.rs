@@ -14,6 +14,7 @@ pub mod dot11;
 pub mod eapol;
 pub mod ethernet;
 pub mod gre;
+pub mod hsrp;
 pub mod icmpv4;
 pub mod icmpv6;
 pub mod igmp;
@@ -52,6 +53,7 @@ pub fn default_engine() -> Engine {
         .plugin(mld::Mld)
         .plugin(igmp::Igmp)
         .plugin(vrrp::Vrrp)
+        .plugin(hsrp::Hsrp)
         .plugin(tcp::Tcp)
         .plugin(udp::Udp)
         .plugin(gre::Gre)
