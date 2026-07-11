@@ -62,7 +62,7 @@ child stream per UDP stream carrying it, rollups doing the stream-level work.
 - [x] `icmpv6` fixtures for echo and each error type parse exactly and stop `Terminal`;
       type-based dispatch to `ndp`/`mld` verified for every named type via the
       `Custom{space:"icmpv6_type",...}` route.
-- [ ] `ndp` fixtures: RS, RA (with SLAAC prefix option present), NS, NA (solicited and
+- [x] `ndp` fixtures: RS, RA (with SLAAC prefix option present), NS, NA (solicited and
       unsolicited/gratuitous), Redirect — each parses exact expected fields; cross-layer read
       of `icmpv6.type` verified against a synthetic plugin-order test.
 - [ ] `mld` fixtures for MLDv1 Query/Report/Done and MLDv2 Report (multi-source-record case)

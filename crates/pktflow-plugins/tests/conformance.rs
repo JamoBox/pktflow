@@ -21,6 +21,7 @@ use pktflow_plugins::ipv6::Ipv6;
 use pktflow_plugins::lacp::Lacp;
 use pktflow_plugins::llc::Llc;
 use pktflow_plugins::lldp::Lldp;
+use pktflow_plugins::ndp::Ndp;
 use pktflow_plugins::ntp::Ntp;
 use pktflow_plugins::pvst_plus::PvstPlus;
 use pktflow_plugins::radiotap::Radiotap;
@@ -347,6 +348,129 @@ fn icmpv6_conforms() {
             case(143, 0, [0x00, 0x00, 0x00, 0x01], ndp(143)),
         ],
         outer_ctx: Vec::new(),
+    });
+}
+
+/// A synthetic `icmpv6` predecessor carrying exactly the fields the real
+/// plugin would have extracted at `Depth::Full` — `type` always, plus
+/// `rest_of_header` for the two dispatch types (RA, NA) that pack extra
+/// data into the word `icmpv6` already consumed (11.3's `ndp` module doc).
+fn icmpv6_predecessor(icmp_type: u8, rest: Option<[u8; 4]>) -> LayerRecord {
+    let mut fields = FieldMap::new();
+    fields.insert("type", Value::U64(u64::from(icmp_type)));
+    if let Some(r) = rest {
+        fields.insert("rest_of_header", Value::from(&r[..]));
+    }
+    LayerRecord {
+        protocol: "icmpv6",
+        offset: 54,
+        header_len: 8,
+        fields,
+    }
+}
+
+/// Zero-option fixtures only (11.3's `ndp` module doc): NDP has no
+/// self-describing length or explicit end-of-options marker, so a capture
+/// truncated exactly on an option boundary is indistinguishable from a
+/// legitimately shorter message — the same limitation CDP (11.1)
+/// documents for its own unterminated TLV walk. The kit's exhaustive
+/// truncation sweep (rule 1) therefore only runs against messages whose
+/// every byte belongs to a fixed-size read; the options walk itself
+/// (link-layer address / SLAAC prefix-info extraction, multi-option
+/// messages, the type=0/length=0 padding convention) is covered by
+/// `ndp.rs`'s own unit tests instead.
+#[test]
+fn ndp_conforms() {
+    // RFC 4861 §4.1 Router Solicitation: nothing left after icmpv6's
+    // Reserved word, so a bare RS is the empty message.
+    run_conformance(&ConformanceCase {
+        plugin: Box::new(Ndp),
+        good: vec![GoodPacket {
+            bytes: vec![],
+            expected_header_len: 0,
+            expected_full_fields: vec![("msg_type", Value::U64(133))],
+            expected_hint: Hint::Terminal,
+        }],
+        outer_ctx: vec![icmpv6_predecessor(133, None)],
+    });
+
+    // RFC 4861 §4.2 Router Advertisement: cur_hop_limit=64, M+O set,
+    // router_lifetime=1800s (icmpv6_conforms' own RA fixture) — all
+    // inside the already-consumed word — then reachable_time=7500ms,
+    // retrans_timer=1000ms in this plugin's own bytes.
+    run_conformance(&ConformanceCase {
+        plugin: Box::new(Ndp),
+        good: vec![GoodPacket {
+            bytes: vec![0x00, 0x00, 0x1D, 0x4C, 0x00, 0x00, 0x03, 0xE8],
+            expected_header_len: 8,
+            expected_full_fields: vec![
+                ("msg_type", Value::U64(134)),
+                ("flags", Value::U64(0xC0)),
+                ("router_lifetime", Value::U64(1800)),
+                ("reachable_time", Value::U64(7500)),
+                ("retrans_timer", Value::U64(1000)),
+            ],
+            expected_hint: Hint::Terminal,
+        }],
+        outer_ctx: vec![icmpv6_predecessor(134, Some([0x40, 0xC0, 0x07, 0x08]))],
+    });
+
+    // RFC 4861 §4.3 Neighbor Solicitation: 16-byte target, no flags.
+    let ns_target: [u8; 16] = [
+        0x20, 0x01, 0x0D, 0xB8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x01,
+    ];
+    run_conformance(&ConformanceCase {
+        plugin: Box::new(Ndp),
+        good: vec![GoodPacket {
+            bytes: ns_target.to_vec(),
+            expected_header_len: 16,
+            expected_full_fields: vec![
+                ("msg_type", Value::U64(135)),
+                ("target_address", Value::from(&ns_target[..])),
+            ],
+            expected_hint: Hint::Terminal,
+        }],
+        outer_ctx: vec![icmpv6_predecessor(135, None)],
+    });
+
+    // RFC 4861 §4.4 Neighbor Advertisement: R/S/O flags set (0xE0, same
+    // byte icmpv6_conforms' own NA fixture uses) plus a 16-byte target.
+    let na_target: [u8; 16] = [
+        0x20, 0x01, 0x0D, 0xB8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x02,
+    ];
+    run_conformance(&ConformanceCase {
+        plugin: Box::new(Ndp),
+        good: vec![GoodPacket {
+            bytes: na_target.to_vec(),
+            expected_header_len: 16,
+            expected_full_fields: vec![
+                ("msg_type", Value::U64(136)),
+                ("flags", Value::U64(0xE0)),
+                ("target_address", Value::from(&na_target[..])),
+            ],
+            expected_hint: Hint::Terminal,
+        }],
+        outer_ctx: vec![icmpv6_predecessor(136, Some([0xE0, 0, 0, 0]))],
+    });
+
+    // RFC 4861 §4.5 Redirect: target address then destination address —
+    // only the target is in 11.3's field list for this plugin, but the
+    // destination address must still be walked to keep header_len honest.
+    let redirect_target = [0xAAu8; 16];
+    let mut redirect_bytes = redirect_target.to_vec();
+    redirect_bytes.extend_from_slice(&[0xBB; 16]);
+    run_conformance(&ConformanceCase {
+        plugin: Box::new(Ndp),
+        good: vec![GoodPacket {
+            bytes: redirect_bytes,
+            expected_header_len: 32,
+            expected_full_fields: vec![
+                ("msg_type", Value::U64(137)),
+                ("target_address", Value::from(&redirect_target[..])),
+            ],
+            expected_hint: Hint::Terminal,
+        }],
+        outer_ctx: vec![icmpv6_predecessor(137, None)],
     });
 }
 

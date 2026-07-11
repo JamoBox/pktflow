@@ -12,15 +12,20 @@ use pktflow_core::{
     ProtocolName, RouteId, StreamIdentity, Value,
 };
 
-const TYPE: FieldName = "type";
+// `pub(crate)`: `ndp`/`mld` (11.3) re-read this via a cross-layer lookup
+// (FR-17) instead of re-deciding their own dispatch.
+pub(crate) const TYPE: FieldName = "type";
 const CODE: FieldName = "code";
-const REST_OF_HEADER: FieldName = "rest_of_header";
+// `pub(crate)`: the dispatch targets (`ndp`, `mld`, 11.3) read this back
+// via a cross-layer lookup (FR-17) rather than re-deciding their own
+// dispatch — see ndp.rs's module doc.
+pub(crate) const REST_OF_HEADER: FieldName = "rest_of_header";
 
 /// The id space this plugin mints for NDP/MLD dispatch (11.3): ICMPv6
 /// message types that are themselves distinct protocols, not a real IP
 /// protocol number (there isn't one — RFC 4443/4861/2710/3810 all live
 /// inside `IpProtocol(58)`).
-const ICMPV6_TYPE_SPACE: &str = "icmpv6_type";
+pub(crate) const ICMPV6_TYPE_SPACE: &str = "icmpv6_type";
 
 // RFC 4443 §3 (error messages).
 const DESTINATION_UNREACHABLE: u8 = 1;
@@ -31,16 +36,18 @@ const PARAMETER_PROBLEM: u8 = 4;
 const ECHO_REQUEST: u8 = 128;
 const ECHO_REPLY: u8 = 129;
 // RFC 2710 §3 / RFC 3810 §5 (MLDv1/v2, informational types reused as MLD).
-const MLD_QUERY: u8 = 130;
-const MLD_V1_REPORT: u8 = 131;
-const MLD_DONE: u8 = 132;
-const MLD_V2_REPORT: u8 = 143;
+pub(crate) const MLD_QUERY: u8 = 130;
+pub(crate) const MLD_V1_REPORT: u8 = 131;
+pub(crate) const MLD_DONE: u8 = 132;
+pub(crate) const MLD_V2_REPORT: u8 = 143;
 // RFC 4861 §4 (Neighbor Discovery, informational types reused as NDP).
-const ROUTER_SOLICITATION: u8 = 133;
-const ROUTER_ADVERTISEMENT: u8 = 134;
-const NEIGHBOR_SOLICITATION: u8 = 135;
-const NEIGHBOR_ADVERTISEMENT: u8 = 136;
-const REDIRECT: u8 = 137;
+// `pub(crate)`: shared with ndp.rs so the message-type space has one
+// source of truth instead of two copies of the same magic numbers.
+pub(crate) const ROUTER_SOLICITATION: u8 = 133;
+pub(crate) const ROUTER_ADVERTISEMENT: u8 = 134;
+pub(crate) const NEIGHBOR_SOLICITATION: u8 = 135;
+pub(crate) const NEIGHBOR_ADVERTISEMENT: u8 = 136;
+pub(crate) const REDIRECT: u8 = 137;
 
 pub struct Icmpv6;
 
