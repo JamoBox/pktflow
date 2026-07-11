@@ -65,7 +65,7 @@ child stream per UDP stream carrying it, rollups doing the stream-level work.
 - [x] `ndp` fixtures: RS, RA (with SLAAC prefix option present), NS, NA (solicited and
       unsolicited/gratuitous), Redirect — each parses exact expected fields; cross-layer read
       of `icmpv6.type` verified against a synthetic plugin-order test.
-- [ ] `mld` fixtures for MLDv1 Query/Report/Done and MLDv2 Report (multi-source-record case)
+- [x] `mld` fixtures for MLDv1 Query/Report/Done and MLDv2 Report (multi-source-record case)
       parse exactly.
 - [ ] `dhcpv6` fixture covers the full SOLICIT/ADVERTISE/REQUEST/REPLY sequence; `msg_type`
       series preserves order (mirrors 06.6's DORA-order criterion); one `dhcpv6` child stream

@@ -21,6 +21,7 @@ pub mod ipv6;
 pub mod lacp;
 pub mod llc;
 pub mod lldp;
+pub mod mld;
 pub mod ndp;
 pub mod ntp;
 pub mod pvst_plus;
@@ -46,6 +47,7 @@ pub fn default_engine() -> Engine {
         .plugin(icmpv4::Icmpv4)
         .plugin(icmpv6::Icmpv6)
         .plugin(ndp::Ndp)
+        .plugin(mld::Mld)
         .plugin(igmp::Igmp)
         .plugin(tcp::Tcp)
         .plugin(udp::Udp)

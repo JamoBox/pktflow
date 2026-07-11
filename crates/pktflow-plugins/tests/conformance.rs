@@ -21,6 +21,7 @@ use pktflow_plugins::ipv6::Ipv6;
 use pktflow_plugins::lacp::Lacp;
 use pktflow_plugins::llc::Llc;
 use pktflow_plugins::lldp::Lldp;
+use pktflow_plugins::mld::Mld;
 use pktflow_plugins::ndp::Ndp;
 use pktflow_plugins::ntp::Ntp;
 use pktflow_plugins::pvst_plus::PvstPlus;
@@ -305,7 +306,7 @@ fn icmpv6_conforms() {
         }
     }
 
-    fn ndp(icmp_type: u8) -> Hint {
+    fn dispatch(icmp_type: u8) -> Hint {
         Hint::Route(RouteId::Custom {
             space: "icmpv6_type",
             id: u64::from(icmp_type),
@@ -328,24 +329,24 @@ fn icmpv6_conforms() {
             // RFC 4443 §4.2 Echo Reply, id=0x1234 seq=0x0001.
             case(129, 0, [0x12, 0x34, 0x00, 0x01], Hint::Terminal),
             // RFC 2710 §3 MLD Query -> mld (max resp delay 10000ms, reserved 0).
-            case(130, 0, [0x27, 0x10, 0x00, 0x00], ndp(130)),
+            case(130, 0, [0x27, 0x10, 0x00, 0x00], dispatch(130)),
             // RFC 2710 §3 MLDv1 Report -> mld.
-            case(131, 0, [0x00, 0x00, 0x00, 0x00], ndp(131)),
+            case(131, 0, [0x00, 0x00, 0x00, 0x00], dispatch(131)),
             // RFC 2710 §3 MLD Done -> mld.
-            case(132, 0, [0x00, 0x00, 0x00, 0x00], ndp(132)),
+            case(132, 0, [0x00, 0x00, 0x00, 0x00], dispatch(132)),
             // RFC 4861 §4.1 Router Solicitation -> ndp (reserved = 0).
-            case(133, 0, [0x00, 0x00, 0x00, 0x00], ndp(133)),
+            case(133, 0, [0x00, 0x00, 0x00, 0x00], dispatch(133)),
             // RFC 4861 §4.2 Router Advertisement -> ndp (cur hop limit 64,
             // M+O flags set, router lifetime 1800s).
-            case(134, 0, [0x40, 0xC0, 0x07, 0x08], ndp(134)),
+            case(134, 0, [0x40, 0xC0, 0x07, 0x08], dispatch(134)),
             // RFC 4861 §4.3 Neighbor Solicitation -> ndp (reserved = 0).
-            case(135, 0, [0x00, 0x00, 0x00, 0x00], ndp(135)),
+            case(135, 0, [0x00, 0x00, 0x00, 0x00], dispatch(135)),
             // RFC 4861 §4.4 Neighbor Advertisement -> ndp (R/S/O flags set).
-            case(136, 0, [0xE0, 0x00, 0x00, 0x00], ndp(136)),
+            case(136, 0, [0xE0, 0x00, 0x00, 0x00], dispatch(136)),
             // RFC 4861 §4.5 Redirect -> ndp (reserved = 0).
-            case(137, 0, [0x00, 0x00, 0x00, 0x00], ndp(137)),
+            case(137, 0, [0x00, 0x00, 0x00, 0x00], dispatch(137)),
             // RFC 3810 §5.2 MLDv2 Report -> mld (1 multicast address record).
-            case(143, 0, [0x00, 0x00, 0x00, 0x01], ndp(143)),
+            case(143, 0, [0x00, 0x00, 0x00, 0x01], dispatch(143)),
         ],
         outer_ctx: Vec::new(),
     });
@@ -471,6 +472,87 @@ fn ndp_conforms() {
             expected_hint: Hint::Terminal,
         }],
         outer_ctx: vec![icmpv6_predecessor(137, None)],
+    });
+}
+
+/// Zero-extension fixtures only, same rationale as `ndp_conforms`: the
+/// MLDv2 Query extension and the MLDv2 Report's multi-record walk have no
+/// self-describing outer length beyond what `N`/`M` themselves state, so
+/// the kit's exhaustive truncation sweep (rule 1) only runs against
+/// messages whose every byte belongs to a fixed-size read. The variable
+/// walks (v2 query extension, multi-record v2 report, zero-record report)
+/// are covered by `mld.rs`'s own unit tests instead.
+#[test]
+fn mld_conforms() {
+    // RFC 2710 §3 MLD Query: max resp delay 10000ms (icmpv6_conforms'
+    // own MLD Query fixture), multicast address = all-nodes (::) query.
+    let group = [0xFFu8, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1];
+    run_conformance(&ConformanceCase {
+        plugin: Box::new(Mld),
+        good: vec![GoodPacket {
+            bytes: group.to_vec(),
+            expected_header_len: 16,
+            expected_full_fields: vec![
+                ("msg_type", Value::U64(130)),
+                ("max_resp_delay", Value::U64(10000)),
+                ("multicast_addr", Value::from(&group[..])),
+            ],
+            expected_hint: Hint::Terminal,
+        }],
+        outer_ctx: vec![icmpv6_predecessor(130, Some([0x27, 0x10, 0, 0]))],
+    });
+
+    // RFC 2710 §4 MLDv1 Report: max resp delay unused (0), same 16-byte
+    // multicast-address body as Query.
+    run_conformance(&ConformanceCase {
+        plugin: Box::new(Mld),
+        good: vec![GoodPacket {
+            bytes: group.to_vec(),
+            expected_header_len: 16,
+            expected_full_fields: vec![
+                ("msg_type", Value::U64(131)),
+                ("max_resp_delay", Value::U64(0)),
+                ("multicast_addr", Value::from(&group[..])),
+            ],
+            expected_hint: Hint::Terminal,
+        }],
+        outer_ctx: vec![icmpv6_predecessor(131, Some([0, 0, 0, 0]))],
+    });
+
+    // RFC 2710 §5 MLD Done: identical body shape to Report.
+    run_conformance(&ConformanceCase {
+        plugin: Box::new(Mld),
+        good: vec![GoodPacket {
+            bytes: group.to_vec(),
+            expected_header_len: 16,
+            expected_full_fields: vec![
+                ("msg_type", Value::U64(132)),
+                ("max_resp_delay", Value::U64(0)),
+                ("multicast_addr", Value::from(&group[..])),
+            ],
+            expected_hint: Hint::Terminal,
+        }],
+        outer_ctx: vec![icmpv6_predecessor(132, Some([0, 0, 0, 0]))],
+    });
+
+    // RFC 3810 §5.2 MLDv2 Report, M=1 (icmpv6_conforms' own fixture):
+    // one address record, MODE_IS_EXCLUDE(2), aux_data_len=0, N=0 sources.
+    let mut record = vec![2u8, 0, 0x00, 0x00];
+    record.extend_from_slice(&group);
+    run_conformance(&ConformanceCase {
+        plugin: Box::new(Mld),
+        good: vec![GoodPacket {
+            bytes: record.clone(),
+            expected_header_len: record.len(),
+            expected_full_fields: vec![
+                ("msg_type", Value::U64(143)),
+                ("multicast_addr", Value::from(&group[..])),
+                ("num_sources", Value::U64(0)),
+                ("source_addrs", Value::List(vec![])),
+            ],
+            expected_hint: Hint::Terminal,
+        }],
+        outer_ctx: vec![icmpv6_predecessor(143, Some([0, 0, 0, 1]))],
     });
 }
 

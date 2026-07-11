@@ -1,11 +1,12 @@
-//! IPv6 control-plane dispatch (11.3): `icmpv6` routes five message types
-//! onward to `ndp` by a plugin-defined `icmpv6_type` space rather than a
-//! real IP protocol, and `ndp` reads some of its own fields back from
-//! `icmpv6`'s already-consumed bytes via a cross-layer lookup (FR-17).
-//! `ndp.rs`'s own unit tests exercise that lookup against synthetic
-//! `ParseCtx`s; these tests exercise it through the real engine, so the
-//! cross-layer read is verified against actual plugin ordering, not just
-//! a hand-built fixture.
+//! IPv6 control-plane dispatch (11.3): `icmpv6` routes nine message types
+//! onward to `ndp` (five) and `mld` (four) by a plugin-defined
+//! `icmpv6_type` space rather than a real IP protocol, and both targets
+//! read some of their own fields back from `icmpv6`'s already-consumed
+//! bytes via a cross-layer lookup (FR-17). `ndp.rs`/`mld.rs`'s own unit
+//! tests exercise that lookup against synthetic `ParseCtx`s; these tests
+//! exercise it through the real engine, so the cross-layer read is
+//! verified against actual plugin ordering, not just a hand-built
+//! fixture.
 
 use std::sync::Arc;
 use std::time::SystemTime;
@@ -31,6 +32,10 @@ const ALL_ROUTERS_MAC: [u8; 6] = [0x33, 0x33, 0x00, 0x00, 0x00, 0x02];
 const LINK_LOCAL_SRC: [u8; 16] = [0xFE, 0x80, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x01];
 const ALL_NODES_DST: [u8; 16] = [0xFF, 0x02, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x01];
 const ALL_ROUTERS_DST: [u8; 16] = [0xFF, 0x02, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x02];
+// RFC 3810 §5.2.14: MLDv2 Reports target the MLDv2-capable-routers group
+// ff02::16, not the group(s) they're reporting on.
+const MLDV2_ROUTERS_MAC: [u8; 6] = [0x33, 0x33, 0x00, 0x00, 0x00, 0x16];
+const MLDV2_ROUTERS_DST: [u8; 16] = [0xFF, 0x02, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x16];
 
 fn eth(dst: [u8; 6], src: [u8; 6], ethertype: u16) -> Vec<u8> {
     let mut f = Vec::new();
@@ -175,4 +180,111 @@ fn all_five_ndp_types_dispatch_from_icmpv6_by_type() {
             "type {icmp_type}"
         );
     }
+}
+
+#[test]
+fn all_four_mld_types_dispatch_from_icmpv6_by_type() {
+    // Query/v1-Report/Done (RFC 2710 §3) share one 16-byte multicast-
+    // address body; the group being queried/reported is arbitrary here
+    // (ff05::123, a site-local multicast group), distinct enough from the
+    // all-nodes/all-routers scopes used elsewhere in this file that a
+    // wrong offset would show up as a wrong field, not a silent pass.
+    let group: [u8; 16] = [0xFF, 0x05, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x01, 0x23];
+
+    // (icmp_type, rest_of_header, mld's own trailing bytes, dst mac, dst ip).
+    type Case = (u8, [u8; 4], Vec<u8>, [u8; 6], [u8; 16]);
+    let cases: [Case; 3] = [
+        // RFC 2710 §3 Query: max resp delay 10000ms, sent to all-nodes.
+        (
+            130,
+            [0x27, 0x10, 0, 0],
+            group.to_vec(),
+            ALL_NODES_MAC,
+            ALL_NODES_DST,
+        ),
+        // RFC 2710 §4 Report: sent to the group being reported, not
+        // all-nodes — this suite reuses ALL_NODES_DST purely as a valid
+        // IPv6 multicast destination, not as protocol-accurate scoping.
+        (
+            131,
+            [0, 0, 0, 0],
+            group.to_vec(),
+            ALL_NODES_MAC,
+            ALL_NODES_DST,
+        ),
+        // RFC 2710 §5 Done: sent to the all-routers group.
+        (
+            132,
+            [0, 0, 0, 0],
+            group.to_vec(),
+            ALL_ROUTERS_MAC,
+            ALL_ROUTERS_DST,
+        ),
+    ];
+
+    let engine = Arc::new(default_engine());
+    for (icmp_type, rest, extra, dst_mac, dst_ip) in cases {
+        let mut body = icmpv6(icmp_type, rest);
+        body.extend_from_slice(&extra);
+
+        let mut pkt = eth(dst_mac, MAC_A, 0x86DD);
+        pkt.extend_from_slice(&ipv6(body.len() as u16, LINK_LOCAL_SRC, dst_ip));
+        pkt.extend_from_slice(&body);
+
+        let m = meta(pkt.len());
+        let packet = engine.dissect(&pkt, m, ParseOpts::default());
+        assert_eq!(
+            chain(&packet),
+            ["ethernet", "ipv6", "icmpv6", "mld"],
+            "type {icmp_type}"
+        );
+        let mld = packet.layers.last().expect("mld layer");
+        assert_eq!(
+            mld.fields.get("msg_type"),
+            Some(&Value::U64(u64::from(icmp_type))),
+            "type {icmp_type}"
+        );
+        assert_eq!(
+            mld.fields.get("multicast_addr"),
+            Some(&Value::from(&group[..])),
+            "type {icmp_type}"
+        );
+    }
+
+    // RFC 3810 §5.2 MLDv2 Report: two multicast address records
+    // (MODE_IS_EXCLUDE, 0 sources each) — verifies the real M-record walk
+    // (cross-layer read of icmpv6's rest_of_header for M) end to end, not
+    // just the first-record-only synthetic fixture mld.rs's unit tests use.
+    let group_2: [u8; 16] = [0xFF, 0x05, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x04, 0x56];
+    let mut record_1 = vec![2u8, 0, 0x00, 0x00];
+    record_1.extend_from_slice(&group);
+    let mut record_2 = vec![2u8, 0, 0x00, 0x00];
+    record_2.extend_from_slice(&group_2);
+    let mut v2_body = icmpv6(143, [0, 0, 0, 2]); // M=2
+    v2_body.extend_from_slice(&record_1);
+    v2_body.extend_from_slice(&record_2);
+
+    let mut pkt = eth(MLDV2_ROUTERS_MAC, MAC_A, 0x86DD);
+    pkt.extend_from_slice(&ipv6(
+        v2_body.len() as u16,
+        LINK_LOCAL_SRC,
+        MLDV2_ROUTERS_DST,
+    ));
+    pkt.extend_from_slice(&v2_body);
+
+    let m = meta(pkt.len());
+    let packet = engine.dissect(&pkt, m, ParseOpts::default());
+    assert_eq!(chain(&packet), ["ethernet", "ipv6", "icmpv6", "mld"]);
+    let mld = packet.layers.last().expect("mld layer");
+    assert_eq!(mld.fields.get("msg_type"), Some(&Value::U64(143)));
+    // First record only (mld.rs's documented "first occurrence wins, rest
+    // walked for length only" stance) — but header_len must still cover
+    // both records, verified indirectly: dissection reaches `Complete`
+    // below, which it wouldn't if `mld` under-consumed the second record
+    // and left trailing bytes the router then tried (and failed) to route.
+    assert_eq!(
+        mld.fields.get("multicast_addr"),
+        Some(&Value::from(&group[..]))
+    );
+    assert_eq!(packet.stop, StopReason::Complete);
 }
