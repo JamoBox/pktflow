@@ -6,6 +6,7 @@
 use pktflow_core::Engine;
 
 pub mod arp;
+pub mod bgp;
 pub mod cdp;
 pub mod dhcp;
 pub mod dhcpv6;
@@ -59,6 +60,7 @@ pub fn default_engine() -> Engine {
         .plugin(ospf::Ospf)
         .plugin(tcp::Tcp)
         .plugin(udp::Udp)
+        .plugin(bgp::Bgp)
         .plugin(gre::Gre)
         .plugin(vxlan::Vxlan)
         .plugin(dns::Dns)

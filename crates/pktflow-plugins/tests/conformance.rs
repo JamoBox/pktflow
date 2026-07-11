@@ -6,6 +6,7 @@ mod kit;
 use pktflow_core::{Canonicalize, FieldMap, KeyField, LayerRecord, StreamIdentity};
 use pktflow_core::{Hint, RouteId, Value};
 use pktflow_plugins::arp::Arp;
+use pktflow_plugins::bgp::Bgp;
 use pktflow_plugins::cdp::Cdp;
 use pktflow_plugins::dhcp::Dhcp;
 use pktflow_plugins::dhcpv6::Dhcpv6;
@@ -1092,6 +1093,46 @@ fn dns_conforms_over_tcp_with_length_prefix() {
             bytes,
             expected_header_len: 31,
             expected_full_fields: dns_query_fields(),
+            expected_hint: Hint::Terminal,
+        }],
+        outer_ctx: vec![tcp_layer],
+    });
+}
+
+#[test]
+fn bgp_conforms() {
+    // RFC 4271 §4.2 OPEN: version 4, AS 65001, hold time 180, router id
+    // 10.0.0.1, no optional parameters.
+    let mut bytes = vec![0xFFu8; 16]; // Marker
+    bytes.extend_from_slice(&29u16.to_be_bytes()); // Length
+    bytes.push(1); // Type: OPEN
+    bytes.push(4); // Version
+    bytes.extend_from_slice(&65001u16.to_be_bytes());
+    bytes.extend_from_slice(&180u16.to_be_bytes());
+    bytes.extend_from_slice(&[10, 0, 0, 1]);
+    bytes.push(0); // Opt Parm Len
+
+    // Like DNS, BGP's real identity is its TCP session (module doc).
+    let tcp_layer = LayerRecord {
+        protocol: "tcp",
+        offset: 34,
+        header_len: 20,
+        fields: FieldMap::new(),
+    };
+
+    run_conformance(&ConformanceCase {
+        plugin: Box::new(Bgp),
+        good: vec![GoodPacket {
+            bytes,
+            expected_header_len: 29,
+            expected_full_fields: vec![
+                ("app", Value::from("bgp")),
+                ("msg_type", Value::U64(1)),
+                ("length", Value::U64(29)),
+                ("my_as", Value::U64(65001)),
+                ("hold_time", Value::U64(180)),
+                ("bgp_identifier", Value::from(&[10u8, 0, 0, 1][..])),
+            ],
             expected_hint: Hint::Terminal,
         }],
         outer_ctx: vec![tcp_layer],

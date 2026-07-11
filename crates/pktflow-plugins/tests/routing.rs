@@ -402,3 +402,131 @@ fn ospf_hello_is_identity_less_and_contributes_to_its_parent_ip_conversation() {
 fn ospf_declares_no_stream_identity() {
     assert!(pktflow_plugins::ospf::Ospf.stream_identity().is_none());
 }
+
+/// BGP-4 (RFC 4271): the app-stream pattern (06.6), the same shape as
+/// DNS-under-UDP — but riding on a TCP session (port 179) instead, so its
+/// `bgp` child stream is parented on the `tcp` stream carrying it rather
+/// than directly on `ipv4` the way `vrrp`'s group-beacon stream is above.
+fn eth_unicast(dst: [u8; 6], src: [u8; 6]) -> Vec<u8> {
+    let mut f = Vec::new();
+    f.extend_from_slice(&dst);
+    f.extend_from_slice(&src);
+    f.extend_from_slice(&0x0800u16.to_be_bytes());
+    f
+}
+
+fn ipv4_tcp(src: [u8; 4], dst: [u8; 4]) -> Vec<u8> {
+    let mut h = vec![
+        0x45, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xFF, 6, 0, 0,
+    ];
+    h.extend_from_slice(&src);
+    h.extend_from_slice(&dst);
+    let ck = internet_checksum(&h);
+    h[10..12].copy_from_slice(&ck.to_be_bytes());
+    h
+}
+
+/// A minimal 20-byte TCP segment (no options), ACK set (mid-session).
+fn tcp_segment(src_port: u16, dst_port: u16) -> Vec<u8> {
+    let mut s = vec![0u8; 20];
+    s[0..2].copy_from_slice(&src_port.to_be_bytes());
+    s[2..4].copy_from_slice(&dst_port.to_be_bytes());
+    s[12] = 0x50; // data offset 5, no options
+    s[13] = 0x10; // ACK
+    s[14..16].copy_from_slice(&0xFFFFu16.to_be_bytes()); // window
+    s
+}
+
+/// RFC 4271 §4.1 common header wrapping a message body.
+fn bgp_header(msg_type: u8, body: &[u8]) -> Vec<u8> {
+    let mut b = vec![0xFFu8; 16];
+    let length = (19 + body.len()) as u16;
+    b.extend_from_slice(&length.to_be_bytes());
+    b.push(msg_type);
+    b.extend_from_slice(body);
+    b
+}
+
+/// RFC 4271 §4.2 OPEN: version 4, whatever `my_as` the caller wants to
+/// observe changing across the sequence.
+fn bgp_open(my_as: u16) -> Vec<u8> {
+    let mut body = vec![4];
+    body.extend_from_slice(&my_as.to_be_bytes());
+    body.extend_from_slice(&180u16.to_be_bytes());
+    body.extend_from_slice(&[10, 0, 0, 1]);
+    body.push(0); // Opt Parm Len
+    bgp_header(1, &body)
+}
+
+fn bgp_keepalive() -> Vec<u8> {
+    bgp_header(4, &[])
+}
+
+fn bgp_frame(speaker: [u8; 4], peer: [u8; 4], msg: &[u8]) -> Vec<u8> {
+    let mut f = eth_unicast(
+        [0x00, 0x1A, 0x2B, 0x3C, 0x4D, 0x01],
+        [0x00, 0x1A, 0x2B, 0x3C, 0x4D, speaker[3]],
+    );
+    f.extend_from_slice(&ipv4_tcp(speaker, peer));
+    f.extend_from_slice(&tcp_segment(65432, 179));
+    f.extend_from_slice(msg);
+    f
+}
+
+#[test]
+fn bgp_app_stream_forms_under_the_tcp_session_and_accumulates_msg_type() {
+    let engine = Arc::new(default_engine());
+    let mut agg = Aggregator::new(&engine, AggregatorConfig::default());
+
+    let peer_a = [192, 0, 2, 1];
+    let peer_b = [192, 0, 2, 2];
+
+    for (ms, msg) in [
+        (0u64, bgp_open(65001)),
+        (1, bgp_keepalive()),
+        (2, bgp_open(65002)), // renegotiated AS: Sample must move first/last
+    ] {
+        let f = bgp_frame(peer_a, peer_b, &msg);
+        agg.ingest(&engine.dissect(&f, meta(f.len(), ms), ParseOpts::default()));
+    }
+
+    // Exactly one bgp child under the TCP session, same shape as DNS's own
+    // "one app-stream per transport stream" criterion (06.6), ported to TCP.
+    let tcp_stream = agg.at_layer("tcp")[0];
+    let bgp_streams = agg.at_layer("bgp");
+    assert_eq!(bgp_streams.len(), 1, "one app-stream per TCP session");
+    assert_eq!(bgp_streams[0].parent, Some(tcp_stream.id));
+
+    match bgp_streams[0].rollups.get("msg_type") {
+        Some(Rollup::Accumulate { values, count, .. }) => {
+            assert_eq!(*count, 3);
+            assert_eq!(
+                values.as_slice(),
+                [
+                    pktflow_core::Value::U64(1), // OPEN
+                    pktflow_core::Value::U64(4), // KEEPALIVE
+                ]
+            );
+        }
+        other => panic!("wrong rollup: {other:?}"),
+    }
+    match bgp_streams[0].rollups.get("my_as") {
+        Some(Rollup::Sample { first, last }) => {
+            assert_eq!(first, &Some(pktflow_core::Value::U64(65001)));
+            assert_eq!(last, &Some(pktflow_core::Value::U64(65002)));
+        }
+        other => panic!("wrong rollup: {other:?}"),
+    }
+}
+
+#[test]
+fn bgp_rollups_are_accumulate_on_msg_type_and_sample_on_my_as() {
+    let identity = pktflow_plugins::bgp::Bgp
+        .stream_identity()
+        .expect("bgp declares a stream identity");
+    assert_eq!(identity.rollups.len(), 2);
+    assert_eq!(identity.rollups[0].field, "msg_type");
+    assert_eq!(identity.rollups[0].kind, RollupKind::Accumulate);
+    assert_eq!(identity.rollups[1].field, "my_as");
+    assert_eq!(identity.rollups[1].kind, RollupKind::Sample);
+}
