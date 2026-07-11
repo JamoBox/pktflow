@@ -71,7 +71,7 @@ structure and the identical stateful-decode ceiling described above.
 | TR-069/CWMP | Broadband Forum TR-069 | Consumer-CPE remote management (ISP/home-router context) |
 
 ## Acceptance criteria
-- [ ] `snmp` fixtures for GetRequest/GetResponse (v1/v2c) and an SNMPv2-Trap parse
+- [x] `snmp` fixtures for GetRequest/GetResponse (v1/v2c) and an SNMPv2-Trap parse
       `pdu_type`/`community`/`request_id` exactly; DER length-decoding truncation test
       shared with the 11.7 boundary cases.
 - [x] `syslog` fixtures cover both RFC 5424 and legacy RFC 3164 framing, `facility`/

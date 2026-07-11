@@ -31,6 +31,7 @@ pub mod ntp;
 pub mod ospf;
 pub mod pvst_plus;
 pub mod radiotap;
+pub mod snmp;
 pub mod stp;
 pub mod syslog;
 pub mod tcp;
@@ -78,6 +79,7 @@ pub fn default_engine() -> Engine {
         .plugin(dot11::Dot11)
         .plugin(modbus::Modbus)
         .plugin(syslog::Syslog)
+        .plugin(snmp::Snmp)
         .build()
         // Not input-derived: a collision here is a bug in this very list,
         // caught by the registry's build-time validation (03.2).

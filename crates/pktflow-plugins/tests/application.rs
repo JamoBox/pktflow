@@ -1,7 +1,7 @@
-//! Application-layer behavior (06.6, 11.11): DNS/DHCP/NTP/Syslog
+//! Application-layer behavior (06.6, 11.11): DNS/DHCP/NTP/Syslog/SNMP
 //! fixtures, the app-stream pattern, DORA ordering, and the DNS
 //! parser-bomb defenses (with proptest fuzzes of the DNS name decoder and
-//! the syslog dissector).
+//! the syslog/SNMP dissectors).
 
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
@@ -430,6 +430,144 @@ proptest! {
     fn syslog_parse_never_panics(payload in proptest::collection::vec(any::<u8>(), 0..300)) {
         let engine = Arc::new(default_engine());
         let frame = syslog_frame([10, 0, 0, 1], [10, 0, 0, 53], 45000, &payload);
+        let _ = engine.dissect(&frame, meta(frame.len(), 0), ParseOpts::default());
+    }
+}
+
+fn snmp_frame(src: [u8; 4], dst: [u8; 4], sport: u16, msg: &[u8]) -> Vec<u8> {
+    let mut f = eth();
+    f.extend_from_slice(&ipv4_udp(src, dst, sport, 161, msg));
+    f
+}
+
+/// v1 GetRequest for `sysDescr.0` (RFC 1213), community `"public"`,
+/// request-id 1 — same bytes as `snmp.rs`'s and `conformance.rs`'s
+/// fixtures, verified against RFC 1157 §4.1.1/§4.1.2.
+fn snmp_get_request_v1() -> Vec<u8> {
+    vec![
+        0x30, 0x26, 0x02, 0x01, 0x00, 0x04, 0x06, 0x70, 0x75, 0x62, 0x6C, 0x69, 0x63, 0xA0, 0x19,
+        0x02, 0x01, 0x01, 0x02, 0x01, 0x00, 0x02, 0x01, 0x00, 0x30, 0x0E, 0x30, 0x0C, 0x06, 0x08,
+        0x2B, 0x06, 0x01, 0x02, 0x01, 0x01, 0x01, 0x00, 0x05, 0x00,
+    ]
+}
+
+/// v2c SNMPv2-Trap (tag `[7]`), same bytes as `conformance.rs`'s fixture.
+fn snmp_v2_trap() -> Vec<u8> {
+    vec![
+        0x30, 0x26, 0x02, 0x01, 0x01, 0x04, 0x06, 0x70, 0x75, 0x62, 0x6C, 0x69, 0x63, 0xA7, 0x19,
+        0x02, 0x01, 0x00, 0x02, 0x01, 0x00, 0x02, 0x01, 0x00, 0x30, 0x0E, 0x30, 0x0C, 0x06, 0x08,
+        0x2B, 0x06, 0x01, 0x02, 0x01, 0x01, 0x03, 0x00, 0x05, 0x00,
+    ]
+}
+
+#[test]
+fn snmp_get_request_v1_parses_exactly() {
+    let engine = Arc::new(default_engine());
+    let msg = snmp_get_request_v1();
+    let frame = snmp_frame([10, 0, 0, 5], [10, 0, 0, 1], 45000, &msg);
+    let packet = engine.dissect(&frame, meta(frame.len(), 0), ParseOpts::default());
+
+    let protocols: Vec<_> = packet.layers.iter().map(|l| l.protocol).collect();
+    assert_eq!(protocols, ["ethernet", "ipv4", "udp", "snmp"]);
+    assert_eq!(packet.stop, StopReason::Complete);
+
+    let layer = &packet.layers[3];
+    assert_eq!(layer.fields.get("version"), Some(&Value::U64(0)));
+    assert_eq!(layer.fields.get("community"), Some(&Value::from("public")));
+    assert_eq!(layer.fields.get("pdu_type"), Some(&Value::U64(0)));
+    assert_eq!(layer.fields.get("request_id"), Some(&Value::U64(1)));
+}
+
+/// Also reachable via the trap port (161 is the query/response port, 162
+/// is the trap-receiver port — both are `claims()`ed, RFC 1157 §5).
+#[test]
+fn snmp_trap_reaches_dissector_on_port_162() {
+    let engine = Arc::new(default_engine());
+    let msg = snmp_v2_trap();
+    let mut f = eth();
+    let mut h = vec![
+        0x45, 0x00, 0x00, 0x3C, 0x1C, 0x46, 0x40, 0x00, 0x40, 17, 0, 0,
+    ];
+    h.extend_from_slice(&[10, 0, 0, 1]);
+    h.extend_from_slice(&[10, 0, 0, 255]);
+    let ck = internet_checksum(&h);
+    h[10..12].copy_from_slice(&ck.to_be_bytes());
+    h.extend_from_slice(&162u16.to_be_bytes()); // src: agent's trap source port
+    h.extend_from_slice(&162u16.to_be_bytes()); // dst: trap-receiver's well-known port
+    h.extend_from_slice(&((8 + msg.len()) as u16).to_be_bytes());
+    h.extend_from_slice(&[0, 0]);
+    h.extend_from_slice(&msg);
+    f.extend_from_slice(&h);
+
+    let packet = engine.dissect(&f, meta(f.len(), 0), ParseOpts::default());
+    let protocols: Vec<_> = packet.layers.iter().map(|l| l.protocol).collect();
+    assert_eq!(protocols, ["ethernet", "ipv4", "udp", "snmp"]);
+    let layer = &packet.layers[3];
+    assert_eq!(layer.fields.get("pdu_type"), Some(&Value::U64(7)));
+}
+
+/// Malformed SNMP on the claimed port declines cleanly (03.4 row 3): a
+/// non-SEQUENCE outer tag, a length claiming more bytes than the message
+/// holds, and an indefinite-length outer TLV.
+#[test]
+fn snmp_malformed_input_declines_safely() {
+    let engine = Arc::new(default_engine());
+    let bad_inputs: [&[u8]; 3] = [
+        &[0x31, 0x03, 0x02, 0x01, 0x00],             // SET, not SEQUENCE
+        &[0x30, 0x7F, 0x02, 0x01, 0x00],             // declared length far exceeds available bytes
+        &[0x30, 0x80, 0x02, 0x01, 0x00, 0x00, 0x00], // indefinite length, unsupported
+    ];
+    for msg in bad_inputs {
+        let frame = snmp_frame([10, 0, 0, 5], [10, 0, 0, 1], 45000, msg);
+        let packet = engine.dissect(&frame, meta(frame.len(), 0), ParseOpts::default());
+        let protocols: Vec<_> = packet.layers.iter().map(|l| l.protocol).collect();
+        assert_eq!(protocols, ["ethernet", "ipv4", "udp"]);
+        assert_eq!(packet.stop, StopReason::PluginError);
+    }
+}
+
+/// App-stream pattern (06.6): one `snmp` child per UDP stream, with
+/// `pdu_type` accumulated and `community` sampled across messages.
+#[test]
+fn app_stream_pattern_one_snmp_child_with_rollups() {
+    let engine = Arc::new(default_engine());
+    let mut agg = Aggregator::new(&engine, AggregatorConfig::default());
+
+    let messages = [snmp_get_request_v1(), snmp_v2_trap()];
+    for (i, msg) in messages.iter().enumerate() {
+        let frame = snmp_frame([10, 0, 0, 5], [10, 0, 0, 1], 45000, msg);
+        agg.ingest(&engine.dissect(&frame, meta(frame.len(), i as u64), ParseOpts::default()));
+    }
+
+    let udp_stream = agg.at_layer("udp")[0];
+    let snmp_streams = agg.at_layer("snmp");
+    assert_eq!(snmp_streams.len(), 1, "one app-stream per transport stream");
+    assert_eq!(snmp_streams[0].parent, Some(udp_stream.id));
+
+    match snmp_streams[0].rollups.get("pdu_type") {
+        Some(Rollup::Accumulate { values, count, .. }) => {
+            assert_eq!(*count, 2);
+            assert_eq!(values.as_slice(), [Value::U64(0), Value::U64(7)]);
+        }
+        other => panic!("wrong rollup: {other:?}"),
+    }
+    match snmp_streams[0].rollups.get("community") {
+        Some(Rollup::Sample { first, last }) => {
+            assert_eq!(first, &Some(Value::from("public")));
+            assert_eq!(last, &Some(Value::from("public")));
+        }
+        other => panic!("wrong rollup: {other:?}"),
+    }
+}
+
+proptest! {
+    /// The dissector must decline or succeed on arbitrary bytes behind a
+    /// claimed port — never panic (parser-bomb discipline, same standard
+    /// as `decode_name_never_panics_or_hangs`).
+    #[test]
+    fn snmp_parse_never_panics(payload in proptest::collection::vec(any::<u8>(), 0..300)) {
+        let engine = Arc::new(default_engine());
+        let frame = snmp_frame([10, 0, 0, 5], [10, 0, 0, 1], 45000, &payload);
         let _ = engine.dissect(&frame, meta(frame.len(), 0), ParseOpts::default());
     }
 }

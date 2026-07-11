@@ -31,6 +31,7 @@ use pktflow_plugins::ntp::Ntp;
 use pktflow_plugins::ospf::Ospf;
 use pktflow_plugins::pvst_plus::PvstPlus;
 use pktflow_plugins::radiotap::Radiotap;
+use pktflow_plugins::snmp::Snmp;
 use pktflow_plugins::stp::Stp;
 use pktflow_plugins::syslog::Syslog;
 use pktflow_plugins::tcp::Tcp;
@@ -1820,6 +1821,100 @@ fn syslog_conforms() {
                     ("version", Value::U64(0)),
                     ("hostname", Value::from("mymachine")),
                     ("app_name", Value::from("su")),
+                ],
+                expected_hint: Hint::Terminal,
+            },
+        ],
+        outer_ctx: Vec::new(),
+    });
+}
+
+#[test]
+fn snmp_conforms() {
+    // Hand-built and byte-verified against RFC 1157 §4.1 (v1 PDUs/Trap-PDU),
+    // RFC 3416 §3 (v2c PDUs), RFC 1213 (sysDescr.0/sysUpTime.0 OIDs), and
+    // X.690 (BER TLV encoding) — not captured from a live agent. See
+    // snmp.rs's own fixture builders for a byte-by-byte breakdown of the
+    // same structure.
+
+    // v1 GetRequest for sysDescr.0, community "public", request-id 1.
+    let get_request_v1 = vec![
+        0x30, 0x26, 0x02, 0x01, 0x00, 0x04, 0x06, 0x70, 0x75, 0x62, 0x6C, 0x69, 0x63, 0xA0, 0x19,
+        0x02, 0x01, 0x01, 0x02, 0x01, 0x00, 0x02, 0x01, 0x00, 0x30, 0x0E, 0x30, 0x0C, 0x06, 0x08,
+        0x2B, 0x06, 0x01, 0x02, 0x01, 0x01, 0x01, 0x00, 0x05, 0x00,
+    ];
+
+    // v2c GetResponse answering the request above with sysDescr.0 =
+    // "Linux".
+    let get_response_v2c = vec![
+        0x30, 0x2B, 0x02, 0x01, 0x01, 0x04, 0x06, 0x70, 0x75, 0x62, 0x6C, 0x69, 0x63, 0xA2, 0x1E,
+        0x02, 0x01, 0x01, 0x02, 0x01, 0x00, 0x02, 0x01, 0x00, 0x30, 0x13, 0x30, 0x11, 0x06, 0x08,
+        0x2B, 0x06, 0x01, 0x02, 0x01, 0x01, 0x01, 0x00, 0x04, 0x05, 0x4C, 0x69, 0x6E, 0x75, 0x78,
+    ];
+
+    // v2c SNMPv2-Trap (tag [7]) carrying sysUpTime.0.
+    let snmpv2_trap = vec![
+        0x30, 0x26, 0x02, 0x01, 0x01, 0x04, 0x06, 0x70, 0x75, 0x62, 0x6C, 0x69, 0x63, 0xA7, 0x19,
+        0x02, 0x01, 0x00, 0x02, 0x01, 0x00, 0x02, 0x01, 0x00, 0x30, 0x0E, 0x30, 0x0C, 0x06, 0x08,
+        0x2B, 0x06, 0x01, 0x02, 0x01, 0x01, 0x03, 0x00, 0x05, 0x00,
+    ];
+
+    // v1 Trap-PDU (tag [4]): structurally different from the other PDUs
+    // (RFC 1157 §4.1.6) — its first element is an enterprise OID, not
+    // request-id, so `request_id` is absent from the expected field set.
+    let trap_v1 = vec![
+        0x30, 0x26, 0x02, 0x01, 0x00, 0x04, 0x06, 0x70, 0x75, 0x62, 0x6C, 0x69, 0x63, 0xA4, 0x19,
+        0x06, 0x06, 0x2B, 0x06, 0x01, 0x04, 0x01, 0x09, 0x40, 0x04, 0xC0, 0x00, 0x02, 0x01, 0x02,
+        0x01, 0x06, 0x02, 0x01, 0x00, 0x43, 0x01, 0x00, 0x30, 0x00,
+    ];
+
+    run_conformance(&ConformanceCase {
+        plugin: Box::new(Snmp),
+        good: vec![
+            GoodPacket {
+                expected_header_len: get_request_v1.len(),
+                bytes: get_request_v1,
+                expected_full_fields: vec![
+                    ("app", Value::from("snmp")),
+                    ("version", Value::U64(0)),
+                    ("community", Value::from("public")),
+                    ("pdu_type", Value::U64(0)),
+                    ("request_id", Value::U64(1)),
+                ],
+                expected_hint: Hint::Terminal,
+            },
+            GoodPacket {
+                expected_header_len: get_response_v2c.len(),
+                bytes: get_response_v2c,
+                expected_full_fields: vec![
+                    ("app", Value::from("snmp")),
+                    ("version", Value::U64(1)),
+                    ("community", Value::from("public")),
+                    ("pdu_type", Value::U64(2)),
+                    ("request_id", Value::U64(1)),
+                ],
+                expected_hint: Hint::Terminal,
+            },
+            GoodPacket {
+                expected_header_len: snmpv2_trap.len(),
+                bytes: snmpv2_trap,
+                expected_full_fields: vec![
+                    ("app", Value::from("snmp")),
+                    ("version", Value::U64(1)),
+                    ("community", Value::from("public")),
+                    ("pdu_type", Value::U64(7)),
+                    ("request_id", Value::U64(0)),
+                ],
+                expected_hint: Hint::Terminal,
+            },
+            GoodPacket {
+                expected_header_len: trap_v1.len(),
+                bytes: trap_v1,
+                expected_full_fields: vec![
+                    ("app", Value::from("snmp")),
+                    ("version", Value::U64(0)),
+                    ("community", Value::from("public")),
+                    ("pdu_type", Value::U64(4)),
                 ],
                 expected_hint: Hint::Terminal,
             },
