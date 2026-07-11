@@ -185,6 +185,98 @@ fn app_stream_pattern_one_dns_child_with_accumulated_qnames() {
     }
 }
 
+/// RFC 6762 standard query for `<name>` (A record), sent to the mDNS
+/// multicast group's port. `qu` sets the question's QU bit (§5.4).
+fn mdns_query(id: u16, name_labels: &[&str], qu: bool) -> Vec<u8> {
+    let mut m = Vec::new();
+    m.extend_from_slice(&id.to_be_bytes());
+    m.extend_from_slice(&[0x00, 0x00]);
+    m.extend_from_slice(&[0, 1, 0, 0, 0, 0, 0, 0]);
+    for label in name_labels {
+        m.push(label.len() as u8);
+        m.extend_from_slice(label.as_bytes());
+    }
+    m.push(0);
+    m.extend_from_slice(&[0, 1]); // type A
+    let class = if qu { 0x8001u16 } else { 0x0001 };
+    m.extend_from_slice(&class.to_be_bytes());
+    m
+}
+
+#[test]
+fn mdns_app_stream_is_distinct_from_dns_and_accumulates_qnames() {
+    // The PRD §4.A pattern, applied to mDNS's `.local` namespace instead of
+    // the resolver-hierarchy names `dns_query_and_compressed_response_parse_exactly`
+    // covers — same UDP-multicast destination (5353) across every packet.
+    let engine = Arc::new(default_engine());
+    let mut agg = Aggregator::new(&engine, AggregatorConfig::default());
+
+    for (i, (labels, qu)) in [
+        (&["printer", "local"][..], true),
+        (&["nas", "local"][..], false),
+        (&["printer", "local"][..], true), // repeat: no new distinct value
+    ]
+    .iter()
+    .enumerate()
+    {
+        let msg = mdns_query(0x0000, labels, *qu);
+        let mut frame = eth();
+        frame.extend_from_slice(&ipv4_udp([10, 0, 0, 5], [224, 0, 0, 251], 5353, 5353, &msg));
+        agg.ingest(&engine.dissect(&frame, meta(frame.len(), i as u64), ParseOpts::default()));
+    }
+
+    let mdns_streams = agg.at_layer("mdns");
+    assert_eq!(mdns_streams.len(), 1, "one app-stream per transport stream");
+    assert!(
+        agg.at_layer("dns").is_empty(),
+        "mdns must not fold into dns's app-stream constant"
+    );
+
+    match mdns_streams[0].rollups.get("qname") {
+        Some(Rollup::Accumulate { values, count, .. }) => {
+            assert_eq!(*count, 3);
+            assert_eq!(
+                values.as_slice(),
+                [Value::from("printer.local"), Value::from("nas.local")]
+            );
+        }
+        other => panic!("wrong rollup: {other:?}"),
+    }
+}
+
+#[test]
+fn mdns_response_reports_cache_flush_bit() {
+    let engine = Arc::new(default_engine());
+
+    let mut response = mdns_query(0x0000, &["printer", "local"], false);
+    response[2] = 0x84; // QR|AA
+    response[7] = 1; // ancount = 1
+    response.extend_from_slice(&[0xC0, 0x0C]); // name: pointer to question
+    response.extend_from_slice(&[0, 1, 0x80, 0x01]); // type A, class IN | cache-flush bit
+    response.extend_from_slice(&[0, 0, 0, 120]); // ttl
+    response.extend_from_slice(&[0, 4, 192, 0, 2, 5]); // rdlength + A record
+    let mut frame = eth();
+    frame.extend_from_slice(&ipv4_udp(
+        [10, 0, 0, 5],
+        [224, 0, 0, 251],
+        5353,
+        5353,
+        &response,
+    ));
+    let packet = engine.dissect(&frame, meta(frame.len(), 0), ParseOpts::default());
+    let protocols: Vec<_> = packet.layers.iter().map(|l| l.protocol).collect();
+    assert_eq!(protocols, ["ethernet", "ipv4", "udp", "mdns"]);
+    let mdns_layer = &packet.layers[3];
+    assert_eq!(
+        mdns_layer.fields.get("cache_flush"),
+        Some(&Value::Bool(true))
+    );
+    assert_eq!(
+        mdns_layer.fields.get("answers"),
+        Some(&Value::List(vec![Value::from("192.0.2.5")]))
+    );
+}
+
 /// BOOTP + magic cookie + options (53 = msg_type, then END).
 fn dhcp_msg(op: u8, xid: u32, msg_type: u8) -> Vec<u8> {
     let mut m = vec![op, 1, 6, 0];

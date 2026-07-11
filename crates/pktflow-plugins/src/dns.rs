@@ -132,6 +132,95 @@ fn render_rdata(msg: &[u8], rtype: u16, rdata_offset: usize, rdata: &[u8]) -> St
     }
 }
 
+/// The RFC 1035 message walk, shared by every plugin whose wire format is
+/// literally a DNS message (`dns` itself, and mDNS/LLMNR — 11.12 — which
+/// reuse this routine rather than re-deriving name decompression and the
+/// question/RR walk). Owns no depth/framing decisions — those stay in each
+/// caller, since mDNS's bit interpretations of the class fields differ from
+/// plain DNS's.
+pub(crate) struct RawMessage {
+    pub id: u16,
+    pub flags: u16,
+    pub counts: [u16; 4],
+    pub qname: Option<String>,
+    pub qtype: Option<u16>,
+    /// The first question's class field, raw (top bit is DNS's `QU`/cache-
+    /// flush-request bit in mDNS — RFC 6762 §5.4 — meaningless in plain DNS).
+    pub qclass: Option<u16>,
+    /// The first Answer-section RR's class field, raw (top bit is mDNS's
+    /// cache-flush bit — RFC 6762 §10.2 — meaningless in plain DNS).
+    pub first_answer_class: Option<u16>,
+    pub answers: Vec<Value>,
+    /// Bytes consumed from the start of `msg` (message-only, no framing).
+    pub header_len: usize,
+}
+
+pub(crate) fn parse_message(msg: &[u8]) -> Result<RawMessage, ParseError> {
+    let mut r = ByteReader::new(msg);
+    let id = r.u16_be()?;
+    let flags = r.u16_be()?;
+    let counts = [r.u16_be()?, r.u16_be()?, r.u16_be()?, r.u16_be()?];
+    if counts.iter().any(|&c| c > MAX_RECORDS_PER_SECTION) {
+        return Err(ParseError::Malformed("implausible section count"));
+    }
+
+    // Walk every section so header_len covers exactly the message we
+    // verified; answers are rendered, the rest is bounds-checked.
+    let mut pos = 12usize;
+    let mut qname = None;
+    let mut qtype = None;
+    let mut qclass = None;
+    for _ in 0..counts[0] {
+        let (name, consumed) = decode_name(msg, pos)?;
+        pos += consumed;
+        let mut q = ByteReader::new(msg.get(pos..).unwrap_or(&[]));
+        let t = q.u16_be()?;
+        let cls = q.u16_be()?;
+        pos += 4;
+        if qname.is_none() {
+            qname = Some(name);
+            qtype = Some(t);
+            qclass = Some(cls);
+        }
+    }
+    let mut answers = Vec::new();
+    let mut first_answer_class = None;
+    for section in 0..3 {
+        for _ in 0..counts[1 + section] {
+            let (_, consumed) = decode_name(msg, pos)?;
+            pos += consumed;
+            let mut rec = ByteReader::new(msg.get(pos..).unwrap_or(&[]));
+            let rtype = rec.u16_be()?;
+            let cls = rec.u16_be()?;
+            let _ttl = rec.u32_be()?;
+            let rdlength = usize::from(rec.u16_be()?);
+            let rdata = rec.take(rdlength)?;
+            let rdata_offset = pos + 10;
+            if section == 0 {
+                if first_answer_class.is_none() {
+                    first_answer_class = Some(cls);
+                }
+                answers.push(Value::from(
+                    render_rdata(msg, rtype, rdata_offset, rdata).as_str(),
+                ));
+            }
+            pos += 10 + rdlength;
+        }
+    }
+
+    Ok(RawMessage {
+        id,
+        flags,
+        counts,
+        qname,
+        qtype,
+        qclass,
+        first_answer_class,
+        answers,
+        header_len: pos,
+    })
+}
+
 pub struct Dns;
 
 impl LayerPlugin for Dns {
@@ -151,76 +240,32 @@ impl LayerPlugin for Dns {
             (bytes, 0)
         };
 
-        let mut r = ByteReader::new(msg);
-        let id = r.u16_be()?;
-        let flags = r.u16_be()?;
-        let counts = [r.u16_be()?, r.u16_be()?, r.u16_be()?, r.u16_be()?];
-        if counts.iter().any(|&c| c > MAX_RECORDS_PER_SECTION) {
-            return Err(ParseError::Malformed("implausible section count"));
-        }
-
-        // Walk every section so header_len covers exactly the message we
-        // verified; answers are rendered, the rest is bounds-checked.
-        let mut pos = 12usize;
-        let mut qname = None;
-        let mut qtype = None;
-        for _ in 0..counts[0] {
-            let (name, consumed) = decode_name(msg, pos)?;
-            pos += consumed;
-            let mut q = ByteReader::new(msg.get(pos..).unwrap_or(&[]));
-            let t = q.u16_be()?;
-            let _class = q.u16_be()?;
-            pos += 4;
-            if qname.is_none() {
-                qname = Some(name);
-                qtype = Some(t);
-            }
-        }
-        let mut answers = Vec::new();
-        for section in 0..3 {
-            for _ in 0..counts[1 + section] {
-                let (_, consumed) = decode_name(msg, pos)?;
-                pos += consumed;
-                let mut rec = ByteReader::new(msg.get(pos..).unwrap_or(&[]));
-                let rtype = rec.u16_be()?;
-                let _class = rec.u16_be()?;
-                let _ttl = rec.u32_be()?;
-                let rdlength = usize::from(rec.u16_be()?);
-                let rdata = rec.take(rdlength)?;
-                let rdata_offset = pos + 10;
-                if section == 0 {
-                    answers.push(Value::from(
-                        render_rdata(msg, rtype, rdata_offset, rdata).as_str(),
-                    ));
-                }
-                pos += 10 + rdlength;
-            }
-        }
+        let raw = parse_message(msg)?;
 
         let mut fields = FieldMap::new();
         if ctx.depth() >= Depth::Keys {
             fields.insert(APP, Value::from("dns"));
         }
         if ctx.depth() >= Depth::Structural {
-            fields.insert(ID, Value::U64(u64::from(id)));
-            fields.insert(IS_RESPONSE, Value::Bool(flags & 0x8000 != 0));
-            fields.insert(OPCODE, Value::U64(u64::from((flags >> 11) & 0xF)));
-            fields.insert(RCODE, Value::U64(u64::from(flags & 0xF)));
-            if let (Some(name), Some(t)) = (qname, qtype) {
+            fields.insert(ID, Value::U64(u64::from(raw.id)));
+            fields.insert(IS_RESPONSE, Value::Bool(raw.flags & 0x8000 != 0));
+            fields.insert(OPCODE, Value::U64(u64::from((raw.flags >> 11) & 0xF)));
+            fields.insert(RCODE, Value::U64(u64::from(raw.flags & 0xF)));
+            if let (Some(name), Some(t)) = (raw.qname, raw.qtype) {
                 fields.insert(QNAME, Value::from(name.as_str()));
                 fields.insert(QTYPE, Value::U64(u64::from(t)));
             }
         }
         if ctx.depth() >= Depth::Full {
-            fields.insert(ANSWERS, Value::List(answers));
-            fields.insert(QDCOUNT, Value::U64(u64::from(counts[0])));
-            fields.insert(ANCOUNT, Value::U64(u64::from(counts[1])));
-            fields.insert(NSCOUNT, Value::U64(u64::from(counts[2])));
-            fields.insert(ARCOUNT, Value::U64(u64::from(counts[3])));
+            fields.insert(ANSWERS, Value::List(raw.answers));
+            fields.insert(QDCOUNT, Value::U64(u64::from(raw.counts[0])));
+            fields.insert(ANCOUNT, Value::U64(u64::from(raw.counts[1])));
+            fields.insert(NSCOUNT, Value::U64(u64::from(raw.counts[2])));
+            fields.insert(ARCOUNT, Value::U64(u64::from(raw.counts[3])));
         }
 
         Ok(ParsedLayer {
-            header_len: prefix + pos,
+            header_len: prefix + raw.header_len,
             fields,
             hint: Hint::Terminal,
         })

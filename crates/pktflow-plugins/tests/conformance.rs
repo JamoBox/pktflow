@@ -27,6 +27,7 @@ use pktflow_plugins::ipv6::Ipv6;
 use pktflow_plugins::lacp::Lacp;
 use pktflow_plugins::llc::Llc;
 use pktflow_plugins::lldp::Lldp;
+use pktflow_plugins::mdns::Mdns;
 use pktflow_plugins::mld::Mld;
 use pktflow_plugins::modbus::Modbus;
 use pktflow_plugins::ndp::Ndp;
@@ -1102,6 +1103,43 @@ fn dns_conforms_over_tcp_with_length_prefix() {
             expected_hint: Hint::Terminal,
         }],
         outer_ctx: vec![tcp_layer],
+    });
+}
+
+/// RFC 6762 standard query for example.local (A, IN), QU bit set on the
+/// question's class field (§5.4) — mDNS's one class-field bit `dns`'s own
+/// fixture never exercises.
+fn mdns_query_bytes() -> Vec<u8> {
+    let mut m = vec![0x00, 0x00, 0x00, 0x00, 0, 1, 0, 0, 0, 0, 0, 0];
+    m.extend_from_slice(&[7]);
+    m.extend_from_slice(b"example");
+    m.extend_from_slice(&[5]);
+    m.extend_from_slice(b"local");
+    m.extend_from_slice(&[0, 0, 1, 0x80, 0x01]); // type A, class IN | QU bit
+    m
+}
+
+#[test]
+fn mdns_conforms() {
+    run_conformance(&ConformanceCase {
+        plugin: Box::new(Mdns),
+        good: vec![GoodPacket {
+            expected_header_len: mdns_query_bytes().len(),
+            bytes: mdns_query_bytes(),
+            expected_full_fields: vec![
+                ("app", Value::from("mdns")),
+                ("id", Value::U64(0)),
+                ("is_response", Value::Bool(false)),
+                ("opcode", Value::U64(0)),
+                ("rcode", Value::U64(0)),
+                ("qname", Value::from("example.local")),
+                ("qtype", Value::U64(1)),
+                ("is_multicast_query", Value::Bool(true)),
+                ("answers", Value::List(vec![])),
+            ],
+            expected_hint: Hint::Terminal,
+        }],
+        outer_ctx: Vec::new(),
     });
 }
 
