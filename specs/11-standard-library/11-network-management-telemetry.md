@@ -74,7 +74,7 @@ structure and the identical stateful-decode ceiling described above.
 - [ ] `snmp` fixtures for GetRequest/GetResponse (v1/v2c) and an SNMPv2-Trap parse
       `pdu_type`/`community`/`request_id` exactly; DER length-decoding truncation test
       shared with the 11.7 boundary cases.
-- [ ] `syslog` fixtures cover both RFC 5424 and legacy RFC 3164 framing, `facility`/
+- [x] `syslog` fixtures cover both RFC 5424 and legacy RFC 3164 framing, `facility`/
       `severity` decomposition verified against the combined `<PRI>` value.
 - [ ] `netflow9`/`ipfix` fixtures: a Template FlowSet/Set decodes its field-definition list
       exactly; a Data FlowSet/Set immediately following in the **same packet** is still left

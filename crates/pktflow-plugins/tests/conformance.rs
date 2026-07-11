@@ -32,6 +32,7 @@ use pktflow_plugins::ospf::Ospf;
 use pktflow_plugins::pvst_plus::PvstPlus;
 use pktflow_plugins::radiotap::Radiotap;
 use pktflow_plugins::stp::Stp;
+use pktflow_plugins::syslog::Syslog;
 use pktflow_plugins::tcp::Tcp;
 use pktflow_plugins::template::Template;
 use pktflow_plugins::udp::Udp;
@@ -1775,6 +1776,50 @@ fn modbus_conforms() {
                     ("function_code", Value::U64(0x83)),
                     ("is_exception", Value::Bool(true)),
                     ("exception_code", Value::U64(2)),
+                ],
+                expected_hint: Hint::Terminal,
+            },
+        ],
+        outer_ctx: Vec::new(),
+    });
+}
+
+#[test]
+fn syslog_conforms() {
+    // Both samples are RFC 5424 §6.5 Example 1 / RFC 3164 §5.4 Example 1
+    // (same PRI, same hostname/TAG in both RFCs), each truncated at its
+    // last unambiguous, self-terminated token — see syslog.rs's module
+    // doc for why the trailing `[SP MSG]`/CONTENT is exercised separately
+    // in application.rs instead of here.
+    let rfc5424 = b"<34>1 2003-10-11T22:14:15.003Z mymachine.example.com su - ID47 -".to_vec();
+    let rfc3164 = b"<34>Oct 11 22:14:15 mymachine su:".to_vec();
+
+    run_conformance(&ConformanceCase {
+        plugin: Box::new(Syslog),
+        good: vec![
+            GoodPacket {
+                expected_header_len: rfc5424.len(),
+                bytes: rfc5424,
+                expected_full_fields: vec![
+                    ("app", Value::from("syslog")),
+                    ("facility", Value::U64(4)),
+                    ("severity", Value::U64(2)),
+                    ("version", Value::U64(1)),
+                    ("hostname", Value::from("mymachine.example.com")),
+                    ("app_name", Value::from("su")),
+                ],
+                expected_hint: Hint::Terminal,
+            },
+            GoodPacket {
+                expected_header_len: rfc3164.len(),
+                bytes: rfc3164,
+                expected_full_fields: vec![
+                    ("app", Value::from("syslog")),
+                    ("facility", Value::U64(4)),
+                    ("severity", Value::U64(2)),
+                    ("version", Value::U64(0)),
+                    ("hostname", Value::from("mymachine")),
+                    ("app_name", Value::from("su")),
                 ],
                 expected_hint: Hint::Terminal,
             },

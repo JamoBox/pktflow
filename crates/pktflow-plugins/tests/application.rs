@@ -1,6 +1,7 @@
-//! Application-layer behavior (06.6): DNS/DHCP/NTP fixtures, the
-//! app-stream pattern, DORA ordering, and the DNS parser-bomb defenses
-//! (with a proptest fuzz of the name decoder).
+//! Application-layer behavior (06.6, 11.11): DNS/DHCP/NTP/Syslog
+//! fixtures, the app-stream pattern, DORA ordering, and the DNS
+//! parser-bomb defenses (with proptest fuzzes of the DNS name decoder and
+//! the syslog dissector).
 
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
@@ -279,5 +280,156 @@ fn ntp_exchange_parses_and_rolls_up() {
             assert_eq!(last, &Some(Value::U64(2)));
         }
         other => panic!("wrong rollup: {other:?}"),
+    }
+}
+
+fn syslog_frame(src: [u8; 4], dst: [u8; 4], sport: u16, msg: &[u8]) -> Vec<u8> {
+    let mut f = eth();
+    f.extend_from_slice(&ipv4_udp(src, dst, sport, 514, msg));
+    f
+}
+
+/// RFC 5424 §6.5 Example 1, verbatim (the `BOM` placeholder in the RFC
+/// text is the literal 3-byte UTF-8 byte order mark, EF BB BF).
+#[test]
+fn syslog_rfc5424_example_parses_exactly() {
+    let mut msg = b"<34>1 2003-10-11T22:14:15.003Z mymachine.example.com su - ID47 - ".to_vec();
+    msg.extend_from_slice(&[0xEF, 0xBB, 0xBF]);
+    msg.extend_from_slice(b"'su root' failed for lonvick on /dev/pts/8");
+
+    let engine = Arc::new(default_engine());
+    let frame = syslog_frame([10, 0, 0, 1], [10, 0, 0, 53], 45000, &msg);
+    let packet = engine.dissect(&frame, meta(frame.len(), 0), ParseOpts::default());
+
+    let protocols: Vec<_> = packet.layers.iter().map(|l| l.protocol).collect();
+    assert_eq!(protocols, ["ethernet", "ipv4", "udp", "syslog"]);
+    assert_eq!(packet.stop, StopReason::Complete);
+
+    let layer = &packet.layers[3];
+    assert_eq!(layer.fields.get("facility"), Some(&Value::U64(4)));
+    assert_eq!(layer.fields.get("severity"), Some(&Value::U64(2)));
+    assert_eq!(layer.fields.get("version"), Some(&Value::U64(1)));
+    assert_eq!(
+        layer.fields.get("hostname"),
+        Some(&Value::from("mymachine.example.com"))
+    );
+    assert_eq!(layer.fields.get("app_name"), Some(&Value::from("su")));
+    assert_eq!(
+        layer.fields.get("msg"),
+        Some(&Value::from(
+            "\u{FEFF}'su root' failed for lonvick on /dev/pts/8"
+        ))
+    );
+}
+
+/// RFC 3164 §5.4 Example 1, verbatim.
+#[test]
+fn syslog_rfc3164_legacy_example_parses_exactly() {
+    let msg = b"<34>Oct 11 22:14:15 mymachine su: 'su root' failed for lonvick on /dev/pts/8";
+
+    let engine = Arc::new(default_engine());
+    let frame = syslog_frame([10, 0, 0, 1], [10, 0, 0, 53], 45000, msg);
+    let packet = engine.dissect(&frame, meta(frame.len(), 0), ParseOpts::default());
+
+    let protocols: Vec<_> = packet.layers.iter().map(|l| l.protocol).collect();
+    assert_eq!(protocols, ["ethernet", "ipv4", "udp", "syslog"]);
+    assert_eq!(packet.stop, StopReason::Complete);
+
+    let layer = &packet.layers[3];
+    assert_eq!(layer.fields.get("facility"), Some(&Value::U64(4)));
+    assert_eq!(layer.fields.get("severity"), Some(&Value::U64(2)));
+    assert_eq!(layer.fields.get("version"), Some(&Value::U64(0)));
+    assert_eq!(
+        layer.fields.get("hostname"),
+        Some(&Value::from("mymachine"))
+    );
+    assert_eq!(layer.fields.get("app_name"), Some(&Value::from("su")));
+    assert_eq!(
+        layer.fields.get("msg"),
+        Some(&Value::from("'su root' failed for lonvick on /dev/pts/8"))
+    );
+}
+
+/// TAG with an explicit PID suffix, a common real-world variant of
+/// RFC 3164's TAG (`sshd[1234]:`).
+#[test]
+fn syslog_rfc3164_tag_with_pid_parses() {
+    let msg = b"<38>Jan  5 03:00:00 server1 sshd[1234]: Accepted publickey for root";
+    let engine = Arc::new(default_engine());
+    let frame = syslog_frame([10, 0, 0, 1], [10, 0, 0, 53], 45000, msg);
+    let packet = engine.dissect(&frame, meta(frame.len(), 0), ParseOpts::default());
+
+    let layer = &packet.layers[3];
+    assert_eq!(layer.fields.get("app_name"), Some(&Value::from("sshd")));
+    assert_eq!(
+        layer.fields.get("msg"),
+        Some(&Value::from("Accepted publickey for root"))
+    );
+}
+
+/// Malformed syslog on the claimed port declines cleanly (03.4 row 3):
+/// a missing PRI marker, a dangling escape in structured data, and a
+/// legacy timestamp too short to be the fixed 15-byte field.
+#[test]
+fn syslog_malformed_input_declines_safely() {
+    let engine = Arc::new(default_engine());
+    let bad_inputs: [&[u8]; 3] = [
+        b"34>1 2003-10-11T22:14:15.003Z host app - - -",
+        b"<34>1 2003-10-11T22:14:15.003Z host app - - [id\\",
+        b"<34>Oct 11 22:1",
+    ];
+    for msg in bad_inputs {
+        let frame = syslog_frame([10, 0, 0, 1], [10, 0, 0, 53], 45000, msg);
+        let packet = engine.dissect(&frame, meta(frame.len(), 0), ParseOpts::default());
+        let protocols: Vec<_> = packet.layers.iter().map(|l| l.protocol).collect();
+        assert_eq!(protocols, ["ethernet", "ipv4", "udp"]);
+        assert_eq!(packet.stop, StopReason::PluginError);
+    }
+}
+
+/// App-stream pattern (06.6): one `syslog` child per UDP stream, with
+/// `severity` accumulated across messages from both RFC framings.
+#[test]
+fn app_stream_pattern_one_syslog_child_with_accumulated_severity() {
+    let engine = Arc::new(default_engine());
+    let mut agg = Aggregator::new(&engine, AggregatorConfig::default());
+
+    let messages: [&[u8]; 3] = [
+        b"<34>1 2003-10-11T22:14:15.003Z host1 su - - -",
+        b"<13>Oct 11 22:14:16 host1 cron:",
+        b"<34>1 2003-10-11T22:14:17.003Z host1 su - - -", // repeat severity: no new distinct value
+    ];
+    for (i, msg) in messages.iter().enumerate() {
+        let frame = syslog_frame([10, 0, 0, 1], [10, 0, 0, 53], 45000, msg);
+        agg.ingest(&engine.dissect(&frame, meta(frame.len(), i as u64), ParseOpts::default()));
+    }
+
+    let udp_stream = agg.at_layer("udp")[0];
+    let syslog_streams = agg.at_layer("syslog");
+    assert_eq!(
+        syslog_streams.len(),
+        1,
+        "one app-stream per transport stream"
+    );
+    assert_eq!(syslog_streams[0].parent, Some(udp_stream.id));
+
+    match syslog_streams[0].rollups.get("severity") {
+        Some(Rollup::Accumulate { values, count, .. }) => {
+            assert_eq!(*count, 3);
+            assert_eq!(values.as_slice(), [Value::U64(2), Value::U64(5)]);
+        }
+        other => panic!("wrong rollup: {other:?}"),
+    }
+}
+
+proptest! {
+    /// The dissector must decline or succeed on arbitrary bytes behind a
+    /// claimed port — never panic (parser-bomb discipline, same standard
+    /// as `decode_name_never_panics_or_hangs`).
+    #[test]
+    fn syslog_parse_never_panics(payload in proptest::collection::vec(any::<u8>(), 0..300)) {
+        let engine = Arc::new(default_engine());
+        let frame = syslog_frame([10, 0, 0, 1], [10, 0, 0, 53], 45000, &payload);
+        let _ = engine.dissect(&frame, meta(frame.len(), 0), ParseOpts::default());
     }
 }
