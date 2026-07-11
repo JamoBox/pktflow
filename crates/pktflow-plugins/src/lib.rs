@@ -24,6 +24,7 @@ pub mod lacp;
 pub mod llc;
 pub mod lldp;
 pub mod mld;
+pub mod modbus;
 pub mod ndp;
 pub mod ntp;
 pub mod pvst_plus;
@@ -70,6 +71,7 @@ pub fn default_engine() -> Engine {
         .plugin(eapol::Eapol)
         .plugin(radiotap::Radiotap)
         .plugin(dot11::Dot11)
+        .plugin(modbus::Modbus)
         .build()
         // Not input-derived: a collision here is a bug in this very list,
         // caught by the registry's build-time validation (03.2).

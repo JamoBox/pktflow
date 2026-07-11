@@ -65,7 +65,7 @@ cross-segment reassembly).
 | OPC-UA (binary header) | IEC 62541 | Increasingly common OT/IT convergence protocol; has its own TLS-secured mode (D12-relevant when it lands) |
 
 ## Acceptance criteria
-- [ ] `modbus` fixtures cover Read Holding Registers, Write Single Register, and an
+- [x] `modbus` fixtures cover Read Holding Registers, Write Single Register, and an
       exception response; two different `unit_id`s over one TCP connection produce two
       sibling streams (mirrors 06.5's two-VNIs test shape).
 - [ ] `dnp3` fixture parses link-layer header exactly; `start_bytes` probe honesty verified

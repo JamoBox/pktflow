@@ -24,6 +24,7 @@ use pktflow_plugins::lacp::Lacp;
 use pktflow_plugins::llc::Llc;
 use pktflow_plugins::lldp::Lldp;
 use pktflow_plugins::mld::Mld;
+use pktflow_plugins::modbus::Modbus;
 use pktflow_plugins::ndp::Ndp;
 use pktflow_plugins::ntp::Ntp;
 use pktflow_plugins::pvst_plus::PvstPlus;
@@ -1462,6 +1463,69 @@ fn vlan_conforms() {
                     ("ethertype", Value::U64(0x8100)),
                 ],
                 expected_hint: Hint::Route(RouteId::EtherType(0x8100)),
+            },
+        ],
+        outer_ctx: Vec::new(),
+    });
+}
+
+/// MBAP header (transaction id, protocol id = 0, length, unit id) + PDU.
+fn modbus_frame(unit_id: u8, pdu: &[u8]) -> Vec<u8> {
+    let mut f = vec![0x00, 0x01, 0x00, 0x00];
+    let length = (1 + pdu.len()) as u16; // unit_id + PDU
+    f.extend_from_slice(&length.to_be_bytes());
+    f.push(unit_id);
+    f.extend_from_slice(pdu);
+    f
+}
+
+#[test]
+fn modbus_conforms() {
+    // Read Holding Registers (0x03): start 0x0000, quantity 10.
+    let read_holding_registers = modbus_frame(1, &[0x03, 0x00, 0x00, 0x00, 0x0A]);
+    // Write Single Register (0x06): address 0x0001, value 0x0003.
+    let write_single_register = modbus_frame(1, &[0x06, 0x00, 0x01, 0x00, 0x03]);
+    // Exception response to a Read Holding Registers request: function
+    // code with the top bit set, exception code 2 (Illegal Data Address).
+    let exception = modbus_frame(1, &[0x83, 0x02]);
+
+    run_conformance(&ConformanceCase {
+        plugin: Box::new(Modbus),
+        good: vec![
+            GoodPacket {
+                expected_header_len: read_holding_registers.len(),
+                bytes: read_holding_registers,
+                expected_full_fields: vec![
+                    ("unit_id", Value::U64(1)),
+                    ("function_code", Value::U64(0x03)),
+                    ("is_exception", Value::Bool(false)),
+                    ("start_address", Value::U64(0)),
+                    ("quantity", Value::U64(10)),
+                ],
+                expected_hint: Hint::Terminal,
+            },
+            GoodPacket {
+                expected_header_len: write_single_register.len(),
+                bytes: write_single_register,
+                expected_full_fields: vec![
+                    ("unit_id", Value::U64(1)),
+                    ("function_code", Value::U64(0x06)),
+                    ("is_exception", Value::Bool(false)),
+                    ("start_address", Value::U64(1)),
+                    ("register_value", Value::U64(3)),
+                ],
+                expected_hint: Hint::Terminal,
+            },
+            GoodPacket {
+                expected_header_len: exception.len(),
+                bytes: exception,
+                expected_full_fields: vec![
+                    ("unit_id", Value::U64(1)),
+                    ("function_code", Value::U64(0x83)),
+                    ("is_exception", Value::Bool(true)),
+                    ("exception_code", Value::U64(2)),
+                ],
+                expected_hint: Hint::Terminal,
             },
         ],
         outer_ctx: Vec::new(),
