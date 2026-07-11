@@ -27,6 +27,7 @@ use pktflow_plugins::lldp::Lldp;
 use pktflow_plugins::mld::Mld;
 use pktflow_plugins::modbus::Modbus;
 use pktflow_plugins::ndp::Ndp;
+use pktflow_plugins::netflow9::Netflow9;
 use pktflow_plugins::ntp::Ntp;
 use pktflow_plugins::ospf::Ospf;
 use pktflow_plugins::pvst_plus::PvstPlus;
@@ -1919,6 +1920,68 @@ fn snmp_conforms() {
                 expected_hint: Hint::Terminal,
             },
         ],
+        outer_ctx: Vec::new(),
+    });
+}
+
+#[test]
+fn netflow9_conforms() {
+    // RFC 3954 §5.1 fixed header, count=1 (one FlowSet in this packet).
+    let mut bytes = vec![0, 9, 0, 1];
+    bytes.extend_from_slice(&1_000u32.to_be_bytes()); // sys_uptime
+    bytes.extend_from_slice(&1_700_000_000u32.to_be_bytes()); // unix_secs
+    bytes.extend_from_slice(&42u32.to_be_bytes()); // sequence
+    bytes.extend_from_slice(&7u32.to_be_bytes()); // source_id
+
+    // A single Template FlowSet (id=0), one record: template_id=256,
+    // fields IN_BYTES(8)/4 and PROTOCOL(4)/4 (RFC 3954 §8's field-type
+    // registry). Exactly one FlowSet — the module doc's truncation-
+    // honesty note — so every strict prefix still declines.
+    let mut record = 256u16.to_be_bytes().to_vec();
+    record.extend_from_slice(&2u16.to_be_bytes()); // field_count
+    record.extend_from_slice(&8u16.to_be_bytes());
+    record.extend_from_slice(&4u16.to_be_bytes());
+    record.extend_from_slice(&4u16.to_be_bytes());
+    record.extend_from_slice(&4u16.to_be_bytes());
+    let flowset_len = 4 + record.len();
+    bytes.extend_from_slice(&0u16.to_be_bytes()); // flowset_id = 0 (Template)
+    bytes.extend_from_slice(&(flowset_len as u16).to_be_bytes());
+    bytes.extend_from_slice(&record);
+
+    run_conformance(&ConformanceCase {
+        plugin: Box::new(Netflow9),
+        good: vec![GoodPacket {
+            // Fixed 20-byte header only — FlowSets are optional
+            // repetition and thus trailing payload beyond header_len
+            // (module doc's truncation-honesty note).
+            expected_header_len: 20,
+            bytes: bytes.clone(),
+            expected_full_fields: vec![
+                ("app", Value::from("netflow9")),
+                ("version", Value::U64(9)),
+                ("count", Value::U64(1)),
+                ("sequence", Value::U64(42)),
+                ("source_id", Value::U64(7)),
+                (
+                    "flowsets",
+                    Value::List(vec![Value::List(vec![
+                        Value::U64(0),
+                        Value::U64(flowset_len as u64),
+                        Value::List(vec![Value::List(vec![
+                            Value::U64(256),
+                            Value::U64(2),
+                            Value::List(vec![
+                                Value::U64(8),
+                                Value::U64(4),
+                                Value::U64(4),
+                                Value::U64(4),
+                            ]),
+                        ])]),
+                    ])]),
+                ),
+            ],
+            expected_hint: Hint::Terminal,
+        }],
         outer_ctx: Vec::new(),
     });
 }

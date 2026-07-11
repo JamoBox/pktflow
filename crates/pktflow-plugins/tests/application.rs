@@ -571,3 +571,142 @@ proptest! {
         let _ = engine.dissect(&frame, meta(frame.len(), 0), ParseOpts::default());
     }
 }
+
+fn netflow9_frame(src: [u8; 4], dst: [u8; 4], sport: u16, msg: &[u8]) -> Vec<u8> {
+    let mut f = eth();
+    f.extend_from_slice(&ipv4_udp(src, dst, sport, 2055, msg));
+    f
+}
+
+/// A NetFlow v9 Export Packet header (RFC 3954 §5.1) plus zero or more
+/// FlowSet bytes appended by the caller.
+fn netflow9_header(count: u16, sequence: u32, source_id: u32) -> Vec<u8> {
+    let mut m = vec![0, 9];
+    m.extend_from_slice(&count.to_be_bytes());
+    m.extend_from_slice(&1_000u32.to_be_bytes()); // sys_uptime
+    m.extend_from_slice(&1_700_000_000u32.to_be_bytes()); // unix_secs
+    m.extend_from_slice(&sequence.to_be_bytes());
+    m.extend_from_slice(&source_id.to_be_bytes());
+    m
+}
+
+/// A Template FlowSet (id=0) with one record: `template_id`, two fields
+/// (IN_BYTES/4, IN_PKTS/4).
+fn template_flowset(template_id: u16) -> Vec<u8> {
+    let mut record = template_id.to_be_bytes().to_vec();
+    record.extend_from_slice(&2u16.to_be_bytes()); // field_count
+    record.extend_from_slice(&8u16.to_be_bytes());
+    record.extend_from_slice(&4u16.to_be_bytes());
+    record.extend_from_slice(&4u16.to_be_bytes());
+    record.extend_from_slice(&4u16.to_be_bytes());
+    let mut fs = 0u16.to_be_bytes().to_vec();
+    fs.extend_from_slice(&((4 + record.len()) as u16).to_be_bytes());
+    fs.extend_from_slice(&record);
+    fs
+}
+
+/// An opaque Data FlowSet using `template_id`, carrying `body` bytes.
+fn data_flowset(template_id: u16, body: &[u8]) -> Vec<u8> {
+    let mut fs = template_id.to_be_bytes().to_vec();
+    fs.extend_from_slice(&((4 + body.len()) as u16).to_be_bytes());
+    fs.extend_from_slice(body);
+    fs
+}
+
+/// 11.11's stateless-boundary proof: a Data FlowSet decoded against
+/// `template_id` 256 stays opaque raw bytes even though its Template
+/// FlowSet appears immediately before it in the *same* packet — the
+/// dissector never opens a Data FlowSet's body regardless of whether a
+/// template for it happens to be locally visible, since the general case
+/// (template on an earlier packet, or never) can't be told apart from
+/// this one without cross-packet state (netflow9.rs's module doc).
+#[test]
+fn netflow9_data_flowset_stays_opaque_even_immediately_after_its_template() {
+    let engine = Arc::new(default_engine());
+    let mut msg = netflow9_header(2, 42, 7);
+    msg.extend_from_slice(&template_flowset(256));
+    let data_body = [0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF];
+    msg.extend_from_slice(&data_flowset(256, &data_body));
+
+    let frame = netflow9_frame([10, 0, 0, 1], [10, 0, 0, 53], 51234, &msg);
+    let packet = engine.dissect(&frame, meta(frame.len(), 0), ParseOpts::default());
+    let protocols: Vec<_> = packet.layers.iter().map(|l| l.protocol).collect();
+    assert_eq!(protocols, ["ethernet", "ipv4", "udp", "netflow9"]);
+
+    let layer = &packet.layers[3];
+    assert_eq!(layer.fields.get("version"), Some(&Value::U64(9)));
+    let Some(Value::List(flowsets)) = layer.fields.get("flowsets") else {
+        panic!("missing flowsets field");
+    };
+    assert_eq!(flowsets.len(), 2, "template FlowSet + data FlowSet");
+
+    let Value::List(template_entry) = &flowsets[0] else {
+        panic!("wrong shape");
+    };
+    assert_eq!(template_entry[0], Value::U64(0), "template FlowSet id");
+    assert!(
+        matches!(&template_entry[2], Value::List(records) if records.len() == 1),
+        "template field-definitions decode as a nested List"
+    );
+
+    let Value::List(data_entry) = &flowsets[1] else {
+        panic!("wrong shape");
+    };
+    assert_eq!(
+        data_entry[0],
+        Value::U64(256),
+        "data FlowSet id == template_id"
+    );
+    assert_eq!(
+        data_entry[2],
+        Value::from(&data_body[..]),
+        "data FlowSet stays opaque raw bytes, template seen or not"
+    );
+}
+
+#[test]
+fn netflow9_stream_accumulates_source_id_and_rejects_bad_version() {
+    let engine = Arc::new(default_engine());
+    let mut agg = Aggregator::new(&engine, AggregatorConfig::default());
+
+    for (i, source_id) in [7u32, 7, 11].iter().enumerate() {
+        let msg = netflow9_header(0, i as u32, *source_id);
+        let frame = netflow9_frame([10, 0, 0, 1], [10, 0, 0, 53], 51234, &msg);
+        agg.ingest(&engine.dissect(&frame, meta(frame.len(), i as u64), ParseOpts::default()));
+    }
+
+    let udp_stream = agg.at_layer("udp")[0];
+    let netflow_streams = agg.at_layer("netflow9");
+    assert_eq!(
+        netflow_streams.len(),
+        1,
+        "one app-stream per transport stream"
+    );
+    assert_eq!(netflow_streams[0].parent, Some(udp_stream.id));
+    match netflow_streams[0].rollups.get("source_id") {
+        Some(Rollup::Accumulate { values, count, .. }) => {
+            assert_eq!(*count, 3);
+            assert_eq!(values.as_slice(), [Value::U64(7), Value::U64(11)]);
+        }
+        other => panic!("wrong rollup: {other:?}"),
+    }
+
+    // A version other than 9 (RFC 3954 §5.1) is the one cheap sanity
+    // check available without templates — it must decline, not guess.
+    let mut bad_version = netflow9_header(0, 99, 1);
+    bad_version[1] = 10;
+    let frame = netflow9_frame([10, 0, 0, 1], [10, 0, 0, 53], 51234, &bad_version);
+    let packet = engine.dissect(&frame, meta(frame.len(), 3), ParseOpts::default());
+    let protocols: Vec<_> = packet.layers.iter().map(|l| l.protocol).collect();
+    assert_eq!(protocols, ["ethernet", "ipv4", "udp"]);
+    assert_eq!(packet.stop, StopReason::PluginError);
+}
+
+proptest! {
+    #[test]
+    fn netflow9_parse_never_panics(payload in proptest::collection::vec(any::<u8>(), 0..300)) {
+        let engine = Arc::new(default_engine());
+        let frame = netflow9_frame([10, 0, 0, 1], [10, 0, 0, 53], 51234, &payload);
+        let _ = engine.dissect(&frame, meta(frame.len(), 0), ParseOpts::default());
+    }
+}

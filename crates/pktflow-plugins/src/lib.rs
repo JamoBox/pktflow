@@ -27,6 +27,7 @@ pub mod lldp;
 pub mod mld;
 pub mod modbus;
 pub mod ndp;
+pub mod netflow9;
 pub mod ntp;
 pub mod ospf;
 pub mod pvst_plus;
@@ -80,6 +81,7 @@ pub fn default_engine() -> Engine {
         .plugin(modbus::Modbus)
         .plugin(syslog::Syslog)
         .plugin(snmp::Snmp)
+        .plugin(netflow9::Netflow9)
         .build()
         // Not input-derived: a collision here is a bug in this very list,
         // caught by the registry's build-time validation (03.2).
