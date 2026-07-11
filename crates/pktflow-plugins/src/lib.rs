@@ -32,6 +32,7 @@ pub mod tcp;
 pub mod template;
 pub mod udp;
 pub mod vlan;
+pub mod vrrp;
 pub mod vxlan;
 
 /// The one registration list (PRD §8): adding a protocol end-to-end is a
@@ -50,6 +51,7 @@ pub fn default_engine() -> Engine {
         .plugin(ndp::Ndp)
         .plugin(mld::Mld)
         .plugin(igmp::Igmp)
+        .plugin(vrrp::Vrrp)
         .plugin(tcp::Tcp)
         .plugin(udp::Udp)
         .plugin(gre::Gre)

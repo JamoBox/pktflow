@@ -32,6 +32,7 @@ use pktflow_plugins::tcp::Tcp;
 use pktflow_plugins::template::Template;
 use pktflow_plugins::udp::Udp;
 use pktflow_plugins::vlan::Vlan;
+use pktflow_plugins::vrrp::Vrrp;
 use pktflow_plugins::vxlan::Vxlan;
 
 use kit::{run_conformance, ConformanceCase, GoodPacket};
@@ -602,6 +603,42 @@ fn igmp_conforms() {
             expected_hint: Hint::Terminal,
         }],
         outer_ctx: Vec::new(),
+    });
+}
+
+#[test]
+fn vrrp_conforms() {
+    // RFC 5798 VRRPv3 advertisement over IPv4: VRID 7, priority 255 (the
+    // address owner), one virtual IP, Max Adver Int 100 centiseconds.
+    let bytes = vec![0x31, 7, 255, 1, 0x00, 100, 0x00, 0x00, 10, 0, 0, 1];
+    run_conformance(&ConformanceCase {
+        plugin: Box::new(Vrrp),
+        good: vec![GoodPacket {
+            bytes,
+            expected_header_len: 12,
+            expected_full_fields: vec![
+                ("vrid", Value::U64(7)),
+                ("version", Value::U64(3)),
+                ("type", Value::U64(1)),
+                ("priority", Value::U64(255)),
+                ("count_ip_addrs", Value::U64(1)),
+                ("adver_int", Value::U64(100)),
+                (
+                    "ip_addresses",
+                    Value::List(vec![Value::from(&[10u8, 0, 0, 1][..])]),
+                ),
+            ],
+            expected_hint: Hint::Terminal,
+        }],
+        // The immediate predecessor VRRPv3 reads its address width from
+        // (module doc) — an IPv4 layer here, so the fixture's 4-byte
+        // address is interpreted correctly.
+        outer_ctx: vec![LayerRecord {
+            protocol: "ipv4",
+            offset: 14,
+            header_len: 20,
+            fields: FieldMap::new(),
+        }],
     });
 }
 
