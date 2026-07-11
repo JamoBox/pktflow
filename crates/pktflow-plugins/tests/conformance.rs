@@ -14,6 +14,7 @@ use pktflow_plugins::eapol::Eapol;
 use pktflow_plugins::ethernet::Ethernet;
 use pktflow_plugins::gre::Gre;
 use pktflow_plugins::icmpv4::Icmpv4;
+use pktflow_plugins::icmpv6::Icmpv6;
 use pktflow_plugins::igmp::Igmp;
 use pktflow_plugins::ipv4::{internet_checksum, Ipv4};
 use pktflow_plugins::ipv6::Ipv6;
@@ -278,6 +279,73 @@ fn icmpv4_conforms() {
             ],
             expected_hint: Hint::Terminal,
         }],
+        outer_ctx: Vec::new(),
+    });
+}
+
+#[test]
+fn icmpv6_conforms() {
+    // Every case shares the RFC 4443 §2.1 fixed shape: type(1) code(1)
+    // checksum(2) rest_of_header(4, kept raw — layout is type-specific and
+    // parsed no further here, same stance as icmpv4/06.3). Checksum bytes
+    // are filler; the parser doesn't validate them (icmpv4 precedent).
+    fn case(icmp_type: u8, code: u8, rest: [u8; 4], hint: Hint) -> GoodPacket {
+        let mut bytes = vec![icmp_type, code, 0xBE, 0xEF];
+        bytes.extend_from_slice(&rest);
+        GoodPacket {
+            bytes,
+            expected_header_len: 8,
+            expected_full_fields: vec![
+                ("type", Value::U64(u64::from(icmp_type))),
+                ("code", Value::U64(u64::from(code))),
+                ("rest_of_header", Value::from(&rest[..])),
+            ],
+            expected_hint: hint,
+        }
+    }
+
+    fn ndp(icmp_type: u8) -> Hint {
+        Hint::Route(RouteId::Custom {
+            space: "icmpv6_type",
+            id: u64::from(icmp_type),
+        })
+    }
+
+    run_conformance(&ConformanceCase {
+        plugin: Box::new(Icmpv6),
+        good: vec![
+            // RFC 4443 §3.1 Destination Unreachable, code 4 (port unreachable).
+            case(1, 4, [0x00, 0x00, 0x00, 0x00], Hint::Terminal),
+            // RFC 4443 §3.2 Packet Too Big, MTU = 1280 (IPv6 minimum link MTU).
+            case(2, 0, [0x00, 0x00, 0x05, 0x00], Hint::Terminal),
+            // RFC 4443 §3.3 Time Exceeded, code 0 (hop limit exceeded in transit).
+            case(3, 0, [0x00, 0x00, 0x00, 0x00], Hint::Terminal),
+            // RFC 4443 §3.4 Parameter Problem, pointer = 6 (Next Header octet).
+            case(4, 0, [0x00, 0x00, 0x00, 0x06], Hint::Terminal),
+            // RFC 4443 §4.1 Echo Request, id=0x1234 seq=0x0001.
+            case(128, 0, [0x12, 0x34, 0x00, 0x01], Hint::Terminal),
+            // RFC 4443 §4.2 Echo Reply, id=0x1234 seq=0x0001.
+            case(129, 0, [0x12, 0x34, 0x00, 0x01], Hint::Terminal),
+            // RFC 2710 §3 MLD Query -> mld (max resp delay 10000ms, reserved 0).
+            case(130, 0, [0x27, 0x10, 0x00, 0x00], ndp(130)),
+            // RFC 2710 §3 MLDv1 Report -> mld.
+            case(131, 0, [0x00, 0x00, 0x00, 0x00], ndp(131)),
+            // RFC 2710 §3 MLD Done -> mld.
+            case(132, 0, [0x00, 0x00, 0x00, 0x00], ndp(132)),
+            // RFC 4861 §4.1 Router Solicitation -> ndp (reserved = 0).
+            case(133, 0, [0x00, 0x00, 0x00, 0x00], ndp(133)),
+            // RFC 4861 §4.2 Router Advertisement -> ndp (cur hop limit 64,
+            // M+O flags set, router lifetime 1800s).
+            case(134, 0, [0x40, 0xC0, 0x07, 0x08], ndp(134)),
+            // RFC 4861 §4.3 Neighbor Solicitation -> ndp (reserved = 0).
+            case(135, 0, [0x00, 0x00, 0x00, 0x00], ndp(135)),
+            // RFC 4861 §4.4 Neighbor Advertisement -> ndp (R/S/O flags set).
+            case(136, 0, [0xE0, 0x00, 0x00, 0x00], ndp(136)),
+            // RFC 4861 §4.5 Redirect -> ndp (reserved = 0).
+            case(137, 0, [0x00, 0x00, 0x00, 0x00], ndp(137)),
+            // RFC 3810 §5.2 MLDv2 Report -> mld (1 multicast address record).
+            case(143, 0, [0x00, 0x00, 0x00, 0x01], ndp(143)),
+        ],
         outer_ctx: Vec::new(),
     });
 }

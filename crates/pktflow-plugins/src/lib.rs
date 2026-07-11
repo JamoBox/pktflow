@@ -14,6 +14,7 @@ pub mod eapol;
 pub mod ethernet;
 pub mod gre;
 pub mod icmpv4;
+pub mod icmpv6;
 pub mod igmp;
 pub mod ipv4;
 pub mod ipv6;
@@ -42,6 +43,7 @@ pub fn default_engine() -> Engine {
         .plugin(arp::Arp)
         .plugin(cdp::Cdp)
         .plugin(icmpv4::Icmpv4)
+        .plugin(icmpv6::Icmpv6)
         .plugin(igmp::Igmp)
         .plugin(tcp::Tcp)
         .plugin(udp::Udp)

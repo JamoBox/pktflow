@@ -59,7 +59,7 @@ child stream per UDP stream carrying it, rollups doing the stream-level work.
 | IPv6 extension headers as distinct layers (Hop-by-Hop, Routing, Fragment) | RFC 8200 | Currently consumed inline as part of `ipv6`'s `header_len` (06.3); splitting each into its own `LayerRecord` is a v2 ergonomics question, not a capability gap |
 
 ## Acceptance criteria
-- [ ] `icmpv6` fixtures for echo and each error type parse exactly and stop `Terminal`;
+- [x] `icmpv6` fixtures for echo and each error type parse exactly and stop `Terminal`;
       type-based dispatch to `ndp`/`mld` verified for every named type via the
       `Custom{space:"icmpv6_type",...}` route.
 - [ ] `ndp` fixtures: RS, RA (with SLAAC prefix option present), NS, NA (solicited and
