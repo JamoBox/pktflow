@@ -67,8 +67,8 @@ child stream per UDP stream carrying it, rollups doing the stream-level work.
       of `icmpv6.type` verified against a synthetic plugin-order test.
 - [x] `mld` fixtures for MLDv1 Query/Report/Done and MLDv2 Report (multi-source-record case)
       parse exactly.
-- [ ] `dhcpv6` fixture covers the full SOLICIT/ADVERTISE/REQUEST/REPLY sequence; `msg_type`
+- [x] `dhcpv6` fixture covers the full SOLICIT/ADVERTISE/REQUEST/REPLY sequence; `msg_type`
       series preserves order (mirrors 06.6's DORA-order criterion); one `dhcpv6` child stream
       per UDP stream verified (app-stream pattern, not a new endpoint scheme).
-- [ ] Options-walk bound tests for `ndp` and `dhcpv6` (malformed length ⇒ `PluginError`, no
+- [x] Options-walk bound tests for `ndp` and `dhcpv6` (malformed length ⇒ `PluginError`, no
       loop), fuzz targets registered alongside DNS's (06.6) and DHCP's.

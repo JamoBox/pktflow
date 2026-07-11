@@ -8,6 +8,7 @@ use pktflow_core::{Hint, RouteId, Value};
 use pktflow_plugins::arp::Arp;
 use pktflow_plugins::cdp::Cdp;
 use pktflow_plugins::dhcp::Dhcp;
+use pktflow_plugins::dhcpv6::Dhcpv6;
 use pktflow_plugins::dns::Dns;
 use pktflow_plugins::dot11::Dot11;
 use pktflow_plugins::eapol::Eapol;
@@ -553,6 +554,34 @@ fn mld_conforms() {
             expected_hint: Hint::Terminal,
         }],
         outer_ctx: vec![icmpv6_predecessor(143, Some([0, 0, 0, 1]))],
+    });
+}
+
+/// Bare-header fixture only, same rationale as `ndp_conforms`/`mld_conforms`:
+/// DHCPv6's options list (RFC 8415 §21.1) has no self-describing outer
+/// length or end marker, so a capture truncated exactly on an option
+/// boundary is indistinguishable from a legitimately shorter message. The
+/// kit's exhaustive truncation sweep (rule 1) therefore only runs against a
+/// message with zero options; the options walk itself (Client/Server
+/// Identifier DUIDs, the nested IA_NA/IA_TA -> IAADDR walk, relay-message
+/// rejection) is covered by `dhcpv6.rs`'s own unit tests instead.
+#[test]
+fn dhcpv6_conforms() {
+    // RFC 8415 §18.2.2 INFORMATION-REQUEST: no address needed, so no IA
+    // option — a legitimately option-free message.
+    run_conformance(&ConformanceCase {
+        plugin: Box::new(Dhcpv6),
+        good: vec![GoodPacket {
+            bytes: vec![11, 0x12, 0x34, 0x56],
+            expected_header_len: 4,
+            expected_full_fields: vec![
+                ("app", Value::from("dhcpv6")),
+                ("msg_type", Value::U64(11)),
+                ("transaction_id", Value::U64(0x123456)),
+            ],
+            expected_hint: Hint::Terminal,
+        }],
+        outer_ctx: Vec::new(),
     });
 }
 

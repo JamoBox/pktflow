@@ -8,6 +8,7 @@ use pktflow_core::Engine;
 pub mod arp;
 pub mod cdp;
 pub mod dhcp;
+pub mod dhcpv6;
 pub mod dns;
 pub mod dot11;
 pub mod eapol;
@@ -55,6 +56,7 @@ pub fn default_engine() -> Engine {
         .plugin(vxlan::Vxlan)
         .plugin(dns::Dns)
         .plugin(dhcp::Dhcp)
+        .plugin(dhcpv6::Dhcpv6)
         .plugin(ntp::Ntp)
         .plugin(lldp::Lldp)
         .plugin(llc::Llc)
