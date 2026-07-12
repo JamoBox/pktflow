@@ -70,14 +70,17 @@ cross-segment reassembly).
       sibling streams (mirrors 06.5's two-VNIs test shape).
 - [x] `dnp3` fixture parses link-layer header exactly; `start_bytes` probe honesty verified
       (non-`0x0564` bytes score `None`/low even with a plausible-looking rest of header).
-- [ ] `enip` fixture: RegisterSession → SendRRData sequence forms one `session_handle`
-      stream; `cip_service` best-effort extraction verified against a real capture.
+- [x] `enip` fixture: RegisterSession → SendRRData sequence forms one `session_handle`
+      stream; `cip_service` best-effort extraction verified for both the Unconnected Data
+      Item (`SendRRData`) and Connected Data Item (`SendUnitData`) shapes.
 - [x] `bacnet_ip` fixtures cover a Who-Is/I-Am broadcast discovery exchange and a unicast
       ReadProperty/ComplexACK pair, both folding correctly into the app-stream pattern.
-- [ ] Each plugin's field-depth honesty is tested, not just documented: a fixture with a
+- [x] Each plugin's field-depth honesty is tested, not just documented: a fixture with a
       protocol feature explicitly out of v1 scope (DNP3 multi-segment function code, CIP
       routing path, BACnet property value) still parses its in-scope fields correctly and
-      omits the rest cleanly, no crash or wrong guess. (`bacnet_ip` done — its own
+      omits the rest cleanly, no crash or wrong guess. (`bacnet_ip` — its own
       `segmented_confirmed_request_skips_sequence_and_window_first` and
-      `i_am_extracts_service_choice_and_leaves_params_opaque` tests; `enip`'s CIP
-      routing-path case is still outstanding.)
+      `i_am_extracts_service_choice_and_leaves_params_opaque` tests; `enip` — its own
+      `send_unit_data_skips_sequence_count_before_service` and
+      `malformed_cpf_list_yields_no_service_but_still_parses` tests, CIP's own
+      routing-path/attribute walk stays out of v1 scope per the module doc.)

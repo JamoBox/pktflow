@@ -15,6 +15,7 @@ use pktflow_plugins::dnp3::Dnp3;
 use pktflow_plugins::dns::Dns;
 use pktflow_plugins::dot11::Dot11;
 use pktflow_plugins::eapol::Eapol;
+use pktflow_plugins::enip::Enip;
 use pktflow_plugins::ethernet::Ethernet;
 use pktflow_plugins::gre::Gre;
 use pktflow_plugins::hsrp::Hsrp;
@@ -1940,6 +1941,73 @@ fn bacnet_ip_conforms() {
                     ("npdu_control", Value::U64(0x00)),
                     ("apdu_type", Value::U64(3)),
                     ("service_choice", Value::U64(12)),
+                ],
+                expected_hint: Hint::Terminal,
+            },
+        ],
+        outer_ctx: Vec::new(),
+    });
+}
+
+/// An EtherNet/IP encapsulation message: 24-byte little-endian header
+/// (command, length, session handle, status = success, 8-byte sender
+/// context, reserved options) plus `data` (Vol 2 §2-3.1).
+fn enip_frame(command: u16, session_handle: u32, data: &[u8]) -> Vec<u8> {
+    let mut b = Vec::with_capacity(24 + data.len());
+    b.extend_from_slice(&command.to_le_bytes());
+    b.extend_from_slice(&(data.len() as u16).to_le_bytes());
+    b.extend_from_slice(&session_handle.to_le_bytes());
+    b.extend_from_slice(&0u32.to_le_bytes()); // status: success
+    b.extend_from_slice(&[0u8; 8]); // sender context, opaque
+    b.extend_from_slice(&0u32.to_le_bytes()); // options, reserved
+    b.extend_from_slice(data);
+    b
+}
+
+#[test]
+fn enip_conforms() {
+    // RegisterSession response: Protocol Version = 1, Option Flags = 0
+    // (Vol 2 §2-4.9), a session handle the target just assigned.
+    let register_session = enip_frame(0x0065, 0x2A2A, &[1, 0, 0, 0]);
+
+    // SendRRData carrying an unconnected Get_Attribute_Single request
+    // (service 0x0E) for Identity (class 1) instance 1 attribute 3, inside
+    // a Null Address Item + Unconnected Data Item (CPF, Vol 2 §2-6).
+    let cip_request = [0x0E, 0x02, 0x20, 0x01, 0x24, 0x01, 0x30, 0x03];
+    let mut send_rr_data_body = Vec::new();
+    send_rr_data_body.extend_from_slice(&0u32.to_le_bytes()); // interface handle
+    send_rr_data_body.extend_from_slice(&5u16.to_le_bytes()); // timeout
+    send_rr_data_body.extend_from_slice(&2u16.to_le_bytes()); // item count
+    send_rr_data_body.extend_from_slice(&0x0000u16.to_le_bytes()); // Null Address Item
+    send_rr_data_body.extend_from_slice(&0u16.to_le_bytes());
+    send_rr_data_body.extend_from_slice(&0x00B2u16.to_le_bytes()); // Unconnected Data Item
+    send_rr_data_body.extend_from_slice(&(cip_request.len() as u16).to_le_bytes());
+    send_rr_data_body.extend_from_slice(&cip_request);
+    let send_rr_data = enip_frame(0x006F, 0x2A2A, &send_rr_data_body);
+
+    run_conformance(&ConformanceCase {
+        plugin: Box::new(Enip),
+        good: vec![
+            GoodPacket {
+                expected_header_len: register_session.len(),
+                bytes: register_session,
+                expected_full_fields: vec![
+                    ("session_handle", Value::U64(0x2A2A)),
+                    ("command", Value::U64(0x0065)),
+                    ("length", Value::U64(4)),
+                    ("status", Value::U64(0)),
+                ],
+                expected_hint: Hint::Terminal,
+            },
+            GoodPacket {
+                expected_header_len: send_rr_data.len(),
+                bytes: send_rr_data,
+                expected_full_fields: vec![
+                    ("session_handle", Value::U64(0x2A2A)),
+                    ("command", Value::U64(0x006F)),
+                    ("length", Value::U64(send_rr_data_body.len() as u64)),
+                    ("status", Value::U64(0)),
+                    ("cip_service", Value::U64(0x0E)),
                 ],
                 expected_hint: Hint::Terminal,
             },
