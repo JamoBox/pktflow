@@ -17,6 +17,7 @@ use pktflow_plugins::dot11::Dot11;
 use pktflow_plugins::eapol::Eapol;
 use pktflow_plugins::enip::Enip;
 use pktflow_plugins::ethernet::Ethernet;
+use pktflow_plugins::geneve::Geneve;
 use pktflow_plugins::gre::Gre;
 use pktflow_plugins::hsrp::Hsrp;
 use pktflow_plugins::icmpv4::Icmpv4;
@@ -1025,6 +1026,52 @@ fn vxlan_conforms() {
             expected_full_fields: vec![("vni", Value::U64(5001)), ("flags", Value::U64(8))],
             expected_hint: Hint::ByProtocol("ethernet"),
         }],
+        outer_ctx: Vec::new(),
+    });
+}
+
+#[test]
+fn geneve_conforms() {
+    run_conformance(&ConformanceCase {
+        plugin: Box::new(Geneve),
+        good: vec![
+            // RFC 8926 bare header: no options, VNI 5001, IPv4 inside.
+            GoodPacket {
+                bytes: vec![0x00, 0x00, 0x08, 0x00, 0x00, 0x13, 0x89, 0x00],
+                expected_header_len: 8,
+                expected_full_fields: vec![
+                    ("vni", Value::U64(5001)),
+                    ("version", Value::U64(0)),
+                    ("opt_len", Value::U64(0)),
+                    ("o_bit", Value::Bool(false)),
+                    ("c_bit", Value::Bool(false)),
+                    ("protocol_type", Value::U64(0x0800)),
+                    ("options", Value::from(&b""[..])),
+                ],
+                expected_hint: Hint::Route(RouteId::EtherType(0x0800)),
+            },
+            // One option word present, O and C bits set.
+            GoodPacket {
+                bytes: vec![
+                    0x01, 0xC0, // Ver=0, Opt Len=1; O=1, C=1
+                    0x08, 0x00, // protocol_type = IPv4
+                    0x00, 0x13, 0x89, // VNI = 5001
+                    0x00, // reserved
+                    0xDE, 0xAD, 0xBE, 0xEF, // one 4-byte option word, opaque
+                ],
+                expected_header_len: 12,
+                expected_full_fields: vec![
+                    ("vni", Value::U64(5001)),
+                    ("version", Value::U64(0)),
+                    ("opt_len", Value::U64(1)),
+                    ("o_bit", Value::Bool(true)),
+                    ("c_bit", Value::Bool(true)),
+                    ("protocol_type", Value::U64(0x0800)),
+                    ("options", Value::from(&[0xDE, 0xAD, 0xBE, 0xEF][..])),
+                ],
+                expected_hint: Hint::Route(RouteId::EtherType(0x0800)),
+            },
+        ],
         outer_ctx: Vec::new(),
     });
 }

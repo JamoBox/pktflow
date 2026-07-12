@@ -117,6 +117,6 @@ Geneve:   eth ▸ ipv4 ▸ udp ▸ geneve ▸ ipv4 ▸ ...          (EtherType r
 - [ ] `pppoe ▸ ppp ▸ ipv4` fixture proves the translation-hint mechanism end-to-end with
       the **unmodified** 06.3 `ipv4` plugin (no `claims()` diff in that file) — the specific
       claim this domain makes about zero-touch reuse.
-- [ ] `geneve` fixture mirrors 06.5's VXLAN two-VNIs-one-outer-stream test.
+- [x] `geneve` fixture mirrors 06.5's VXLAN two-VNIs-one-outer-stream test.
 - [ ] All five hierarchies above asserted node-by-node, same rigor as 06.5's acceptance
       criteria.

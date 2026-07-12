@@ -17,6 +17,7 @@ pub mod dot11;
 pub mod eapol;
 pub mod enip;
 pub mod ethernet;
+pub mod geneve;
 pub mod gre;
 pub mod hsrp;
 pub mod icmpv4;
@@ -71,6 +72,7 @@ pub fn default_engine() -> Engine {
         .plugin(bgp::Bgp)
         .plugin(gre::Gre)
         .plugin(vxlan::Vxlan)
+        .plugin(geneve::Geneve)
         .plugin(dns::Dns)
         .plugin(mdns::Mdns)
         .plugin(dhcp::Dhcp)

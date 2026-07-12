@@ -73,6 +73,16 @@ fn vxlan(vni: u32) -> Vec<u8> {
     v
 }
 
+/// Geneve header (RFC 8926 §3), no options, `protocol_type` in the
+/// EtherType space (11.5, GRE's coincidental-reuse pattern).
+fn geneve(vni: u32, protocol_type: u16) -> Vec<u8> {
+    let mut g = vec![0x00, 0x00];
+    g.extend_from_slice(&protocol_type.to_be_bytes());
+    g.extend_from_slice(&vni.to_be_bytes()[1..4]);
+    g.push(0);
+    g
+}
+
 /// Walks the single root-to-leaf chain, returning protocols in order.
 fn chain(agg: &Aggregator) -> Vec<ProtocolName> {
     let roots: Vec<StreamId> = agg.roots().map(|r| r.id).collect();
@@ -170,6 +180,75 @@ fn two_vnis_over_one_outer_udp_are_sibling_streams() {
     assert_eq!(vxlans.len(), 2, "one stream per VNI (shared-qualifier key)");
     assert!(vxlans.iter().all(|v| v.parent == Some(outer_udp.id)));
     assert_ne!(vxlans[0].key, vxlans[1].key);
+}
+
+#[test]
+fn geneve_fixture_hierarchy_node_by_node() {
+    let engine = Arc::new(default_engine());
+    let mut agg = Aggregator::new(&engine, AggregatorConfig::default());
+
+    // eth ▸ ipv4 ▸ udp ▸ geneve ▸ ipv4 ▸ tcp (11.5's normative hierarchy;
+    // full inner stack, same rigor as 06.5's VXLAN fixture).
+    let inner = {
+        let mut i = ipv4(6, [172, 17, 0, 2], [172, 17, 0, 3]);
+        i.extend_from_slice(&tcp(34567, 443));
+        i
+    };
+    let mut frame = eth(MAC_B, MAC_A, 0x0800);
+    frame.extend_from_slice(&ipv4(17, [192, 168, 0, 1], [192, 168, 0, 2]));
+    frame.extend_from_slice(&udp(41000, 6081, (8 + inner.len()) as u16));
+    frame.extend_from_slice(&geneve(5001, 0x0800));
+    frame.extend_from_slice(&inner);
+
+    agg.ingest(&engine.dissect(&frame, meta(frame.len(), 0), ParseOpts::default()));
+    assert_eq!(
+        chain(&agg),
+        ["ethernet", "ipv4", "udp", "geneve", "ipv4", "tcp"]
+    );
+
+    // Node-by-node: the inner IP conversation is parented to the geneve
+    // stream, not the outer IP conversation (FR-8, D10 parent scoping).
+    let geneve_stream = agg.at_layer("geneve")[0];
+    let inner_ip = agg
+        .at_layer("ipv4")
+        .into_iter()
+        .find(|s| s.parent == Some(geneve_stream.id))
+        .expect("inner ip under geneve");
+    let session = agg.at_layer("tcp")[0];
+    assert_eq!(session.parent, Some(inner_ip.id));
+}
+
+#[test]
+fn two_vnis_over_one_outer_udp_are_sibling_geneve_streams() {
+    let engine = Arc::new(default_engine());
+    let mut agg = Aggregator::new(&engine, AggregatorConfig::default());
+
+    // Mirrors vxlan's two-VNIs-one-outer-stream test (11.5 acceptance
+    // criteria): same outer UDP stream, two VNIs -> two sibling streams.
+    // `protocol_type` 0x9999 is unclaimed in the EtherType route space, so
+    // the inner payload stops right at the geneve layer (the vxlan
+    // fixture achieves the same "irrelevant inner content" shape via an
+    // unclaimed inner Ethertype instead, since vxlan's inner is always
+    // routed `ByProtocol("ethernet")` rather than by a header field).
+    for (ms, vni) in [(0u64, 100u32), (1, 200)] {
+        let inner = [0xFFu8; 4];
+        let mut frame = eth(MAC_B, MAC_A, 0x0800);
+        frame.extend_from_slice(&ipv4(17, [192, 168, 0, 1], [192, 168, 0, 2]));
+        frame.extend_from_slice(&udp(41000, 6081, (8 + inner.len()) as u16));
+        frame.extend_from_slice(&geneve(vni, 0x9999));
+        frame.extend_from_slice(&inner);
+        agg.ingest(&engine.dissect(&frame, meta(frame.len(), ms), ParseOpts::default()));
+    }
+
+    let outer_udp = agg.at_layer("udp")[0];
+    let geneves = agg.at_layer("geneve");
+    assert_eq!(
+        geneves.len(),
+        2,
+        "one stream per VNI (shared-qualifier key)"
+    );
+    assert!(geneves.iter().all(|g| g.parent == Some(outer_udp.id)));
+    assert_ne!(geneves[0].key, geneves[1].key);
 }
 
 #[test]
