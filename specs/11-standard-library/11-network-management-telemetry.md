@@ -54,7 +54,16 @@ retained as raw bytes, explicitly opaque.
 | Rollups | `Accumulate` on `source_id` |
 
 **ipfix** (RFC 7011) — the IETF-standardized successor to NetFlow v9; same Template/Data Set
-structure and the identical stateful-decode ceiling described above.
+structure and the identical stateful-decode ceiling described above. Two differences from
+`netflow9` worth being explicit about: `length` is the *whole Message's* byte length (RFC
+7011 §3.1), not a record count, so unlike `netflow9`'s FlowSets (untracked trailing payload,
+because RFC 3954's header has nothing exact to bound them by) `length` bounds the Set walk
+exactly — `header_len` is `length` itself, and a second Message coalesced into the same
+datagram stays untouched, the same "trust the message's own length field" shape `bgp` uses
+(11.4). And Field Specifiers carry an Enterprise bit (§3.2): when set, a 4-byte Enterprise
+Number follows that field's length — part of the fixed Template Record framing, decoded here
+even though the field list below doesn't itemize it (it isn't a distinct Tier-1 field, just
+correct parsing of one that already is).
 
 | Item | Spec |
 |---|---|
@@ -76,9 +85,13 @@ structure and the identical stateful-decode ceiling described above.
       shared with the 11.7 boundary cases.
 - [x] `syslog` fixtures cover both RFC 5424 and legacy RFC 3164 framing, `facility`/
       `severity` decomposition verified against the combined `<PRI>` value.
-- [ ] `netflow9`/`ipfix` fixtures: a Template FlowSet/Set decodes its field-definition list
+- [x] `netflow9`/`ipfix` fixtures: a Template FlowSet/Set decodes its field-definition list
       exactly; a Data FlowSet/Set immediately following in the **same packet** is still left
       opaque even though its template was just seen — proves the stateless-only boundary is
       real and consistent (no partial, order-dependent decode that would work sometimes).
-- [ ] Header version-field validation (`netflow9` rejects a non-9 version, `ipfix` rejects a
+- [x] Header version-field validation (`netflow9` rejects a non-9 version, `ipfix` rejects a
       non-10 version) tested — the one cheap sanity check available without templates.
+- [x] `ipfix`'s own `length`-bounded framing verified: a second Message coalesced into one
+      datagram stays untouched (mirrors `bgp`'s Length-bounded-body criterion, 11.4), and a
+      Field Specifier with the Enterprise bit set decodes its trailing Enterprise Number
+      without desyncing the rest of the record.

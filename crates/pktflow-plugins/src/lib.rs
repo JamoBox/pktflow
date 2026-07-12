@@ -19,6 +19,7 @@ pub mod hsrp;
 pub mod icmpv4;
 pub mod icmpv6;
 pub mod igmp;
+pub mod ipfix;
 pub mod ipv4;
 pub mod ipv6;
 pub mod lacp;
@@ -82,6 +83,7 @@ pub fn default_engine() -> Engine {
         .plugin(syslog::Syslog)
         .plugin(snmp::Snmp)
         .plugin(netflow9::Netflow9)
+        .plugin(ipfix::Ipfix)
         .build()
         // Not input-derived: a collision here is a bug in this very list,
         // caught by the registry's build-time validation (03.2).

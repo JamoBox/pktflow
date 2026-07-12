@@ -710,3 +710,163 @@ proptest! {
         let _ = engine.dissect(&frame, meta(frame.len(), 0), ParseOpts::default());
     }
 }
+
+fn ipfix_frame(src: [u8; 4], dst: [u8; 4], sport: u16, msg: &[u8]) -> Vec<u8> {
+    let mut f = eth();
+    f.extend_from_slice(&ipv4_udp(src, dst, sport, 4739, msg));
+    f
+}
+
+/// An IPFIX Message header (RFC 7011 §3.1); `length` is the caller's
+/// responsibility (total header + Sets), unlike `netflow9_header`'s
+/// FlowSet-agnostic `count`.
+fn ipfix_header(length: u16, sequence: u32, domain_id: u32) -> Vec<u8> {
+    let mut m = vec![0, 10];
+    m.extend_from_slice(&length.to_be_bytes());
+    m.extend_from_slice(&1_700_000_000u32.to_be_bytes()); // export_time
+    m.extend_from_slice(&sequence.to_be_bytes());
+    m.extend_from_slice(&domain_id.to_be_bytes());
+    m
+}
+
+/// A Template Set (id=2) with one record: `template_id`, one field
+/// (IE 8/IN_BYTES, length 4, no Enterprise bit).
+fn ipfix_template_set(template_id: u16) -> Vec<u8> {
+    let mut record = template_id.to_be_bytes().to_vec();
+    record.extend_from_slice(&1u16.to_be_bytes()); // field_count
+    record.extend_from_slice(&8u16.to_be_bytes());
+    record.extend_from_slice(&4u16.to_be_bytes());
+    let mut set = 2u16.to_be_bytes().to_vec();
+    set.extend_from_slice(&((4 + record.len()) as u16).to_be_bytes());
+    set.extend_from_slice(&record);
+    set
+}
+
+/// An opaque Data Set using `template_id`, carrying `body` bytes.
+fn ipfix_data_set(template_id: u16, body: &[u8]) -> Vec<u8> {
+    let mut set = template_id.to_be_bytes().to_vec();
+    set.extend_from_slice(&((4 + body.len()) as u16).to_be_bytes());
+    set.extend_from_slice(body);
+    set
+}
+
+/// 11.11's stateless-boundary proof for IPFIX, the same shape as
+/// `netflow9`'s: a Data Set decoded against `template_id` 256 stays
+/// opaque raw bytes even though its Template Set appears immediately
+/// before it in the *same* Message (ipfix.rs's module doc).
+#[test]
+fn ipfix_data_set_stays_opaque_even_immediately_after_its_template() {
+    let engine = Arc::new(default_engine());
+    let template_set = ipfix_template_set(256);
+    let data_body = [0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF];
+    let data_set = ipfix_data_set(256, &data_body);
+    let total_len = 16 + template_set.len() + data_set.len();
+
+    let mut msg = ipfix_header(total_len as u16, 42, 7);
+    msg.extend_from_slice(&template_set);
+    msg.extend_from_slice(&data_set);
+
+    let frame = ipfix_frame([10, 0, 0, 1], [10, 0, 0, 53], 51234, &msg);
+    let packet = engine.dissect(&frame, meta(frame.len(), 0), ParseOpts::default());
+    let protocols: Vec<_> = packet.layers.iter().map(|l| l.protocol).collect();
+    assert_eq!(protocols, ["ethernet", "ipv4", "udp", "ipfix"]);
+
+    let layer = &packet.layers[3];
+    assert_eq!(layer.fields.get("version"), Some(&Value::U64(10)));
+    assert_eq!(
+        layer.fields.get("length"),
+        Some(&Value::U64(total_len as u64))
+    );
+    let Some(Value::List(sets)) = layer.fields.get("sets") else {
+        panic!("missing sets field");
+    };
+    assert_eq!(sets.len(), 2, "template Set + data Set");
+
+    let Value::List(template_entry) = &sets[0] else {
+        panic!("wrong shape");
+    };
+    assert_eq!(template_entry[0], Value::U64(2), "template Set id");
+    assert!(
+        matches!(&template_entry[2], Value::List(records) if records.len() == 1),
+        "template field-definitions decode as a nested List"
+    );
+
+    let Value::List(data_entry) = &sets[1] else {
+        panic!("wrong shape");
+    };
+    assert_eq!(data_entry[0], Value::U64(256), "data Set id == template_id");
+    assert_eq!(
+        data_entry[2],
+        Value::from(&data_body[..]),
+        "data Set stays opaque raw bytes, template seen or not"
+    );
+}
+
+/// Unlike `netflow9` (no total-length field, so its FlowSet walk is
+/// untracked trailing payload), IPFIX's own `length` field lets the
+/// dissector bound the Message exactly — a second Message coalesced into
+/// the same datagram must stay untouched.
+#[test]
+fn ipfix_coalesced_second_message_in_one_datagram_stays_untouched() {
+    let engine = Arc::new(default_engine());
+    let mut msg = ipfix_header(16, 1, 1); // first message: header only
+    msg.extend_from_slice(&ipfix_header(16, 2, 2)); // second message, same datagram
+
+    let frame = ipfix_frame([10, 0, 0, 1], [10, 0, 0, 53], 51234, &msg);
+    let packet = engine.dissect(&frame, meta(frame.len(), 0), ParseOpts::default());
+    let protocols: Vec<_> = packet.layers.iter().map(|l| l.protocol).collect();
+    assert_eq!(protocols, ["ethernet", "ipv4", "udp", "ipfix"]);
+    let layer = &packet.layers[3];
+    assert_eq!(
+        layer.fields.get("sequence"),
+        Some(&Value::U64(1)),
+        "only the first message parsed"
+    );
+}
+
+#[test]
+fn ipfix_stream_accumulates_domain_id_and_rejects_bad_version() {
+    let engine = Arc::new(default_engine());
+    let mut agg = Aggregator::new(&engine, AggregatorConfig::default());
+
+    for (i, domain_id) in [7u32, 7, 11].iter().enumerate() {
+        let msg = ipfix_header(16, i as u32, *domain_id);
+        let frame = ipfix_frame([10, 0, 0, 1], [10, 0, 0, 53], 51234, &msg);
+        agg.ingest(&engine.dissect(&frame, meta(frame.len(), i as u64), ParseOpts::default()));
+    }
+
+    let udp_stream = agg.at_layer("udp")[0];
+    let ipfix_streams = agg.at_layer("ipfix");
+    assert_eq!(
+        ipfix_streams.len(),
+        1,
+        "one app-stream per transport stream"
+    );
+    assert_eq!(ipfix_streams[0].parent, Some(udp_stream.id));
+    match ipfix_streams[0].rollups.get("domain_id") {
+        Some(Rollup::Accumulate { values, count, .. }) => {
+            assert_eq!(*count, 3);
+            assert_eq!(values.as_slice(), [Value::U64(7), Value::U64(11)]);
+        }
+        other => panic!("wrong rollup: {other:?}"),
+    }
+
+    // A version other than 10 (RFC 7011 §3.1) is the one cheap sanity
+    // check available without templates — it must decline, not guess.
+    let mut bad_version = ipfix_header(16, 99, 1);
+    bad_version[1] = 9;
+    let frame = ipfix_frame([10, 0, 0, 1], [10, 0, 0, 53], 51234, &bad_version);
+    let packet = engine.dissect(&frame, meta(frame.len(), 3), ParseOpts::default());
+    let protocols: Vec<_> = packet.layers.iter().map(|l| l.protocol).collect();
+    assert_eq!(protocols, ["ethernet", "ipv4", "udp"]);
+    assert_eq!(packet.stop, StopReason::PluginError);
+}
+
+proptest! {
+    #[test]
+    fn ipfix_parse_never_panics(payload in proptest::collection::vec(any::<u8>(), 0..300)) {
+        let engine = Arc::new(default_engine());
+        let frame = ipfix_frame([10, 0, 0, 1], [10, 0, 0, 53], 51234, &payload);
+        let _ = engine.dissect(&frame, meta(frame.len(), 0), ParseOpts::default());
+    }
+}

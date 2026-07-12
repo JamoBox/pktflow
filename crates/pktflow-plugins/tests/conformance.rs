@@ -19,6 +19,7 @@ use pktflow_plugins::hsrp::Hsrp;
 use pktflow_plugins::icmpv4::Icmpv4;
 use pktflow_plugins::icmpv6::Icmpv6;
 use pktflow_plugins::igmp::Igmp;
+use pktflow_plugins::ipfix::Ipfix;
 use pktflow_plugins::ipv4::{internet_checksum, Ipv4};
 use pktflow_plugins::ipv6::Ipv6;
 use pktflow_plugins::lacp::Lacp;
@@ -1975,6 +1976,70 @@ fn netflow9_conforms() {
                                 Value::U64(4),
                                 Value::U64(4),
                                 Value::U64(4),
+                            ]),
+                        ])]),
+                    ])]),
+                ),
+            ],
+            expected_hint: Hint::Terminal,
+        }],
+        outer_ctx: Vec::new(),
+    });
+}
+
+#[test]
+fn ipfix_conforms() {
+    // RFC 7011 §3.1 fixed header (16 bytes) plus a single Template Set
+    // (id=2), one record: template_id=256, one plain field (IE 8,
+    // length 4) and one Enterprise-specific field (IE 12345 with the
+    // Enterprise bit set, length 4, enterprise number 99999) — proves
+    // the Enterprise-bit shift, not just the common case.
+    let mut record = 256u16.to_be_bytes().to_vec();
+    record.extend_from_slice(&2u16.to_be_bytes()); // field_count
+    record.extend_from_slice(&8u16.to_be_bytes());
+    record.extend_from_slice(&4u16.to_be_bytes());
+    let enterprise_ie = 12345u16 | 0x8000;
+    record.extend_from_slice(&enterprise_ie.to_be_bytes());
+    record.extend_from_slice(&4u16.to_be_bytes());
+    record.extend_from_slice(&99999u32.to_be_bytes());
+    let set_len = 4 + record.len();
+    let total_len = 16 + set_len;
+
+    let mut bytes = vec![0, 10];
+    bytes.extend_from_slice(&(total_len as u16).to_be_bytes());
+    bytes.extend_from_slice(&1_700_000_000u32.to_be_bytes()); // export_time
+    bytes.extend_from_slice(&42u32.to_be_bytes()); // sequence
+    bytes.extend_from_slice(&7u32.to_be_bytes()); // domain_id
+    bytes.extend_from_slice(&2u16.to_be_bytes()); // Set id = 2 (Template)
+    bytes.extend_from_slice(&(set_len as u16).to_be_bytes());
+    bytes.extend_from_slice(&record);
+
+    run_conformance(&ConformanceCase {
+        plugin: Box::new(Ipfix),
+        good: vec![GoodPacket {
+            expected_header_len: total_len,
+            bytes,
+            expected_full_fields: vec![
+                ("app", Value::from("ipfix")),
+                ("version", Value::U64(10)),
+                ("length", Value::U64(total_len as u64)),
+                ("sequence", Value::U64(42)),
+                ("domain_id", Value::U64(7)),
+                (
+                    "sets",
+                    Value::List(vec![Value::List(vec![
+                        Value::U64(2),
+                        Value::U64(set_len as u64),
+                        Value::List(vec![Value::List(vec![
+                            Value::U64(256),
+                            Value::U64(2),
+                            Value::List(vec![
+                                Value::List(vec![Value::U64(8), Value::U64(4), Value::U64(0)]),
+                                Value::List(vec![
+                                    Value::U64(12345),
+                                    Value::U64(4),
+                                    Value::U64(99999),
+                                ]),
                             ]),
                         ])]),
                     ])]),
