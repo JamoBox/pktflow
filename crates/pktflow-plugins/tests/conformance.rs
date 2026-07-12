@@ -36,6 +36,7 @@ use pktflow_plugins::ntp::Ntp;
 use pktflow_plugins::ospf::Ospf;
 use pktflow_plugins::pvst_plus::PvstPlus;
 use pktflow_plugins::radiotap::Radiotap;
+use pktflow_plugins::sctp::Sctp;
 use pktflow_plugins::snmp::Snmp;
 use pktflow_plugins::stp::Stp;
 use pktflow_plugins::syslog::Syslog;
@@ -938,6 +939,67 @@ fn tcp_conforms() {
                     RouteId::TcpPort(443),
                     RouteId::TcpPort(34567),
                 ])),
+            },
+        ],
+        outer_ctx: Vec::new(),
+    });
+}
+
+#[test]
+fn sctp_conforms() {
+    // RFC 9260 §3.1 common header + §3.3.2 bare INIT chunk (20 bytes, no
+    // optional parameters).
+    let mut init_packet = vec![
+        0x87, 0x07, 0x0F, 0x1C, // 34567 -> 3868
+        0x11, 0x22, 0x33, 0x44, // verification tag
+        0x00, 0x00, 0x00, 0x00, // checksum (not verified)
+    ];
+    init_packet.extend_from_slice(&[0x01, 0x00, 0x00, 0x14]); // INIT, flags 0, length 20
+    init_packet.extend_from_slice(&0xAABB_CCDDu32.to_be_bytes()); // initiate tag
+    init_packet.extend_from_slice(&0x0001_0000u32.to_be_bytes()); // a_rwnd
+    init_packet.extend_from_slice(&10u16.to_be_bytes()); // outbound streams
+    init_packet.extend_from_slice(&5u16.to_be_bytes()); // inbound streams
+    init_packet.extend_from_slice(&0x1234_5678u32.to_be_bytes()); // initial tsn
+
+    // RFC 9260 §3.3.8 SHUTDOWN: 4-byte Cumulative TSN Ack value, no
+    // INIT-family fixed fields to extract.
+    let mut shutdown_packet = vec![
+        0x0F, 0x1C, 0x87, 0x07, // 3868 -> 34567
+        0x99, 0x88, 0x77, 0x66, // verification tag
+        0x00, 0x00, 0x00, 0x00, // checksum
+    ];
+    shutdown_packet.extend_from_slice(&[0x07, 0x00, 0x00, 0x08]); // SHUTDOWN, length 8
+    shutdown_packet.extend_from_slice(&0xDEAD_BEEFu32.to_be_bytes());
+
+    run_conformance(&ConformanceCase {
+        plugin: Box::new(Sctp),
+        good: vec![
+            GoodPacket {
+                bytes: init_packet,
+                expected_header_len: 32,
+                expected_full_fields: vec![
+                    ("src_port", Value::U64(34567)),
+                    ("dst_port", Value::U64(3868)),
+                    ("verification_tag", Value::U64(0x1122_3344)),
+                    ("first_chunk_type", Value::U64(1)),
+                    ("initiate_tag", Value::U64(0xAABB_CCDD)),
+                    ("a_rwnd", Value::U64(65536)),
+                    ("num_outbound_streams", Value::U64(10)),
+                    ("num_inbound_streams", Value::U64(5)),
+                    ("initial_tsn", Value::U64(0x1234_5678)),
+                ],
+                expected_hint: Hint::Terminal,
+            },
+            GoodPacket {
+                bytes: shutdown_packet,
+                expected_header_len: 20,
+                expected_full_fields: vec![
+                    ("src_port", Value::U64(3868)),
+                    ("dst_port", Value::U64(34567)),
+                    ("verification_tag", Value::U64(0x9988_7766)),
+                    ("first_chunk_type", Value::U64(7)),
+                ],
+                expected_hint: Hint::Terminal,
             },
         ],
         outer_ctx: Vec::new(),

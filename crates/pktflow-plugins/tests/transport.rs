@@ -1,6 +1,7 @@
-//! Transport-layer stream behavior (06.4): the TCP lifecycle walk,
-//! close-eligibility, candidate-port routing, direction folding, and the
-//! 03.4 `encrypted_udp_no_phantom` fixture at full stream level.
+//! Transport-layer stream behavior (06.4, 11.6): the TCP and SCTP
+//! lifecycle walks, close-eligibility, candidate-port routing, direction
+//! folding, and the 03.4 `encrypted_udp_no_phantom` fixture at full
+//! stream level.
 
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
@@ -251,4 +252,133 @@ fn encrypted_udp_no_phantom() {
     assert_eq!(agg.at_layer("udp").len(), 1, "exactly one UDP stream");
     assert_eq!(agg.at_layer("tcp").len(), 0, "zero TCP streams");
     assert_eq!(agg.at_layer("udp")[0].opaque_bytes, 8);
+}
+
+// --- SCTP (11.6, RFC 9260) --------------------------------------------
+
+const SCTP_INIT: u8 = 1;
+const SCTP_INIT_ACK: u8 = 2;
+const SCTP_ABORT: u8 = 6;
+const SCTP_SHUTDOWN: u8 = 7;
+const SCTP_SHUTDOWN_ACK: u8 = 8;
+const SCTP_COOKIE_ECHO: u8 = 10;
+const SCTP_COOKIE_ACK: u8 = 11;
+const SCTP_DATA: u8 = 0;
+
+/// RFC 9260 §3.3.2/§3.3.3: the 16-byte fixed block INIT and INIT-ACK share.
+fn sctp_init_family_value(initiate_tag: u32) -> Vec<u8> {
+    let mut v = Vec::new();
+    v.extend_from_slice(&initiate_tag.to_be_bytes());
+    v.extend_from_slice(&0x0001_0000u32.to_be_bytes()); // a_rwnd
+    v.extend_from_slice(&10u16.to_be_bytes()); // outbound streams
+    v.extend_from_slice(&5u16.to_be_bytes()); // inbound streams
+    v.extend_from_slice(&0x1234_5678u32.to_be_bytes()); // initial tsn
+    v
+}
+
+/// RFC 9260 §3.2: one `Type + Flags + Length + Value` chunk.
+fn sctp_chunk(chunk_type: u8, value: &[u8]) -> Vec<u8> {
+    let mut c = vec![chunk_type, 0x00];
+    c.extend_from_slice(&((4 + value.len()) as u16).to_be_bytes());
+    c.extend_from_slice(value);
+    c
+}
+
+/// RFC 9260 §3.1 common header (12 bytes) + one chunk.
+fn sctp_segment(src_port: u16, dst_port: u16, chunk_type: u8, value: &[u8]) -> Vec<u8> {
+    let mut s = Vec::new();
+    s.extend_from_slice(&src_port.to_be_bytes());
+    s.extend_from_slice(&dst_port.to_be_bytes());
+    s.extend_from_slice(&0x1111_1111u32.to_be_bytes()); // verification tag
+    s.extend_from_slice(&0u32.to_be_bytes()); // checksum, not verified
+    s.extend_from_slice(&sctp_chunk(chunk_type, value));
+    s
+}
+
+/// eth + ipv4(proto 132) + segment; `a_to_b` controls the IP/port
+/// direction, same shape as `tcp_frame`.
+fn sctp_frame(a_to_b: bool, chunk_type: u8, value: &[u8]) -> Vec<u8> {
+    let mut f = eth(0x0800);
+    if a_to_b {
+        f.extend_from_slice(&ipv4_header(132, [10, 0, 0, 1], [10, 0, 0, 2]));
+        f.extend_from_slice(&sctp_segment(34567, 3868, chunk_type, value));
+    } else {
+        f.extend_from_slice(&ipv4_header(132, [10, 0, 0, 2], [10, 0, 0, 1]));
+        f.extend_from_slice(&sctp_segment(3868, 34567, chunk_type, value));
+    }
+    f
+}
+
+#[test]
+fn sctp_lifecycle_walks_every_named_state() {
+    let engine = Arc::new(pktflow_plugins::default_engine());
+    let mut agg = Aggregator::new(&engine, AggregatorConfig::default());
+    let state = |agg: &Aggregator| agg.at_layer("sctp")[0].state;
+
+    // 11.6's acceptance criterion sequence (INIT/INIT-ACK/COOKIE-ECHO/
+    // COOKIE-ACK/DATA/SHUTDOWN), plus the shutdown handshake's closing
+    // leg so every named state in the diagram is actually reached.
+    let walk = [
+        (
+            sctp_frame(true, SCTP_INIT, &sctp_init_family_value(0xAAAA_AAAA)),
+            "init_sent",
+        ),
+        (
+            sctp_frame(false, SCTP_INIT_ACK, &sctp_init_family_value(0xBBBB_BBBB)),
+            "cookie_wait",
+        ),
+        (sctp_frame(true, SCTP_COOKIE_ECHO, &[]), "cookie_echoed"),
+        (sctp_frame(false, SCTP_COOKIE_ACK, &[]), "established"),
+        (sctp_frame(true, SCTP_DATA, b"payload"), "established"),
+        (
+            sctp_frame(true, SCTP_SHUTDOWN, &0u32.to_be_bytes()),
+            "shutdown_pending",
+        ),
+        (sctp_frame(false, SCTP_SHUTDOWN_ACK, &[]), "closed"),
+    ];
+    for (i, (frame, expected)) in walk.iter().enumerate() {
+        agg.ingest(&engine.dissect(frame, meta(frame.len(), i as u64), ParseOpts::default()));
+        assert_eq!(state(&agg), Some(*expected), "step {i}");
+    }
+
+    // 05.5 integration: the closed association is close-eligible.
+    assert!(agg.at_layer("sctp")[0].close_eligible);
+
+    let session = agg.at_layer("sctp")[0];
+    match session.rollups.get("first_chunk_type") {
+        Some(pktflow_flows::Rollup::Accumulate { values, .. }) => {
+            assert!(values.contains(&Value::U64(u64::from(SCTP_INIT))));
+            assert!(values.contains(&Value::U64(u64::from(SCTP_SHUTDOWN))));
+        }
+        other => panic!("wrong rollup: {other:?}"),
+    }
+}
+
+#[test]
+fn sctp_midstream_and_abort_fixtures() {
+    // Capture began mid-association: first chunk observed isn't INIT.
+    let (_, agg) = aggregate(&[sctp_frame(true, SCTP_DATA, b"data")]);
+    assert_eq!(agg.at_layer("sctp")[0].state, Some("established_midstream"));
+
+    // ABORT from any state lands "aborted" and is close-eligible.
+    let (_, agg) = aggregate(&[
+        sctp_frame(true, SCTP_INIT, &sctp_init_family_value(1)),
+        sctp_frame(false, SCTP_ABORT, &[]),
+    ]);
+    let session = agg.at_layer("sctp")[0];
+    assert_eq!(session.state, Some("aborted"));
+    assert!(session.close_eligible);
+}
+
+#[test]
+fn sctp_two_associations_over_the_same_port_pair_fold_directions() {
+    // A SACK-shaped exchange each way: one association, split stats,
+    // mirroring FR-21's TCP/UDP direction-folding proof above.
+    let (_, agg) = aggregate(&[
+        sctp_frame(true, SCTP_INIT, &sctp_init_family_value(1)),
+        sctp_frame(false, SCTP_INIT_ACK, &sctp_init_family_value(2)),
+    ]);
+    let sessions = agg.at_layer("sctp");
+    assert_eq!(sessions.len(), 1);
+    assert!(sessions[0].stats.iter().all(|s| s.packets == 1));
 }

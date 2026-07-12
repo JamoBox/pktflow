@@ -36,6 +36,7 @@ pub mod ntp;
 pub mod ospf;
 pub mod pvst_plus;
 pub mod radiotap;
+pub mod sctp;
 pub mod snmp;
 pub mod stp;
 pub mod syslog;
@@ -67,6 +68,7 @@ pub fn default_engine() -> Engine {
         .plugin(ospf::Ospf)
         .plugin(tcp::Tcp)
         .plugin(udp::Udp)
+        .plugin(sctp::Sctp)
         .plugin(bgp::Bgp)
         .plugin(gre::Gre)
         .plugin(vxlan::Vxlan)
