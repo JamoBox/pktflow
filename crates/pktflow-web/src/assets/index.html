@@ -1,0 +1,1144 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>pktflow</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ccircle cx='16' cy='16' r='13' fill='%233987e5'/%3E%3Cpath d='M8 16h5l2-6 3 12 2-6h4' stroke='%23fff' stroke-width='2.4' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
+<style>
+:root {
+  /* dark-committed design; tokens from the validated reference palette */
+  --page: #0d0d0d;
+  --surface: #1a1a19;
+  --surface-2: #222221;
+  --surface-3: #2a2a28;
+  --ink: #ffffff;
+  --ink-2: #c3c2b7;
+  --muted: #898781;
+  --grid: #2c2c2a;
+  --border: rgba(255,255,255,0.10);
+  --accent: #3987e5;
+  --accent-2: #199e70;
+  --good: #0ca30c;
+  --warning: #fab219;
+  --serious: #ec835a;
+  --critical: #d03b3b;
+  --mono: ui-monospace, "SF Mono", "Cascadia Mono", Menlo, Consolas, monospace;
+}
+* { box-sizing: border-box; }
+html, body { height: 100%; }
+body {
+  margin: 0;
+  background: var(--page);
+  color: var(--ink-2);
+  font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif;
+  display: flex;
+  flex-direction: column;
+}
+
+/* ── header ─────────────────────────────────────────────── */
+header {
+  display: flex; align-items: center; gap: 12px;
+  padding: 10px 18px;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+  flex: none;
+}
+.brand { display: flex; align-items: center; gap: 8px; font-weight: 700; font-size: 16px; color: var(--ink); }
+.brand svg { display: block; }
+.badge {
+  font-size: 11px; font-weight: 700; letter-spacing: .08em;
+  padding: 2px 8px; border-radius: 4px; color: #0d0d0d; background: var(--muted);
+}
+.badge.live { background: var(--critical); color: #fff; }
+.badge.live .dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: #fff; margin-right: 5px; animation: pulse 1.2s ease-in-out infinite; }
+.badge.reading { background: var(--warning); }
+.badge.file { background: var(--accent); color: #fff; }
+@keyframes pulse { 50% { opacity: .25; } }
+#source { font-family: var(--mono); font-size: 13px; color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+header .spacer { flex: 1; }
+.conn { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); }
+.conn .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); }
+.conn.ok .dot { background: var(--good); }
+.conn.bad .dot { background: var(--critical); }
+#errorbar {
+  display: none; padding: 8px 18px; background: rgba(208,59,59,.15);
+  border-bottom: 1px solid var(--critical); color: #f0b3b3; font-family: var(--mono); font-size: 13px;
+}
+
+/* ── stat tiles ─────────────────────────────────────────── */
+.tiles { display: flex; gap: 10px; padding: 12px 18px 0; flex: none; flex-wrap: wrap; }
+.tile {
+  background: var(--surface); border: 1px solid var(--border); border-radius: 8px;
+  padding: 10px 16px; min-width: 128px;
+}
+.tile .k { font-size: 11px; letter-spacing: .07em; text-transform: uppercase; color: var(--muted); }
+.tile .v { font-size: 22px; font-weight: 650; color: var(--ink); margin-top: 2px; }
+.tile .s { font-size: 12px; color: var(--muted); }
+
+/* ── tabs ───────────────────────────────────────────────── */
+.tabs { display: flex; gap: 4px; padding: 12px 18px 0; flex: none; }
+.tabs button {
+  appearance: none; border: 1px solid transparent; border-bottom: none;
+  background: none; color: var(--muted); font: inherit; font-weight: 600;
+  padding: 7px 16px; border-radius: 8px 8px 0 0; cursor: pointer;
+}
+.tabs button:hover { color: var(--ink); }
+.tabs button.on {
+  color: var(--ink); background: var(--surface); border-color: var(--border);
+}
+.tabs .count { font-weight: 400; color: var(--muted); margin-left: 6px; font-size: 12px; }
+
+main {
+  flex: 1; min-height: 0; margin: 0 18px 16px;
+  background: var(--surface); border: 1px solid var(--border); border-radius: 0 8px 8px 8px;
+  display: flex; flex-direction: column;
+}
+main > section { flex: 1; min-height: 0; display: none; flex-direction: column; }
+main > section.on { display: flex; }
+
+/* ── streams view ───────────────────────────────────────── */
+.toolbar { display: flex; gap: 10px; align-items: center; padding: 10px 14px; border-bottom: 1px solid var(--border); flex: none; flex-wrap: wrap; }
+.toolbar input[type=search] {
+  flex: 1; min-width: 160px; max-width: 380px;
+  background: var(--surface-2); color: var(--ink); border: 1px solid var(--border);
+  border-radius: 6px; padding: 6px 10px; font: inherit;
+}
+.toolbar input[type=search]:focus { outline: 1px solid var(--accent); }
+.toolbar select, .toolbar .btn {
+  background: var(--surface-2); color: var(--ink-2); border: 1px solid var(--border);
+  border-radius: 6px; padding: 6px 10px; font: inherit; cursor: pointer;
+}
+.toolbar .btn:hover, .toolbar select:hover { color: var(--ink); }
+.toolbar .hint { color: var(--muted); font-size: 12px; margin-left: auto; }
+
+.split { flex: 1; min-height: 0; display: flex; }
+.tree-pane { flex: 3; min-width: 0; overflow: auto; padding: 6px 0; }
+.detail-pane { flex: 2; min-width: 320px; max-width: 46%; overflow: auto; border-left: 1px solid var(--border); padding: 14px 16px; }
+
+.row {
+  display: flex; align-items: center; gap: 7px;
+  padding: 3px 14px 3px 0; cursor: pointer; white-space: nowrap;
+  border-left: 2px solid transparent;
+}
+.row:hover { background: var(--surface-2); }
+.row.sel { background: var(--surface-3); border-left-color: var(--accent); }
+.row .caret {
+  width: 16px; flex: none; text-align: center; color: var(--muted);
+  font-size: 10px; user-select: none;
+}
+.row .caret.toggle:hover { color: var(--ink); }
+.chip { display: inline-flex; align-items: center; gap: 5px; font-weight: 650; font-family: var(--mono); font-size: 13px; }
+.chip .dot { width: 8px; height: 8px; border-radius: 2px; flex: none; }
+.row .sid { color: var(--muted); font-family: var(--mono); font-size: 12px; }
+.row .eps { font-family: var(--mono); font-size: 13px; color: var(--ink-2); overflow: hidden; text-overflow: ellipsis; }
+.state-badge {
+  font-size: 10.5px; font-weight: 700; font-family: var(--mono);
+  color: var(--warning); border: 1px solid rgba(250,178,25,.4);
+  padding: 0 5px; border-radius: 4px;
+}
+.row .closed { color: var(--muted); font-size: 11px; }
+.row .stats { margin-left: auto; display: flex; gap: 14px; color: var(--muted); font-family: var(--mono); font-size: 12px; font-variant-numeric: tabular-nums; }
+.row .stats b { color: var(--ink-2); font-weight: 500; }
+.empty { padding: 40px; text-align: center; color: var(--muted); }
+.row.ctx { opacity: .5; }
+.qstatus { padding: 4px 14px 0; font-family: var(--mono); font-size: 12px; color: var(--muted); }
+.qstatus.err { color: var(--serious); }
+.qstatus:empty { display: none; }
+#qhelp { display: none; margin: 8px 14px 0; padding: 10px 14px; background: var(--surface-2); border: 1px solid var(--border); border-radius: 6px; font-size: 12.5px; }
+#qhelp.on { display: block; }
+#qhelp .qrow { display: grid; grid-template-columns: 120px 1fr; gap: 10px; padding: 2px 0; }
+#qhelp .qk { color: var(--muted); }
+#qhelp code { font-family: var(--mono); color: var(--ink); background: var(--surface-3); border-radius: 3px; padding: 0 4px; }
+
+/* ── timeline view ──────────────────────────────────────── */
+.tl-scroll { flex: 1; min-height: 0; overflow: auto; }
+.tl-body { position: relative; min-width: 640px; }
+.tl-axis {
+  position: sticky; top: 0; z-index: 3; display: grid;
+  grid-template-columns: 340px 1fr; align-items: center;
+  background: var(--surface); border-bottom: 1px solid var(--border);
+  height: 26px; font-family: var(--mono); font-size: 11px; color: var(--muted);
+}
+.tl-axis .ticks { position: relative; height: 100%; }
+.tl-axis .tick { position: absolute; top: 5px; transform: translateX(-50%); white-space: nowrap; }
+.tl-axis .tick:first-child { transform: none; }
+.tl-axis .tick:last-child { transform: translateX(-100%); }
+.tl-row {
+  display: grid; grid-template-columns: 340px 1fr; align-items: center;
+  height: 24px; cursor: pointer; border-left: 2px solid transparent;
+}
+.tl-row:hover { background: var(--surface-2); }
+.tl-row.sel { background: var(--surface-3); border-left-color: var(--accent); }
+.tl-row.ctx { opacity: .5; }
+.tl-label {
+  font-family: var(--mono); font-size: 12px; white-space: nowrap;
+  overflow: hidden; text-overflow: ellipsis; padding: 0 10px;
+}
+.tl-label .chip { font-size: 12px; }
+.tl-label .sid { color: var(--muted); margin-left: 4px; }
+.tl-label .eps { color: var(--ink-2); margin-left: 8px; }
+.tl-track { position: relative; height: 100%; border-left: 1px solid var(--grid); }
+.tl-bar {
+  position: absolute; top: 6px; height: 12px; border-radius: 3px;
+  min-width: 3px; transition: opacity .15s, filter .15s;
+}
+.tl-bar.unborn { opacity: .16; }
+.tl-bar.done { opacity: .45; }
+.tl-bar.act { opacity: 1; box-shadow: 0 0 6px 0 rgba(255,255,255,.25); }
+.tl-ph {
+  position: absolute; top: 0; bottom: 0; width: 2px; z-index: 2;
+  background: #fff; opacity: .85; pointer-events: none;
+  box-shadow: 0 0 8px rgba(255,255,255,.4);
+}
+#tlTime { font-family: var(--mono); font-size: 13px; color: var(--ink); min-width: 110px; }
+#tlActive { font-family: var(--mono); font-size: 12px; color: var(--warning); }
+#tlScrub { flex: 1; accent-color: var(--accent); min-width: 160px; }
+
+/* ── detail pane ────────────────────────────────────────── */
+.crumbs { font-family: var(--mono); font-size: 12px; color: var(--muted); margin-bottom: 8px; overflow-wrap: anywhere; }
+.crumbs a { color: var(--accent); text-decoration: none; cursor: pointer; }
+.crumbs a:hover { text-decoration: underline; }
+.dhead { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; margin-bottom: 4px; }
+.dhead .proto { font-size: 19px; font-weight: 700; font-family: var(--mono); }
+.dhead .eps { font-family: var(--mono); color: var(--ink); font-size: 15px; overflow-wrap: anywhere; }
+.dcards { display: flex; gap: 8px; margin: 12px 0; flex-wrap: wrap; }
+.dcard { background: var(--surface-2); border: 1px solid var(--border); border-radius: 6px; padding: 6px 12px; min-width: 86px; }
+.dcard .k { font-size: 10.5px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); }
+.dcard .v { font-size: 15px; font-weight: 650; color: var(--ink); font-variant-numeric: tabular-nums; }
+.kvrow { display: flex; gap: 10px; padding: 3px 0; font-size: 13px; }
+.kvrow .k { flex: none; width: 84px; color: var(--muted); }
+.kvrow .v { font-family: var(--mono); overflow-wrap: anywhere; }
+.sec { margin-top: 16px; }
+.sec > h3 { font-size: 11px; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); margin: 0 0 8px; border-bottom: 1px solid var(--grid); padding-bottom: 4px; }
+
+/* direction split (stacked 2-segment bar, 2px gaps, direct labels) */
+.dirsplit .lbl { display: flex; justify-content: space-between; font-family: var(--mono); font-size: 12px; margin: 3px 0; }
+.dirsplit .lbl .a { color: var(--accent); } .dirsplit .lbl .b { color: var(--accent-2); }
+.dirbar { display: flex; gap: 2px; height: 14px; border-radius: 4px; overflow: hidden; background: var(--surface-2); }
+.dirbar div { min-width: 2px; }
+.dirbar .a { background: var(--accent); border-radius: 4px 0 0 4px; }
+.dirbar .b { background: var(--accent-2); border-radius: 0 4px 4px 0; }
+
+.chips { display: flex; flex-wrap: wrap; gap: 5px; }
+.chips .c { background: var(--surface-2); border: 1px solid var(--border); border-radius: 4px; padding: 1px 7px; font-family: var(--mono); font-size: 12px; }
+.rollup { margin-bottom: 12px; }
+.rollup .rf { font-family: var(--mono); font-size: 12.5px; color: var(--ink); margin-bottom: 4px; }
+.rollup .rk { color: var(--muted); font-size: 11px; margin-left: 6px; }
+.serieswrap { position: relative; }
+.serieswrap svg { display: block; width: 100%; height: 96px; }
+.child-link { display: block; font-family: var(--mono); font-size: 12.5px; color: var(--accent); cursor: pointer; padding: 2px 0; text-decoration: none; }
+.child-link:hover { text-decoration: underline; }
+details.raw { margin-top: 16px; }
+details.raw summary { cursor: pointer; color: var(--muted); font-size: 12px; }
+details.raw pre { font-family: var(--mono); font-size: 11.5px; background: var(--surface-2); border: 1px solid var(--border); border-radius: 6px; padding: 10px; overflow: auto; max-height: 320px; }
+
+/* ── protocols view ─────────────────────────────────────── */
+.protwrap { overflow: auto; padding: 16px 18px; }
+.stopchips { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 18px; }
+.stopchip { display: flex; align-items: center; gap: 7px; background: var(--surface-2); border: 1px solid var(--border); border-radius: 6px; padding: 6px 12px; font-size: 13px; }
+.stopchip .ico { font-weight: 700; }
+.stopchip b { color: var(--ink); font-variant-numeric: tabular-nums; }
+.prow { display: grid; grid-template-columns: 140px 110px 1fr 90px; align-items: center; gap: 12px; padding: 5px 0; }
+.prow .n { font-variant-numeric: tabular-nums; color: var(--muted); font-family: var(--mono); font-size: 12px; text-align: right; }
+.prow .barcell { height: 14px; position: relative; }
+.prow .bar { height: 100%; background: var(--accent); border-radius: 0 4px 4px 0; min-width: 2px; }
+.prow .bytes { font-family: var(--mono); font-size: 12.5px; color: var(--ink); font-variant-numeric: tabular-nums; }
+.phead { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .06em; border-bottom: 1px solid var(--grid); padding-bottom: 4px; margin-bottom: 4px; }
+
+/* ── unknown view ───────────────────────────────────────── */
+.unk-list { flex: 1; overflow: auto; min-width: 0; }
+.unk-row { display: flex; gap: 12px; align-items: center; padding: 8px 14px; border-bottom: 1px solid var(--grid); cursor: pointer; white-space: nowrap; }
+.unk-row:hover { background: var(--surface-2); }
+.unk-row.sel { background: var(--surface-3); box-shadow: inset 2px 0 var(--warning); }
+.unk-row .ctx { font-family: var(--mono); color: var(--warning); font-weight: 600; }
+.unk-row .kind { color: var(--muted); font-size: 12px; }
+.unk-row .stats { margin-left: auto; font-family: var(--mono); font-size: 12px; color: var(--ink-2); font-variant-numeric: tabular-nums; }
+.nearbar { display: grid; grid-template-columns: 110px 1fr 36px; gap: 8px; align-items: center; padding: 2px 0; font-family: var(--mono); font-size: 12px; }
+.nearbar .t { height: 10px; background: var(--surface-2); border-radius: 3px; overflow: hidden; }
+.nearbar .f { height: 100%; background: var(--warning); border-radius: 3px; }
+.hexdump { font-family: var(--mono); font-size: 11.5px; line-height: 1.5; background: var(--surface-2); border: 1px solid var(--border); border-radius: 6px; padding: 10px 12px; overflow: auto; margin: 6px 0 12px; }
+.hexdump .off { color: var(--muted); }
+.hexdump .asc { color: var(--muted); }
+.codehint { font-family: var(--mono); font-size: 12px; background: var(--surface-2); border: 1px solid var(--border); border-radius: 6px; padding: 8px 12px; color: var(--ink-2); overflow-wrap: anywhere; }
+
+/* tooltip */
+#tooltip {
+  position: fixed; z-index: 10; pointer-events: none; display: none;
+  background: #000; border: 1px solid var(--border); border-radius: 6px;
+  padding: 6px 10px; font-family: var(--mono); font-size: 12px; color: var(--ink);
+  box-shadow: 0 4px 16px rgba(0,0,0,.5); max-width: 340px;
+}
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-thumb { background: var(--surface-3); border-radius: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="brand">
+    <svg width="20" height="20" viewBox="0 0 32 32"><circle cx="16" cy="16" r="13" fill="#3987e5"/><path d="M8 16h5l2-6 3 12 2-6h4" stroke="#fff" stroke-width="2.4" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>
+    pktflow
+  </div>
+  <span class="badge" id="modeBadge">…</span>
+  <span id="source"></span>
+  <div class="spacer"></div>
+  <span class="conn" id="conn"><span class="dot"></span><span id="connText">connecting</span></span>
+</header>
+<div id="errorbar"></div>
+
+<section class="tiles" id="tiles"></section>
+
+<nav class="tabs" id="tabs">
+  <button data-tab="streams" class="on">Streams<span class="count" id="cStreams"></span></button>
+  <button data-tab="timeline">Timeline</button>
+  <button data-tab="protocols">Protocols<span class="count" id="cProtos"></span></button>
+  <button data-tab="unknown">Unknown<span class="count" id="cUnknown"></span></button>
+</nav>
+
+<main>
+  <section id="view-streams" class="on">
+    <div class="toolbar">
+      <input type="search" id="filter" placeholder="search — text, /regex/, proto==dns AND bytes>10k  ( / )">
+      <button class="btn" id="qhelpBtn" title="query syntax">syntax ?</button>
+      <select id="sortSel" title="sibling sort order">
+        <option value="bytes">sort: bytes</option>
+        <option value="packets">sort: packets</option>
+        <option value="first">sort: first seen</option>
+        <option value="duration">sort: duration</option>
+      </select>
+      <button class="btn" id="expandAll">expand all</button>
+      <button class="btn" id="collapseAll">collapse all</button>
+      <span class="hint">click a stream to drill in · ↑↓←→ navigate</span>
+    </div>
+    <div id="qhelp">
+      <div class="qrow"><span class="qk">free text</span><span><code>dns</code> · <code>192.168.203</code> · <code>"quoted text"</code> · <code>/vni=10\d/</code> (regex)</span></div>
+      <div class="qrow"><span class="qk">comparisons</span><span><code>proto == dns</code> · <code>bytes > 10k</code> · <code>duration >= 5m</code> · <code>port == 443</code> · <code>qname =~ /google/</code> · <code>endpoint contains 192.168</code></span></div>
+      <div class="qrow"><span class="qk">booleans</span><span><code>AND</code> <code>OR</code> <code>NOT</code> <code>( )</code> — adjacent terms are AND · optional leading <code>WHERE</code></span></div>
+      <div class="qrow"><span class="qk">structure</span><span><code>under == vxlan</code> (any ancestor) · <code>parent == udp</code> · <code>depth == 0</code> · flags: <code>root</code> <code>leaf</code> <code>closed</code> <code>live</code></span></div>
+      <div class="qrow"><span class="qk">fields</span><span><code>proto id packets bytes opaque duration depth children state reason endpoint port</code> — any other name reads key fields &amp; rollups (<code>vni == 100</code>)</span></div>
+    </div>
+    <div id="queryStatus" class="qstatus"></div>
+    <div class="split">
+      <div class="tree-pane" id="tree" tabindex="0"></div>
+      <div class="detail-pane" id="detail"><div class="empty">select a stream</div></div>
+    </div>
+  </section>
+
+  <section id="view-timeline">
+    <div class="toolbar">
+      <button class="btn" id="tlPlay">▶ play</button>
+      <input type="range" id="tlScrub" min="0" max="1000" value="1000">
+      <span id="tlTime"></span>
+      <span id="tlActive"></span>
+      <span class="hint">drag to scrub · matches the search on the Streams tab · click a lane to drill in</span>
+    </div>
+    <div class="tl-scroll" id="tlScroll"></div>
+  </section>
+
+  <section id="view-protocols">
+    <div class="protwrap" id="protocols"></div>
+  </section>
+
+  <section id="view-unknown">
+    <div class="split">
+      <div class="unk-list" id="unkList"></div>
+      <div class="detail-pane" id="unkDetail"><div class="empty">select an unknown group</div></div>
+    </div>
+  </section>
+</main>
+
+<div id="tooltip"></div>
+
+<script>
+"use strict";
+/* ── state ─────────────────────────────────────────────── */
+const S = {
+  data: null,           // /api/snapshot document
+  byId: new Map(),      // id -> stream record
+  kids: new Map(),      // id -> [child records]
+  tab: "streams",
+  filter: "",
+  sort: "bytes",
+  collapsed: new Set(), // stream ids folded shut (default: all open)
+  search: { matches: null, visible: null, error: null }, // server-evaluated query
+  sel: null,            // selected stream id
+  unkSel: 0,
+  gen: -1,
+};
+const MAX_TREE_ROWS = 2000;
+const $ = s => document.querySelector(s);
+const el = (tag, cls, text) => {
+  const n = document.createElement(tag);
+  if (cls) n.className = cls;
+  if (text !== undefined) n.textContent = text;
+  return n;
+};
+
+/* ── formatters (mirror the CLI's FR-28 table) ─────────── */
+const thousands = n => Number(n).toLocaleString("en-US");
+function humanBytes(n) {
+  const units = ["B", "kB", "MB", "GB", "TB"];
+  let v = Number(n), u = 0;
+  while (v >= 1000 && u < units.length - 1) { v /= 1000; u++; }
+  return u === 0 ? `${n} B` : `${v.toFixed(1)} ${units[u]}`;
+}
+const pad = (n, w = 2) => String(n).padStart(w, "0");
+function timeOfDay(iso) {
+  const d = new Date(iso);
+  if (isNaN(d)) return "—";
+  return `${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}:${pad(d.getUTCSeconds())}.${pad(d.getUTCMilliseconds(), 3)}`;
+}
+function durationStr(firstIso, lastIso) {
+  const s = Math.max(0, Math.floor((new Date(lastIso) - new Date(firstIso)) / 1000));
+  return `${pad(Math.floor(s / 3600))}:${pad(Math.floor(s / 60) % 60)}:${pad(s % 60)}`;
+}
+
+/* ── protocol identity colors ──────────────────────────── */
+/* Categorical slots assigned in first-seen order and never reassigned,
+   so live updates cannot repaint an existing protocol. Beyond 8, chips
+   go neutral — identity is always also carried by the printed name. */
+const PROTO_SLOTS = new Map();
+const CAT = ["#3987e5","#199e70","#c98500","#008300","#9085e9","#e66767","#d55181","#d95926"];
+function protoColor(name) {
+  if (!PROTO_SLOTS.has(name)) PROTO_SLOTS.set(name, PROTO_SLOTS.size);
+  const slot = PROTO_SLOTS.get(name);
+  return slot < CAT.length ? CAT[slot] : "#898781";
+}
+function protoChip(name) {
+  const c = el("span", "chip");
+  const dot = el("span", "dot");
+  dot.style.background = protoColor(name);
+  c.append(dot, document.createTextNode(name));
+  c.style.color = protoColor(name);
+  return c;
+}
+
+/* ── record helpers ────────────────────────────────────── */
+const tPkts = s => s.packets.a_to_b + s.packets.b_to_a;
+const tBytes = s => s.bytes.a_to_b + s.bytes.b_to_a;
+function sideStr(side) {
+  return Object.entries(side)
+    .map(([k, v]) => (k.endsWith("port") ? ":" + v : String(v)))
+    .join(",");
+}
+function endpointsStr(s) {
+  const a = sideStr(s.endpoint_a), b = sideStr(s.endpoint_b);
+  const extras = Object.entries(s.key).map(([k, v]) => `${k}=${v}`).join(" ");
+  let out = a ? `${a} ↔ ${b}` : "";
+  if (extras) out += (out ? " " : "") + extras;
+  return out;
+}
+/* ── data intake ───────────────────────────────────────── */
+async function refetch() {
+  try {
+    const r = await fetch("/api/snapshot");
+    const doc = await r.json();
+    S.data = doc;
+    S.byId = new Map(doc.streams.map(s => [s.id, s]));
+    S.kids = new Map();
+    for (const s of doc.streams) {
+      S.kids.set(s.id, s.children.map(id => S.byId.get(id)).filter(Boolean));
+    }
+    for (const s of doc.streams) protoColor(s.protocol); // stable slot order
+    renderAll();
+    if (S.filter.trim()) runSearch(); // fresh data, fresh match set
+  } catch (e) {
+    setConn(false, "fetch failed");
+  }
+}
+
+/* ── header / tiles ────────────────────────────────────── */
+function setConn(ok, text) {
+  const c = $("#conn");
+  c.className = "conn " + (ok ? "ok" : "bad");
+  $("#connText").textContent = text;
+}
+function renderHeader() {
+  const m = S.data.meta;
+  $("#source").textContent = m.source;
+  const badge = $("#modeBadge");
+  if (m.error) { badge.className = "badge"; badge.textContent = "ERROR"; }
+  else if (m.mode === "live" && !m.finished) { badge.className = "badge live"; badge.innerHTML = '<span class="dot"></span>LIVE'; }
+  else if (m.mode === "live") { badge.className = "badge"; badge.textContent = "ENDED"; }
+  else if (!m.finished) { badge.className = "badge reading"; badge.textContent = "READING"; }
+  else { badge.className = "badge file"; badge.textContent = "FILE"; }
+  const bar = $("#errorbar");
+  bar.style.display = m.error ? "block" : "none";
+  if (m.error) bar.textContent = "pipeline error: " + m.error;
+}
+function renderTiles() {
+  const sum = S.data.summary;
+  const tiles = [
+    ["packets", thousands(sum.packets), ""],
+    ["bytes", humanBytes(sum.bytes), ""],
+    ["streams", thousands(sum.streams_created), `${thousands(sum.streams_live)} live`],
+    ["protocols", String(sum.per_protocol.length), ""],
+    ["unknown groups", String(S.data.unknowns.length), ""],
+  ];
+  const host = $("#tiles");
+  host.replaceChildren();
+  for (const [k, v, s] of tiles) {
+    const t = el("div", "tile");
+    t.append(el("div", "k", k), el("div", "v", v));
+    if (s) t.append(el("div", "s", s));
+    host.append(t);
+  }
+  $("#cStreams").textContent = S.data.streams.length ? `(${thousands(S.data.streams.length)})` : "";
+  $("#cProtos").textContent = sum.per_protocol.length ? `(${sum.per_protocol.length})` : "";
+  $("#cUnknown").textContent = S.data.unknowns.length ? `(${S.data.unknowns.length})` : "";
+}
+
+/* ── stream tree ───────────────────────────────────────── */
+function sortSiblings(list) {
+  const key = {
+    bytes: s => -tBytes(s),
+    packets: s => -tPkts(s),
+    first: s => s.id,
+    duration: s => new Date(s.first_seen) - new Date(s.last_seen),
+  }[S.sort];
+  return [...list].sort((x, y) => {
+    const a = key(x), b = key(y);
+    return a === b ? x.id - y.id : a - b;
+  });
+}
+
+/* Visible rows under query/collapse — the same rules as the TUI: the
+   server-evaluated query yields matches plus ancestors, auto-expanded. */
+function visibleRows() {
+  const keep = S.search.visible; // Set<id> | null (null = unfiltered)
+  const rows = [];
+  const roots = sortSiblings(S.data.roots.map(id => S.byId.get(id)).filter(Boolean));
+  const walk = (s, depth) => {
+    if (keep && !keep.has(s.id)) return;
+    const children = sortSiblings((S.kids.get(s.id) || []).filter(c => !keep || keep.has(c.id)));
+    const expanded = keep ? true : !S.collapsed.has(s.id);
+    rows.push({ s, depth, hasKids: children.length > 0, expanded });
+    if (expanded) for (const c of children) walk(c, depth + 1);
+  };
+  for (const r of roots) walk(r, 0);
+  return rows;
+}
+
+function renderTree() {
+  const host = $("#tree");
+  const scroll = host.scrollTop;
+  host.replaceChildren();
+  if (!S.data.streams.length) {
+    host.append(el("div", "empty", S.data.summary.packets ? "no streams yet" : "waiting for packets…"));
+    $("#detail").replaceChildren(el("div", "empty", "select a stream"));
+    return;
+  }
+  const rows = visibleRows();
+  if (!rows.length) {
+    host.append(el("div", "empty", "no streams match the query"));
+    return;
+  }
+  if (S.sel === null || !S.byId.has(S.sel)) S.sel = rows[0].s.id;
+
+  for (const r of rows.slice(0, MAX_TREE_ROWS)) {
+    const { s } = r;
+    const ctx = S.search.matches && !S.search.matches.has(s.id);
+    const row = el("div", "row" + (s.id === S.sel ? " sel" : "") + (ctx ? " ctx" : ""));
+    row.dataset.id = s.id;
+    row.style.paddingLeft = 6 + r.depth * 18 + "px";
+    const caret = el("span", "caret" + (r.hasKids ? " toggle" : ""), r.hasKids ? (r.expanded ? "▼" : "▶") : "·");
+    if (r.hasKids) caret.onclick = ev => { ev.stopPropagation(); toggle(s.id); };
+    row.append(caret, protoChip(s.protocol), el("span", "sid", "#" + s.id));
+    const eps = endpointsStr(s);
+    if (eps) row.append(el("span", "eps", eps));
+    if (s.state) row.append(el("span", "state-badge", s.state));
+    if (s.closed) row.append(el("span", "closed", "✕ " + s.closed.replace("_", "-")));
+    const stats = el("span", "stats");
+    const pk = el("span"); pk.innerHTML = `<b>${thousands(tPkts(s))}</b> pkts`;
+    const by = el("span"); by.innerHTML = `<b>${humanBytes(tBytes(s))}</b>`;
+    stats.append(pk, by, el("span", null, durationStr(s.first_seen, s.last_seen)));
+    row.append(stats);
+    row.onclick = () => select(s.id);
+    row.ondblclick = () => r.hasKids && toggle(s.id);
+    host.append(row);
+  }
+  if (rows.length > MAX_TREE_ROWS) {
+    host.append(el("div", "empty", `… ${thousands(rows.length - MAX_TREE_ROWS)} more rows — narrow the filter`));
+  }
+  host.scrollTop = scroll;
+}
+function toggle(id) {
+  if (S.collapsed.has(id)) S.collapsed.delete(id); else S.collapsed.add(id);
+  renderTree();
+}
+function select(id) {
+  S.sel = id;
+  renderTree();
+  renderDetail();
+  const sel = $("#tree .row.sel");
+  if (sel) sel.scrollIntoView({ block: "nearest" });
+}
+
+/* ── detail pane ───────────────────────────────────────── */
+function lineage(s) {
+  const chain = [];
+  let cur = s.parent === null ? null : S.byId.get(s.parent);
+  while (cur) { chain.unshift(cur); cur = cur.parent === null ? null : S.byId.get(cur.parent); }
+  return chain;
+}
+function kvRow(k, v) {
+  const r = el("div", "kvrow");
+  r.append(el("span", "k", k), el("span", "v", v));
+  return r;
+}
+function renderDetail() {
+  const host = $("#detail");
+  const s = S.byId.get(S.sel);
+  if (!s) { host.replaceChildren(el("div", "empty", "select a stream")); return; }
+  host.replaceChildren();
+
+  const crumbs = el("div", "crumbs");
+  for (const p of lineage(s)) {
+    const a = el("a", null, `${p.protocol} #${p.id}`);
+    a.onclick = () => select(p.id);
+    crumbs.append(a, document.createTextNode("  ▸  "));
+  }
+  crumbs.append(document.createTextNode("this"));
+  if (s.parent !== null || (S.kids.get(s.id) || []).length) host.append(crumbs);
+
+  const head = el("div", "dhead");
+  const proto = el("span", "proto", `${s.protocol} #${s.id}`);
+  proto.style.color = protoColor(s.protocol);
+  head.append(proto);
+  const eps = endpointsStr(s);
+  if (eps) head.append(el("span", "eps", eps));
+  if (s.state) head.append(el("span", "state-badge", s.state));
+  host.append(head);
+
+  const cards = el("div", "dcards");
+  const card = (k, v) => { const c = el("div", "dcard"); c.append(el("div", "k", k), el("div", "v", v)); return c; };
+  cards.append(
+    card("packets", thousands(tPkts(s))),
+    card("bytes", humanBytes(tBytes(s))),
+    card("duration", durationStr(s.first_seen, s.last_seen)),
+  );
+  if (s.opaque_bytes > 0) cards.append(card("opaque", humanBytes(s.opaque_bytes)));
+  host.append(cards);
+
+  /* direction split — two segments, direct labels both sides */
+  const a = sideStr(s.endpoint_a) || "A", b = sideStr(s.endpoint_b) || "B";
+  const ds = el("div", "dirsplit sec");
+  const l1 = el("div", "lbl");
+  l1.innerHTML = `<span class="a">▲ ${esc(a)} → ${esc(b)} · ${thousands(s.packets.a_to_b)} pkts · ${humanBytes(s.bytes.a_to_b)}</span>`;
+  const bar = el("div", "dirbar");
+  const total = Math.max(1, tBytes(s));
+  const segA = el("div", "a"), segB = el("div", "b");
+  segA.style.flex = `${s.bytes.a_to_b / total} 0 0`;
+  segB.style.flex = `${s.bytes.b_to_a / total} 0 0`;
+  hover(segA, () => `A→B · ${thousands(s.packets.a_to_b)} pkts · ${humanBytes(s.bytes.a_to_b)}`);
+  hover(segB, () => `B→A · ${thousands(s.packets.b_to_a)} pkts · ${humanBytes(s.bytes.b_to_a)}`);
+  bar.append(segA, segB);
+  const l2 = el("div", "lbl");
+  l2.innerHTML = `<span class="b">▼ ${esc(b)} → ${esc(a)} · ${thousands(s.packets.b_to_a)} pkts · ${humanBytes(s.bytes.b_to_a)}</span>`;
+  ds.append(l1, bar, l2);
+  host.append(ds);
+
+  const meta = el("div", "sec");
+  meta.append(kvRow("first seen", timeOfDay(s.first_seen)), kvRow("last seen", timeOfDay(s.last_seen)));
+  meta.append(kvRow("initiator", s.initiator === "a_to_b" ? `A (${a})` : `B (${b})`));
+  if (s.state) meta.append(kvRow("state", s.state));
+  if (s.closed) meta.append(kvRow("closed", s.closed.replace("_", "-")));
+  host.append(meta);
+
+  const rollups = Object.entries(s.rollups);
+  if (rollups.length) {
+    const sec = el("div", "sec");
+    sec.append(el("h3", null, "rollups"));
+    for (const [field, r] of rollups) sec.append(rollupNode(field, r));
+    host.append(sec);
+  }
+
+  const children = S.kids.get(s.id) || [];
+  if (children.length) {
+    const sec = el("div", "sec");
+    sec.append(el("h3", null, `children (${children.length})`));
+    for (const c of children) {
+      const link = el("a", "child-link", `${c.protocol} #${c.id}  ${endpointsStr(c)}`);
+      link.onclick = () => select(c.id);
+      sec.append(link);
+    }
+    host.append(sec);
+  }
+
+  const raw = el("details", "raw");
+  raw.append(el("summary", null, "raw record (JSON)"));
+  raw.append(el("pre", null, JSON.stringify(s, null, 2)));
+  host.append(raw);
+}
+
+function rollupNode(field, r) {
+  const box = el("div", "rollup");
+  const title = el("div", "rf", field);
+  title.append(el("span", "rk", r.kind));
+  box.append(title);
+  if (r.kind === "accumulate") {
+    title.append(el("span", "rk", `${r.distinct} distinct / ${thousands(r.observations)} obs${r.overflow ? " · ≥cap" : ""}`));
+    const chips = el("div", "chips");
+    for (const v of r.values) chips.append(el("span", "c", String(v)));
+    box.append(chips);
+  } else if (r.kind === "sample") {
+    box.append(el("div", "chips")).append(
+      el("span", "c", `${r.first ?? "—"} → ${r.last ?? "—"}`)
+    );
+  } else if (r.kind === "series") {
+    title.append(el("span", "rk", `${r.points.length} pts${r.truncated ? " · truncated" : ""}`));
+    const numeric = r.points.map(p => Number(p.value));
+    if (r.points.length > 1 && numeric.every(v => Number.isFinite(v))) {
+      box.append(seriesChart(r.points, numeric));
+    } else {
+      const chips = el("div", "chips");
+      for (const p of r.points.slice(-8)) {
+        chips.append(el("span", "c", `${p.dir === "a_to_b" ? "▲" : "▼"} ${p.value}`));
+      }
+      box.append(chips);
+    }
+  }
+  return box;
+}
+
+/* line chart for a numeric series rollup: 2px line, hover crosshair */
+function seriesChart(points, values) {
+  const W = 560, H = 96, PX = 4, PY = 8;
+  const min = Math.min(...values), max = Math.max(...values);
+  const span = max - min || 1;
+  const x = i => PX + (i / Math.max(1, values.length - 1)) * (W - 2 * PX);
+  const y = v => H - PY - ((v - min) / span) * (H - 2 * PY);
+  const d = values.map((v, i) => `${i ? "L" : "M"}${x(i).toFixed(1)},${y(v).toFixed(1)}`).join("");
+  const wrap = el("div", "serieswrap");
+  const ns = "http://www.w3.org/2000/svg";
+  const svg = document.createElementNS(ns, "svg");
+  svg.setAttribute("viewBox", `0 0 ${W} ${H}`);
+  svg.setAttribute("preserveAspectRatio", "none");
+  const grid = document.createElementNS(ns, "line");
+  grid.setAttribute("x1", PX); grid.setAttribute("x2", W - PX);
+  grid.setAttribute("y1", H - PY); grid.setAttribute("y2", H - PY);
+  grid.setAttribute("stroke", "var(--grid)");
+  const path = document.createElementNS(ns, "path");
+  path.setAttribute("d", d);
+  path.setAttribute("fill", "none");
+  path.setAttribute("stroke", "var(--accent)");
+  path.setAttribute("stroke-width", "2");
+  path.setAttribute("vector-effect", "non-scaling-stroke");
+  const marker = document.createElementNS(ns, "circle");
+  marker.setAttribute("r", "4");
+  marker.setAttribute("fill", "var(--accent)");
+  marker.setAttribute("stroke", "var(--surface)");
+  marker.setAttribute("stroke-width", "2");
+  marker.style.display = "none";
+  svg.append(grid, path, marker);
+  wrap.append(svg);
+  const lbl = el("div", "lbl");
+  lbl.style.cssText = "display:flex;justify-content:space-between;font-family:var(--mono);font-size:11px;color:var(--muted)";
+  lbl.innerHTML = `<span>min ${esc(String(min))}</span><span>max ${esc(String(max))}</span>`;
+  wrap.append(lbl);
+  svg.addEventListener("mousemove", ev => {
+    const rect = svg.getBoundingClientRect();
+    const fx = (ev.clientX - rect.left) / rect.width * W;
+    const i = Math.max(0, Math.min(values.length - 1, Math.round((fx - PX) / (W - 2 * PX) * (values.length - 1))));
+    marker.style.display = "";
+    marker.setAttribute("cx", x(i)); marker.setAttribute("cy", y(values[i]));
+    const p = points[i];
+    showTip(ev, `${timeOfDay(p.ts)} ${p.dir === "a_to_b" ? "▲" : "▼"} ${p.value}`);
+  });
+  svg.addEventListener("mouseleave", () => { marker.style.display = "none"; hideTip(); });
+  return wrap;
+}
+
+/* ── timeline view ─────────────────────────────────────── */
+/* One lane per visible stream (hierarchy order, query-aware): a bar
+   spanning the stream's lifetime on a shared time axis, plus a playhead.
+   Bars after the playhead are unborn (ghosted), bars it crosses are
+   active (bright + glow), bars before it are finished (dimmed). */
+const TL = { start: 0, end: 1, playTimer: null };
+function tlSpan() {
+  let start = Infinity, end = -Infinity;
+  for (const s of S.data.streams) {
+    start = Math.min(start, +new Date(s.first_seen));
+    end = Math.max(end, +new Date(s.last_seen));
+  }
+  if (!isFinite(start)) return null;
+  return { start, end: Math.max(end, start + 1) };
+}
+function fmtClock(ms) {
+  const d = new Date(ms);
+  return `${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}:${pad(d.getUTCSeconds())}.${pad(d.getUTCMilliseconds(), 3)}`;
+}
+function renderTimeline() {
+  const host = $("#tlScroll");
+  host.replaceChildren();
+  const span = tlSpan();
+  if (!span) {
+    host.append(el("div", "empty", S.data.summary.packets ? "no streams yet" : "waiting for packets…"));
+    return;
+  }
+  TL.start = span.start;
+  TL.end = span.end;
+
+  const body = el("div", "tl-body");
+  const axis = el("div", "tl-axis");
+  axis.append(el("span", null, ""));
+  const ticks = el("div", "ticks");
+  for (let i = 0; i <= 4; i++) {
+    const t = el("span", "tick", fmtClock(span.start + (span.end - span.start) * i / 4));
+    t.style.left = (i * 25) + "%";
+    ticks.append(t);
+  }
+  axis.append(ticks);
+  body.append(axis);
+
+  const spanMs = span.end - span.start;
+  for (const r of visibleRows().slice(0, MAX_TREE_ROWS)) {
+    const s = r.s;
+    const ctx = S.search.matches && !S.search.matches.has(s.id);
+    const row = el("div", "tl-row" + (s.id === S.sel ? " sel" : "") + (ctx ? " ctx" : ""));
+    row.dataset.id = s.id;
+
+    const label = el("div", "tl-label");
+    label.style.paddingLeft = 10 + r.depth * 14 + "px";
+    label.append(protoChip(s.protocol), el("span", "sid", "#" + s.id));
+    const eps = endpointsStr(s);
+    if (eps) label.append(el("span", "eps", eps));
+    row.append(label);
+
+    const track = el("div", "tl-track");
+    const bar = el("div", "tl-bar");
+    const first = +new Date(s.first_seen), last = +new Date(s.last_seen);
+    bar.dataset.first = first;
+    bar.dataset.last = last;
+    bar.style.left = ((first - span.start) / spanMs * 100) + "%";
+    bar.style.width = Math.max(0.3, (last - first) / spanMs * 100) + "%";
+    bar.style.background = protoColor(s.protocol);
+    hover(bar, () =>
+      `${s.protocol} #${s.id}  ${eps || ""}  ·  ${timeOfDay(s.first_seen)} → ${timeOfDay(s.last_seen)}` +
+      `  ·  ${thousands(tPkts(s))} pkts / ${humanBytes(tBytes(s))}`);
+    track.append(bar);
+    row.append(track);
+
+    row.onclick = () => { select(s.id); activateTab("streams"); };
+    body.append(row);
+  }
+
+  const ph = el("div", "tl-ph");
+  ph.id = "tlPh";
+  body.append(ph);
+  host.append(body);
+  updatePlayhead();
+}
+function updatePlayhead() {
+  const ph = $("#tlPh");
+  if (!ph) return;
+  const f = +$("#tlScrub").value / 1000;
+  const T = TL.start + (TL.end - TL.start) * f;
+  ph.style.left = `calc(340px + (100% - 340px) * ${f})`;
+  $("#tlTime").textContent = fmtClock(T);
+  let active = 0;
+  for (const bar of document.querySelectorAll("#tlScroll .tl-bar")) {
+    const first = +bar.dataset.first, last = +bar.dataset.last;
+    const cls = first > T ? "unborn" : last < T ? "done" : "act";
+    if (cls === "act") active++;
+    bar.className = "tl-bar " + cls;
+  }
+  $("#tlActive").textContent = `${active} active at playhead`;
+}
+$("#tlScrub").addEventListener("input", () => { stopPlay(); updatePlayhead(); });
+function stopPlay() {
+  if (TL.playTimer) { clearInterval(TL.playTimer); TL.playTimer = null; }
+  $("#tlPlay").textContent = "▶ play";
+}
+$("#tlPlay").onclick = () => {
+  if (TL.playTimer) { stopPlay(); return; }
+  const scrub = $("#tlScrub");
+  if (+scrub.value >= 1000) scrub.value = 0; // replay from the start
+  $("#tlPlay").textContent = "⏸ pause";
+  TL.playTimer = setInterval(() => {
+    scrub.value = Math.min(1000, +scrub.value + 5);
+    updatePlayhead();
+    if (+scrub.value >= 1000) stopPlay();
+  }, 50);
+};
+
+/* ── protocols view ────────────────────────────────────── */
+function renderProtocols() {
+  const host = $("#protocols");
+  host.replaceChildren();
+  const sum = S.data.summary;
+
+  const stops = [
+    ["clean", "✓", "var(--good)"],
+    ["unknown_payload", "?", "var(--warning)"],
+    ["malformed", "△", "var(--serious)"],
+    ["suspicious", "⛔", "var(--critical)"],
+  ];
+  const chips = el("div", "stopchips");
+  for (const [key, ico, color] of stops) {
+    const n = sum.stop_classes[key] || 0;
+    const c = el("div", "stopchip");
+    const i = el("span", "ico", ico); i.style.color = color;
+    c.append(i, document.createTextNode(key.replace("_", " ") + " "), el("b", null, thousands(n)));
+    c.style.opacity = n ? 1 : 0.45;
+    chips.append(c);
+  }
+  host.append(chips);
+
+  const rows = [...sum.per_protocol].sort((a, b) => b.bytes - a.bytes);
+  const max = Math.max(1, ...rows.map(r => r.bytes));
+  const head = el("div", "prow phead");
+  head.append(el("span", null, "protocol"), el("span", "n", "streams ever / live"), el("span", null, "bytes (live streams)"), el("span"));
+  host.append(head);
+  for (const r of rows) {
+    const row = el("div", "prow");
+    row.append(protoChip(r.protocol));
+    row.append(el("span", "n", `${thousands(r.ever)} / ${thousands(r.live)}`));
+    const cell = el("div", "barcell");
+    const bar = el("div", "bar");
+    bar.style.width = (r.bytes / max * 100).toFixed(2) + "%";
+    hover(cell, () => `${r.protocol} · ${humanBytes(r.bytes)} · ${thousands(r.ever)} streams`);
+    cell.append(bar);
+    row.append(cell, el("span", "bytes", humanBytes(r.bytes)));
+    host.append(row);
+  }
+  if (sum.key_errors > 0) {
+    const w = el("div", "empty", `⚠ ${thousands(sum.key_errors)} flow-key errors (plugin contract violations)`);
+    w.style.color = "var(--serious)";
+    host.append(w);
+  }
+}
+
+/* ── unknown view ──────────────────────────────────────── */
+function unkContext(g) { return g.route ? `${g.predecessor} → ${g.route}` : g.predecessor; }
+function renderUnknown() {
+  const list = $("#unkList");
+  list.replaceChildren();
+  const groups = S.data.unknowns;
+  if (!groups.length) {
+    list.append(el("div", "empty", "no unknown protocols observed — every byte claimed 🎉"));
+    $("#unkDetail").replaceChildren(el("div", "empty", ""));
+    return;
+  }
+  S.unkSel = Math.min(S.unkSel, groups.length - 1);
+  groups.forEach((g, i) => {
+    const row = el("div", "unk-row" + (i === S.unkSel ? " sel" : ""));
+    row.append(
+      el("span", "sid", "#" + (i + 1)),
+      el("span", "ctx", unkContext(g)),
+      el("span", "kind", g.kind.replace(/_/g, " ")),
+    );
+    const near = g.near_misses.slice(0, 2).map(n => `${n.protocol}(${n.score})`).join(" · ");
+    const stats = el("span", "stats", `${near ? near + "  ·  " : ""}${thousands(g.count)} pkts · ${humanBytes(g.bytes_total)}`);
+    row.append(stats);
+    row.onclick = () => { S.unkSel = i; renderUnknown(); };
+    list.append(row);
+  });
+  renderUnknownDetail(groups[S.unkSel], S.unkSel);
+}
+function renderUnknownDetail(g, index) {
+  const host = $("#unkDetail");
+  host.replaceChildren();
+  const head = el("div", "dhead");
+  const t = el("span", "proto", unkContext(g));
+  t.style.color = "var(--warning)";
+  head.append(t, el("span", "kind", g.kind.replace(/_/g, " ")));
+  host.append(head);
+
+  const cards = el("div", "dcards");
+  const card = (k, v) => { const c = el("div", "dcard"); c.append(el("div", "k", k), el("div", "v", v)); return c; };
+  cards.append(
+    card("occurrences", thousands(g.count)),
+    card("bytes", humanBytes(g.bytes_total)),
+    card("size range", `${g.bytes_min}–${g.bytes_max} B`),
+  );
+  host.append(cards);
+  const meta = el("div", "sec");
+  meta.append(kvRow("first seen", timeOfDay(g.first_seen)), kvRow("last seen", timeOfDay(g.last_seen)));
+  host.append(meta);
+
+  if (g.near_misses.length) {
+    const sec = el("div", "sec");
+    sec.append(el("h3", null, "near-miss ranking"));
+    for (const n of g.near_misses) {
+      const row = el("div", "nearbar");
+      const track = el("div", "t"), fill = el("div", "f");
+      fill.style.width = Math.min(100, n.score) + "%";
+      track.append(fill);
+      row.append(el("span", null, n.protocol), track, el("span", null, String(n.score)));
+      sec.append(row);
+    }
+    host.append(sec);
+  }
+
+  if (g.endpoints.length) {
+    const sec = el("div", "sec");
+    sec.append(el("h3", null, `endpoints${g.endpoints_overflow ? " (≥64 distinct)" : ""}`));
+    const chips = el("div", "chips");
+    for (const e of g.endpoints.slice(0, 24)) chips.append(el("span", "c", `${e.protocol} ${e.key}`));
+    if (g.endpoints.length > 24) chips.append(el("span", "c", `+${g.endpoints.length - 24} more`));
+    sec.append(chips);
+    host.append(sec);
+  }
+
+  const sec = el("div", "sec");
+  sec.append(el("h3", null, `retained samples (${g.samples.length})`));
+  if (!g.samples.length) sec.append(el("div", "empty", "none retained"));
+  for (const hex of g.samples) sec.append(hexDump(hex));
+  host.append(sec);
+
+  const hint = el("div", "sec");
+  hint.append(el("h3", null, "next step"));
+  hint.append(el("div", "codehint",
+    `pktflow unknown -r <capture> '#${index + 1}' --scaffold <plugin-name>   # generate a starter plugin for this traffic`));
+  host.append(hint);
+}
+function hexDump(hex) {
+  const box = el("div", "hexdump");
+  const bytes = hex.match(/../g) || [];
+  let html = "";
+  for (let off = 0; off < bytes.length; off += 16) {
+    const chunk = bytes.slice(off, off + 16);
+    const asc = chunk.map(b => {
+      const v = parseInt(b, 16);
+      return v >= 32 && v < 127 ? esc(String.fromCharCode(v)) : "·";
+    }).join("");
+    html += `<span class="off">${off.toString(16).padStart(4, "0")}</span>  ${chunk.join(" ").padEnd(47)}  <span class="asc">${asc}</span>\n`;
+  }
+  box.innerHTML = `<pre style="margin:0">${html}</pre>`;
+  return box;
+}
+
+/* ── tooltip ───────────────────────────────────────────── */
+const tip = $("#tooltip");
+function showTip(ev, text) {
+  tip.textContent = text;
+  tip.style.display = "block";
+  const pad = 14;
+  let x = ev.clientX + pad, y = ev.clientY + pad;
+  const r = tip.getBoundingClientRect();
+  if (x + r.width > innerWidth - 8) x = ev.clientX - r.width - pad;
+  if (y + r.height > innerHeight - 8) y = ev.clientY - r.height - pad;
+  tip.style.left = x + "px"; tip.style.top = y + "px";
+}
+function hideTip() { tip.style.display = "none"; }
+function hover(node, textFn) {
+  node.addEventListener("mousemove", ev => showTip(ev, textFn()));
+  node.addEventListener("mouseleave", hideTip);
+}
+function esc(s) {
+  return String(s).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+}
+
+/* ── render root ───────────────────────────────────────── */
+function renderAll() {
+  if (!S.data) return;
+  renderHeader();
+  renderTiles();
+  renderTree();
+  renderDetail();
+  renderTimeline();
+  renderProtocols();
+  renderUnknown();
+}
+
+/* ── events ────────────────────────────────────────────── */
+function activateTab(name) {
+  S.tab = name;
+  for (const b of $("#tabs").children) b.classList.toggle("on", b.dataset.tab === name);
+  for (const sec of document.querySelectorAll("main > section")) {
+    sec.classList.toggle("on", sec.id === "view-" + name);
+  }
+}
+$("#tabs").addEventListener("click", ev => {
+  const btn = ev.target.closest("button");
+  if (btn) activateTab(btn.dataset.tab);
+});
+let searchTimer = null;
+$("#filter").addEventListener("input", ev => {
+  S.filter = ev.target.value;
+  clearTimeout(searchTimer);
+  searchTimer = setTimeout(runSearch, 160);
+});
+$("#qhelpBtn").onclick = () => $("#qhelp").classList.toggle("on");
+async function runSearch() {
+  const q = S.filter.trim();
+  if (!q) {
+    S.search = { matches: null, visible: null, error: null };
+    updateQueryStatus();
+    renderTree();
+    renderTimeline();
+    return;
+  }
+  try {
+    const r = await fetch("/api/search?q=" + encodeURIComponent(q));
+    const doc = await r.json();
+    if ((doc.query || "").trim() !== S.filter.trim()) return; // stale reply
+    S.search = {
+      matches: doc.matches ? new Set(doc.matches) : null,
+      visible: doc.visible ? new Set(doc.visible) : null,
+      error: doc.error,
+    };
+  } catch (e) {
+    S.search = { matches: null, visible: null, error: "search request failed" };
+  }
+  updateQueryStatus();
+  renderTree();
+  renderTimeline();
+}
+function updateQueryStatus() {
+  const st = $("#queryStatus");
+  if (S.search.error) {
+    st.textContent = "✗ " + S.search.error;
+    st.className = "qstatus err";
+  } else if (S.search.matches) {
+    const n = S.search.matches.size;
+    st.textContent = `${n} match${n === 1 ? "" : "es"}`;
+    st.className = "qstatus";
+  } else {
+    st.textContent = "";
+    st.className = "qstatus";
+  }
+}
+$("#sortSel").addEventListener("change", ev => { S.sort = ev.target.value; renderTree(); });
+$("#expandAll").onclick = () => { S.collapsed.clear(); renderTree(); };
+$("#collapseAll").onclick = () => {
+  S.collapsed = new Set(S.data.streams.filter(s => s.children.length).map(s => s.id));
+  renderTree();
+};
+document.addEventListener("keydown", ev => {
+  if (ev.key === "/" && document.activeElement !== $("#filter")) {
+    ev.preventDefault(); $("#filter").focus(); return;
+  }
+  if (S.tab !== "streams" || document.activeElement === $("#filter") || !S.data) return;
+  const rows = visibleRows();
+  const i = rows.findIndex(r => r.s.id === S.sel);
+  if (ev.key === "ArrowDown" && i < rows.length - 1) { select(rows[i + 1].s.id); ev.preventDefault(); }
+  else if (ev.key === "ArrowUp" && i > 0) { select(rows[i - 1].s.id); ev.preventDefault(); }
+  else if (ev.key === "ArrowRight") { S.collapsed.delete(S.sel); renderTree(); ev.preventDefault(); }
+  else if (ev.key === "ArrowLeft") {
+    const row = rows[i];
+    if (row && row.hasKids && row.expanded) { S.collapsed.add(S.sel); renderTree(); }
+    else if (row && row.s.parent !== null) select(row.s.parent);
+    ev.preventDefault();
+  }
+  else if (ev.key === "Enter" && rows[i] && rows[i].hasKids) { toggle(S.sel); ev.preventDefault(); }
+});
+
+/* SSE: header counters every tick; full refetch only on generation change */
+function connect() {
+  const es = new EventSource("/api/events");
+  es.addEventListener("tick", ev => {
+    const t = JSON.parse(ev.data);
+    setConn(true, t.finished ? "capture complete" : "live");
+    if (t.generation !== S.gen) { S.gen = t.generation; refetch(); }
+  });
+  es.onerror = () => setConn(false, "reconnecting…");
+}
+refetch();
+connect();
+</script>
+</body>
+</html>

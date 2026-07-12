@@ -5,6 +5,9 @@ members = [
     "crates/pktflow-flows",
     "crates/pktflow-plugins",
     "crates/pktflow-capture",
+    "crates/pktflow-view",
+    "crates/pktflow-tui",
+    "crates/pktflow-web",
     "crates/pktflow-cli",
     "crates/pktflow-testkit",
 ]
@@ -20,7 +23,14 @@ pktflow-core = { path = "crates/pktflow-core" }
 pktflow-flows = { path = "crates/pktflow-flows" }
 pktflow-plugins = { path = "crates/pktflow-plugins" }
 pktflow-capture = { path = "crates/pktflow-capture" }
+pktflow-view = { path = "crates/pktflow-view" }
+pktflow-tui = { path = "crates/pktflow-tui" }
+pktflow-web = { path = "crates/pktflow-web" }
 pktflow-testkit = { path = "crates/pktflow-testkit" }
+ratatui = "0.30"
+axum = "0.8"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "time"] }
+tokio-stream = "0.1"
 pcap = "2"
 thiserror = "2"
 clap = { version = "4", features = ["derive"] }
@@ -30,6 +40,7 @@ smallvec = { version = "1", features = ["const_generics"] }
 compact_str = "0.9"
 serde = { version = "1", default-features = false, features = ["std"] }
 serde_json = "1"
+regex = "1"
 proptest = "1"
 
 [workspace.lints.rust]

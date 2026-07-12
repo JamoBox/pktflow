@@ -1,0 +1,16 @@
+[package]
+name = "pktflow-view"
+description = "Shared presentation layer: value formatting, endpoint rendering, JSON records, snapshot hub"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+pktflow-core.workspace = true
+pktflow-flows.workspace = true
+serde_json.workspace = true
+regex.workspace = true
+time.workspace = true
+
+[lints]
+workspace = true

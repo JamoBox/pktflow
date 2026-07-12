@@ -1,0 +1,22 @@
+[package]
+name = "pktflow-web"
+description = "Web front-end: JSON API + SSE live events + embedded single-page UI over the stream hierarchy"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+pktflow-core.workspace = true
+pktflow-flows.workspace = true
+pktflow-view.workspace = true
+axum.workspace = true
+tokio.workspace = true
+tokio-stream.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+tower = { version = "0.5", features = ["util"] }
+http-body-util = "0.1"
+
+[lints]
+workspace = true

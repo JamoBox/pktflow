@@ -7,6 +7,13 @@ use std::collections::HashMap;
 use pktflow_capture::InterfaceInfo;
 use pktflow_core::{DissectedPacket, PacketDirection, StopReason};
 use pktflow_flows::{AggregatorSnapshot, Rollup, SeriesPoint, Stream, StreamId};
+use pktflow_view::json::{close_reason_json, stream_record};
+use pktflow_view::query::matching_with_ancestors;
+use pktflow_view::StreamQuery;
+use pktflow_view::{
+    by_id, child_chain_str, close_reason_str, endpoint_sides, endpoints_str, lineage_str,
+    total_bytes, total_packets,
+};
 use serde_json::{json, Value as Json};
 
 use crate::cli::SortOrder;
@@ -17,19 +24,6 @@ use crate::render::{
 use crate::run::RunOutcome;
 use crate::summary::stop_class_key;
 
-/// Id → stream lookup for tree walks within one snapshot.
-fn by_id(snapshot: &AggregatorSnapshot) -> HashMap<StreamId, &Stream> {
-    snapshot.streams.iter().map(|s| (s.id, s)).collect()
-}
-
-fn total_packets(s: &Stream) -> u64 {
-    s.stats[0].packets + s.stats[1].packets
-}
-
-fn total_bytes(s: &Stream) -> u64 {
-    s.stats[0].bytes + s.stats[1].bytes
-}
-
 fn sort_siblings(streams: &mut [&Stream], order: SortOrder) {
     match order {
         SortOrder::Bytes => streams.sort_by_key(|s| std::cmp::Reverse(total_bytes(s))),
@@ -39,66 +33,6 @@ fn sort_siblings(streams: &mut [&Stream], order: SortOrder) {
             std::cmp::Reverse(s.last_seen.duration_since(s.first_seen).unwrap_or_default())
         }),
     }
-}
-
-/// Rendered endpoint pair in canonical A ↔ B order (08.2 line grammar):
-/// `key_fields` come from the creating packet, so `initiator` says which
-/// side of each `src_*`/`dst_*` pair is endpoint A. Ports render with a
-/// `:` prefix (their IP parent shows the addresses). Non-paired key
-/// fields (`vni`, GRE `key`) render as `name=value`; the constant `app`
-/// field is dropped — the protocol name already says it.
-fn endpoints_str(s: &Stream) -> String {
-    let (a_side, b_side, extras) = endpoint_sides(s);
-    let mut out = String::new();
-    if !a_side.is_empty() {
-        out.push_str(&format!("{a_side} ↔ {b_side}"));
-    }
-    if !extras.is_empty() {
-        if !out.is_empty() {
-            out.push(' ');
-        }
-        out.push_str(&extras.join(" "));
-    }
-    out
-}
-
-/// The two rendered endpoint sides (canonical A, B) plus non-paired key
-/// fields. Empty side strings = no endpoint pair (qualifier-keyed).
-fn endpoint_sides(s: &Stream) -> (String, String, Vec<String>) {
-    let mut a_side = Vec::new();
-    let mut b_side = Vec::new();
-    let mut extras = Vec::new();
-    for (name, value) in s.key_fields.iter() {
-        if let Some(suffix) = name.strip_prefix("src_") {
-            let dst_name = format!("dst_{suffix}");
-            if let Some(dst_value) = s.key_fields.get(&dst_name) {
-                let mut src_str = value_str(name, value);
-                let mut dst_str = value_str(&dst_name, dst_value);
-                if suffix.ends_with("port") {
-                    src_str = format!(":{src_str}");
-                    dst_str = format!(":{dst_str}");
-                }
-                match s.initiator {
-                    PacketDirection::AtoB => {
-                        a_side.push(src_str);
-                        b_side.push(dst_str);
-                    }
-                    PacketDirection::BtoA => {
-                        a_side.push(dst_str);
-                        b_side.push(src_str);
-                    }
-                }
-                continue;
-            }
-        }
-        if name.starts_with("dst_") && s.key_fields.get(&format!("src_{}", &name[4..])).is_some() {
-            continue; // consumed with its src_ partner
-        }
-        if *name != "app" {
-            extras.push(format!("{name}={}", value_str(name, value)));
-        }
-    }
-    (a_side.join(","), b_side.join(","), extras)
 }
 
 /// One assembled row: label (tree prefix + identity) plus stat columns,
@@ -174,18 +108,25 @@ fn render_rows(rows: &[Row]) -> String {
 }
 
 /// The default lens (FR-24): the flow hierarchy, roots down, `├─`/`└─`
-/// glyphs, one line per stream.
-pub fn streams_tree(snapshot: &AggregatorSnapshot, sort: SortOrder) -> String {
+/// glyphs, one line per stream. A `--where` query narrows the tree to
+/// matches plus their ancestors, so results keep their lineage context.
+pub fn streams_tree(
+    snapshot: &AggregatorSnapshot,
+    sort: SortOrder,
+    query: Option<&StreamQuery>,
+) -> String {
     let ids = by_id(snapshot);
+    let keep = query.map(|q| matching_with_ancestors(&snapshot.streams, &ids, q));
     let mut rows = Vec::new();
     let mut roots: Vec<&Stream> = snapshot
         .roots
         .iter()
         .filter_map(|id| ids.get(id).copied())
+        .filter(|s| keep.as_ref().is_none_or(|k| k.contains(&s.created_seq)))
         .collect();
     sort_siblings(&mut roots, sort);
     for root in &roots {
-        collect_subtree(root, &ids, "", sort, &mut rows);
+        collect_subtree(root, &ids, "", sort, keep.as_ref(), &mut rows);
     }
     render_rows(&rows)
 }
@@ -195,6 +136,7 @@ fn collect_subtree(
     ids: &HashMap<StreamId, &Stream>,
     prefix: &str,
     sort: SortOrder,
+    keep: Option<&std::collections::HashSet<u64>>,
     rows: &mut Vec<Row>,
 ) {
     rows.push(stream_row(prefix, s, false));
@@ -202,6 +144,7 @@ fn collect_subtree(
         .children
         .iter()
         .filter_map(|id| ids.get(id).copied())
+        .filter(|c| keep.is_none_or(|k| k.contains(&c.created_seq)))
         .collect();
     sort_siblings(&mut children, sort);
     // Glyph prefixes: the label prefix ends with the branch glyph; child
@@ -211,17 +154,23 @@ fn collect_subtree(
     for (i, child) in children.into_iter().enumerate() {
         let last = i + 1 == count;
         let branch = if last { "└─ " } else { "├─ " };
-        collect_subtree(child, ids, &format!("{bare}{branch}"), sort, rows);
+        collect_subtree(child, ids, &format!("{bare}{branch}"), sort, keep, rows);
     }
 }
 
 /// `--layer PROTO` flat table (FR-24's literal "list streams at a chosen
 /// layer"): one row per node, `created_seq` order, plus first-seen.
-pub fn streams_flat(snapshot: &AggregatorSnapshot, protocol: &str) -> String {
+pub fn streams_flat(
+    snapshot: &AggregatorSnapshot,
+    protocol: &str,
+    query: Option<&StreamQuery>,
+) -> String {
+    let ids = by_id(snapshot);
     let rows: Vec<Row> = snapshot
         .streams
         .iter()
         .filter(|s| s.protocol == protocol)
+        .filter(|s| query.is_none_or(|q| q.matches(s, &ids)))
         .map(|s| stream_row("", s, true))
         .collect();
     render_rows(&rows)
@@ -229,11 +178,21 @@ pub fn streams_flat(snapshot: &AggregatorSnapshot, protocol: &str) -> String {
 
 /// `--layer PROTO --merged`: the D10 fold, one row per key with the
 /// folded nodes' ids listed.
-pub fn streams_merged(snapshot: &AggregatorSnapshot, protocol: &str) -> String {
+pub fn streams_merged(
+    snapshot: &AggregatorSnapshot,
+    protocol: &str,
+    query: Option<&StreamQuery>,
+) -> String {
+    let ids = by_id(snapshot);
     // Snapshot-side re-fold: group same-protocol streams by key.
     let mut order: Vec<&pktflow_core::FlowKey> = Vec::new();
     let mut groups: HashMap<&pktflow_core::FlowKey, Vec<&Stream>> = HashMap::new();
-    for s in snapshot.streams.iter().filter(|s| s.protocol == protocol) {
+    for s in snapshot
+        .streams
+        .iter()
+        .filter(|s| s.protocol == protocol)
+        .filter(|s| query.is_none_or(|q| q.matches(s, &ids)))
+    {
         let slot = groups.entry(&s.key).or_default();
         if slot.is_empty() {
             order.push(&s.key);
@@ -273,8 +232,13 @@ pub fn streams_merged(snapshot: &AggregatorSnapshot, protocol: &str) -> String {
 pub const WATCH_CLEAR: &str = "\x1b[2J\x1b[H";
 const WATCH_MAX_ROWS: usize = 40;
 
-pub fn watch_frame(snapshot: &AggregatorSnapshot, sort: SortOrder, source: &str) -> String {
-    let tree = streams_tree(snapshot, sort);
+pub fn watch_frame(
+    snapshot: &AggregatorSnapshot,
+    sort: SortOrder,
+    source: &str,
+    query: Option<&StreamQuery>,
+) -> String {
+    let tree = streams_tree(snapshot, sort, query);
     let mut body = String::new();
     let total_lines = tree.lines().count();
     for (i, line) in tree.lines().enumerate() {
@@ -385,24 +349,6 @@ fn token_matches(token: &str, side: &str, ancestors: &[String]) -> bool {
     false
 }
 
-fn lineage_str(s: &Stream, ids: &HashMap<StreamId, &Stream>) -> String {
-    let mut lineage = Vec::new();
-    let mut cursor = s.parent;
-    while let Some(pid) = cursor {
-        let Some(parent) = ids.get(&pid) else { break };
-        let endpoints = endpoints_str(parent);
-        let entry = if endpoints.is_empty() {
-            format!("{} #{}", parent.protocol, parent.created_seq)
-        } else {
-            format!("{} #{} ({endpoints})", parent.protocol, parent.created_seq)
-        };
-        lineage.push(entry);
-        cursor = parent.parent;
-    }
-    lineage.reverse();
-    lineage.join(" ▸ ")
-}
-
 /// How many series points render before head/tail elision applies.
 const SERIES_ELISION: usize = 20;
 
@@ -491,35 +437,6 @@ pub fn stream_detail(
         out.push_str(&format!("children  {}\n", children.join(", ")));
     }
     Ok(out)
-}
-
-fn close_reason_str(reason: pktflow_flows::CloseReason) -> &'static str {
-    match reason {
-        pktflow_flows::CloseReason::ProtocolClose => "protocol-close",
-        pktflow_flows::CloseReason::IdleTimeout => "idle-timeout",
-        pktflow_flows::CloseReason::LruEvicted => "lru-evicted",
-        pktflow_flows::CloseReason::CaptureEnd => "capture-end",
-    }
-}
-
-/// A child plus its single-child descendants: `ipv4 #3 (…) ▸ tcp #4 (…)`
-/// — the inner stack of a tunnel visible from the drill-down.
-fn child_chain_str(child: &Stream, ids: &HashMap<StreamId, &Stream>) -> String {
-    let mut parts = Vec::new();
-    let mut cursor = Some(child);
-    while let Some(s) = cursor {
-        let endpoints = endpoints_str(s);
-        if endpoints.is_empty() {
-            parts.push(format!("{} #{}", s.protocol, s.created_seq));
-        } else {
-            parts.push(format!("{} #{} ({endpoints})", s.protocol, s.created_seq));
-        }
-        cursor = match s.children.as_slice() {
-            [only] => ids.get(only).copied(),
-            _ => None,
-        };
-    }
-    parts.join(" ▸ ")
 }
 
 /// One rollup line per kind (05.4 honesty markers included).
@@ -753,185 +670,6 @@ pub fn packet_json(index: u64, pkt: &DissectedPacket) -> Json {
     })
 }
 
-/// `initiator` as D8's string enum.
-fn direction_json(dir: PacketDirection) -> &'static str {
-    match dir {
-        PacketDirection::AtoB => "a_to_b",
-        PacketDirection::BtoA => "b_to_a",
-    }
-}
-
-/// `closed`'s close reason as D8's snake_case string enum (the text
-/// renderer's hyphenated form is a display convention, not the wire
-/// name).
-fn close_reason_json(reason: pktflow_flows::CloseReason) -> &'static str {
-    match reason {
-        pktflow_flows::CloseReason::ProtocolClose => "protocol_close",
-        pktflow_flows::CloseReason::IdleTimeout => "idle_timeout",
-        pktflow_flows::CloseReason::LruEvicted => "lru_evicted",
-        pktflow_flows::CloseReason::CaptureEnd => "capture_end",
-    }
-}
-
-/// JSON projection of a field value (D8): numbers/bools/strings pass
-/// through natively; byte shapes render per the FR-28 table so JSON
-/// consumers get readable endpoints too (MACs/IPs as strings, unknown
-/// bytes as hex strings) instead of raw byte arrays.
-fn field_value_json(protocol: &str, name: &str, value: &pktflow_core::Value) -> Json {
-    match value {
-        pktflow_core::Value::U64(v) => json!(v),
-        pktflow_core::Value::I64(v) => json!(v),
-        pktflow_core::Value::Bool(v) => json!(v),
-        pktflow_core::Value::Str(s) => json!(s.as_str()),
-        pktflow_core::Value::Bytes(_) => json!(field_value_str(protocol, name, value)),
-        pktflow_core::Value::List(items) => Json::Array(
-            items
-                .iter()
-                .map(|v| field_value_json(protocol, name, v))
-                .collect(),
-        ),
-        other => json!(format!("{other:?}")),
-    }
-}
-
-/// Splits `key_fields` into `endpoint_a`/`endpoint_b` (paired
-/// `src_*`/`dst_*` fields, ordered by `initiator` — field names keep
-/// their original `src_`/`dst_` spelling, only the A/B *slot* they land
-/// in depends on which side originated the creating packet) and `key`
-/// (any remaining qualifier field, e.g. GRE's `key`, VXLAN's `vni`; the
-/// constant `app` field is dropped as redundant with `protocol`).
-fn endpoint_json(s: &Stream) -> (Json, Json, Json) {
-    let mut a = serde_json::Map::new();
-    let mut b = serde_json::Map::new();
-    let mut key = serde_json::Map::new();
-    for (name, value) in s.key_fields.iter() {
-        if let Some(suffix) = name.strip_prefix("src_") {
-            let dst_name = format!("dst_{suffix}");
-            if let Some(dst_value) = s.key_fields.get(&dst_name) {
-                let (a_name, a_value, b_name, b_value) = match s.initiator {
-                    PacketDirection::AtoB => (*name, value, dst_name.as_str(), dst_value),
-                    PacketDirection::BtoA => (dst_name.as_str(), dst_value, *name, value),
-                };
-                a.insert(
-                    a_name.to_string(),
-                    field_value_json(s.protocol, a_name, a_value),
-                );
-                b.insert(
-                    b_name.to_string(),
-                    field_value_json(s.protocol, b_name, b_value),
-                );
-                continue;
-            }
-        }
-        if name.starts_with("dst_") && s.key_fields.get(&format!("src_{}", &name[4..])).is_some() {
-            continue; // consumed with its src_ partner
-        }
-        if *name != "app" {
-            key.insert(
-                (*name).to_string(),
-                field_value_json(s.protocol, name, value),
-            );
-        }
-    }
-    (Json::Object(a), Json::Object(b), Json::Object(key))
-}
-
-/// One rollup, D8-shaped: `{"kind": ..., ...}` per [`Rollup`] variant.
-fn rollup_json(protocol: &str, field: &str, rollup: &Rollup) -> Json {
-    match rollup {
-        Rollup::Accumulate {
-            values,
-            count,
-            overflow,
-        } => {
-            let rendered: Vec<Json> = values
-                .iter()
-                .map(|v| json!(field_value_str(protocol, field, v)))
-                .collect();
-            json!({
-                "kind": "accumulate",
-                "values": rendered,
-                "distinct": values.len(),
-                "observations": count,
-                "overflow": overflow,
-            })
-        }
-        Rollup::Sample { first, last } => {
-            let render = |v: &Option<pktflow_core::Value>| {
-                v.as_ref().map(|v| field_value_str(protocol, field, v))
-            };
-            json!({ "kind": "sample", "first": render(first), "last": render(last) })
-        }
-        Rollup::Series {
-            ring, truncated, ..
-        } => {
-            let points: Vec<Json> = ring
-                .iter()
-                .map(|p| {
-                    json!({
-                        "ts": crate::render::rfc3339(p.ts),
-                        "dir": direction_json(p.dir),
-                        "value": field_value_str(protocol, field, &p.value),
-                    })
-                })
-                .collect();
-            json!({ "kind": "series", "points": points, "truncated": truncated })
-        }
-    }
-}
-
-/// A stream record, D8-shaped: shared by the offline batch (`streams[]`)
-/// and NDJSON live events. `seq_of` resolves a `StreamId` to its display
-/// id (`created_seq`); a live poll resolves it via the current
-/// snapshot/aggregator, while a `stream_closed` event (which only sees
-/// the departing `Stream`, not a live aggregator reference) resolves it
-/// via [`NdjsonTracker`]'s running id table — this is why the lookup is
-/// a closure rather than a `&HashMap<StreamId, &Stream>`.
-fn stream_record(
-    s: &Stream,
-    seq_of: &impl Fn(StreamId) -> Option<u64>,
-) -> serde_json::Map<String, Json> {
-    let (endpoint_a, endpoint_b, key) = endpoint_json(s);
-    let parent = s.parent.and_then(seq_of);
-    let children: Vec<u64> = s.children.iter().filter_map(|c| seq_of(*c)).collect();
-    let rollups: serde_json::Map<String, Json> = s
-        .rollups
-        .iter()
-        .map(|(field, rollup)| ((*field).to_string(), rollup_json(s.protocol, field, rollup)))
-        .collect();
-
-    let mut m = serde_json::Map::new();
-    m.insert("id".into(), json!(s.created_seq));
-    m.insert("protocol".into(), json!(s.protocol));
-    m.insert("parent".into(), json!(parent));
-    m.insert("children".into(), json!(children));
-    m.insert("endpoint_a".into(), endpoint_a);
-    m.insert("endpoint_b".into(), endpoint_b);
-    m.insert("key".into(), key);
-    m.insert("initiator".into(), json!(direction_json(s.initiator)));
-    m.insert("state".into(), json!(s.state));
-    m.insert("closed".into(), json!(s.closed.map(close_reason_json)));
-    m.insert(
-        "first_seen".into(),
-        json!(crate::render::rfc3339(s.first_seen)),
-    );
-    m.insert(
-        "last_seen".into(),
-        json!(crate::render::rfc3339(s.last_seen)),
-    );
-    m.insert(
-        "packets".into(),
-        json!({ "a_to_b": s.stats[0].packets, "b_to_a": s.stats[1].packets }),
-    );
-    m.insert(
-        "bytes".into(),
-        json!({ "a_to_b": s.stats[0].bytes, "b_to_a": s.stats[1].bytes }),
-    );
-    m.insert("opaque_bytes".into(), json!(s.opaque_bytes));
-    m.insert("rollups".into(), Json::Object(rollups));
-    m
-}
-
 /// The D8 summary object, shared by the offline envelope (nested under
 /// `"summary"`) and the NDJSON `summary` event (flattened alongside
 /// `"event"`).
@@ -962,8 +700,10 @@ fn summary_json(
 }
 
 /// The offline JSON envelope (D8): `{"pktflow": 1, …}`, schema
-/// `schema/streams-v1.json`.
-pub fn json_envelope(outcome: &RunOutcome) -> Json {
+/// `schema/streams-v1.json`. A `--where` query filters `streams[]` to
+/// matches only (the summary still describes the whole capture; id
+/// references may point outside the filtered set).
+pub fn json_envelope(outcome: &RunOutcome, query: Option<&StreamQuery>) -> Json {
     let mut doc = json!({
         "pktflow": 1,
         "mode": outcome.mode,
@@ -977,6 +717,7 @@ pub fn json_envelope(outcome: &RunOutcome) -> Json {
             snapshot
                 .streams
                 .iter()
+                .filter(|s| query.is_none_or(|q| q.matches(s, &ids)))
                 .map(|s| Json::Object(stream_record(s, &seq_of)))
                 .collect(),
         );

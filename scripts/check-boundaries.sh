@@ -18,9 +18,14 @@ if cargo tree -p pktflow-flows --edges normal | grep -Eq '\bpcap v'; then
 fi
 
 # The aggregator must never know about protocols: flows -x- plugins.
-if cargo tree -p pktflow-flows --edges normal | grep -q 'pktflow-plugins'; then
-    fail "pktflow-flows depends on pktflow-plugins"
-fi
+# The presentation layer and both UIs are protocol-free for the same
+# reason — they render whatever the snapshot says, no protocol names
+# baked in.
+for crate in pktflow-flows pktflow-view pktflow-tui pktflow-web; do
+    if cargo tree -p "$crate" --edges normal | grep -q 'pktflow-plugins'; then
+        fail "$crate depends on pktflow-plugins"
+    fi
+done
 
 # Only the capture crate and the CLI that links it may sit above pcap.
 bad=$(cargo tree -i pcap --edges normal \
