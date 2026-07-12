@@ -82,6 +82,7 @@ header .spacer { flex: 1; }
   appearance: none; border: 1px solid transparent; border-bottom: none;
   background: none; color: var(--muted); font: inherit; font-weight: 600;
   padding: 7px 16px; border-radius: 8px 8px 0 0; cursor: pointer;
+  transition: color .12s, background .12s;
 }
 .tabs button:hover { color: var(--ink); }
 .tabs button.on {
@@ -99,17 +100,27 @@ main > section.on { display: flex; }
 
 /* ── streams view ───────────────────────────────────────── */
 .toolbar { display: flex; gap: 10px; align-items: center; padding: 10px 14px; border-bottom: 1px solid var(--border); flex: none; flex-wrap: wrap; }
+.searchwrap { position: relative; flex: 1; min-width: 160px; max-width: 380px; display: flex; }
 .toolbar input[type=search] {
-  flex: 1; min-width: 160px; max-width: 380px;
+  flex: 1; min-width: 0;
   background: var(--surface-2); color: var(--ink); border: 1px solid var(--border);
-  border-radius: 6px; padding: 6px 10px; font: inherit;
+  border-radius: 6px; padding: 6px 26px 6px 10px; font: inherit;
+  transition: border-color .12s;
 }
-.toolbar input[type=search]:focus { outline: 1px solid var(--accent); }
+.toolbar input[type=search]:focus { outline: 1px solid var(--accent); border-color: var(--accent); }
+.searchwrap .clear {
+  position: absolute; right: 3px; top: 50%; transform: translateY(-50%);
+  border: none; background: none; color: var(--muted); cursor: pointer;
+  font: inherit; font-size: 13px; padding: 2px 7px; border-radius: 4px; display: none;
+}
+.searchwrap .clear:hover { color: var(--ink); }
+.searchwrap.filled .clear { display: block; }
 .toolbar select, .toolbar .btn {
   background: var(--surface-2); color: var(--ink-2); border: 1px solid var(--border);
   border-radius: 6px; padding: 6px 10px; font: inherit; cursor: pointer;
+  transition: color .12s, border-color .12s;
 }
-.toolbar .btn:hover, .toolbar select:hover { color: var(--ink); }
+.toolbar .btn:hover, .toolbar select:hover { color: var(--ink); border-color: rgba(255,255,255,.25); }
 .toolbar .hint { color: var(--muted); font-size: 12px; margin-left: auto; }
 
 .split { flex: 1; min-height: 0; display: flex; }
@@ -262,6 +273,73 @@ details.raw pre { font-family: var(--mono); font-size: 11.5px; background: var(-
 .hexdump .asc { color: var(--muted); }
 .codehint { font-family: var(--mono); font-size: 12px; background: var(--surface-2); border: 1px solid var(--border); border-radius: 6px; padding: 8px 12px; color: var(--ink-2); overflow-wrap: anywhere; }
 
+/* ── upload, toasts, boot ───────────────────────────────── */
+.hbtn {
+  display: inline-flex; align-items: center; gap: 6px;
+  background: var(--surface-2); color: var(--ink-2); border: 1px solid var(--border);
+  border-radius: 6px; padding: 5px 12px; font: inherit; font-size: 13px; font-weight: 600;
+  cursor: pointer; transition: color .12s, border-color .12s;
+}
+.hbtn:hover { color: var(--ink); border-color: var(--accent); }
+#upline { position: relative; height: 0; z-index: 5; }
+#upline .fill {
+  position: absolute; top: -2px; left: 0; height: 2px; width: 0;
+  background: var(--accent); box-shadow: 0 0 8px var(--accent);
+  transition: width .15s ease;
+}
+#drop {
+  position: fixed; inset: 0; z-index: 50; display: none;
+  background: rgba(13,13,13,.85); padding: 24px;
+}
+#drop.on { display: block; }
+#drop .zone {
+  height: 100%; border: 2px dashed var(--accent); border-radius: 14px;
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 10px; color: var(--ink); font-size: 16px; font-weight: 600;
+}
+#drop .big { font-size: 42px; }
+#drop .sub { color: var(--muted); font-size: 13px; font-weight: 400; }
+#toasts {
+  position: fixed; right: 16px; bottom: 16px; z-index: 60;
+  display: flex; flex-direction: column; gap: 8px; max-width: 360px;
+}
+.toast {
+  background: var(--surface-2); border: 1px solid var(--border);
+  border-left: 3px solid var(--accent); border-radius: 8px;
+  padding: 10px 14px; font-size: 13px; color: var(--ink);
+  box-shadow: 0 6px 24px rgba(0,0,0,.5); overflow-wrap: anywhere;
+  animation: toast-in .18s ease-out;
+}
+.toast.err { border-left-color: var(--critical); }
+.toast.ok { border-left-color: var(--good); }
+.toast.out { opacity: 0; transform: translateY(6px); transition: opacity .25s, transform .25s; }
+@keyframes toast-in { from { opacity: 0; transform: translateY(8px); } }
+#boot {
+  position: fixed; inset: 0; z-index: 40; background: var(--page);
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 14px; color: var(--muted); transition: opacity .3s;
+}
+#boot.off { opacity: 0; pointer-events: none; }
+#boot .pulse { animation: pulse 1.2s ease-in-out infinite; }
+.copybtn {
+  margin-left: 8px; border: 1px solid var(--border); background: var(--surface-2);
+  color: var(--muted); font: inherit; font-size: 11px; border-radius: 4px;
+  padding: 1px 8px; cursor: pointer; transition: color .12s;
+}
+.copybtn:hover { color: var(--ink); }
+@keyframes bump { 0% { color: var(--accent); } 100% { color: var(--ink); } }
+.tile .v.bump { animation: bump .6s ease-out; }
+@media (max-width: 880px) {
+  .split { flex-direction: column; }
+  .detail-pane { max-width: none; min-width: 0; border-left: none; border-top: 1px solid var(--border); flex: 1.4; }
+}
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: .01ms !important; animation-iteration-count: 1 !important;
+    transition-duration: .01ms !important;
+  }
+}
+
 /* tooltip */
 #tooltip {
   position: fixed; z-index: 10; pointer-events: none; display: none;
@@ -284,8 +362,11 @@ details.raw pre { font-family: var(--mono); font-size: 11.5px; background: var(-
   <span class="badge" id="modeBadge">…</span>
   <span id="source"></span>
   <div class="spacer"></div>
+  <button class="hbtn" id="openCap" hidden title="load a capture file — or drop one anywhere on the page">⏏ open capture</button>
+  <input type="file" id="fileInput" accept=".pcap,.pcapng,.cap" hidden>
   <span class="conn" id="conn"><span class="dot"></span><span id="connText">connecting</span></span>
 </header>
+<div id="upline"><div class="fill" id="upfill"></div></div>
 <div id="errorbar"></div>
 
 <section class="tiles" id="tiles"></section>
@@ -300,7 +381,10 @@ details.raw pre { font-family: var(--mono); font-size: 11.5px; background: var(-
 <main>
   <section id="view-streams" class="on">
     <div class="toolbar">
-      <input type="search" id="filter" placeholder="search — text, /regex/, proto==dns AND bytes>10k  ( / )">
+      <span class="searchwrap" id="searchwrap">
+        <input type="search" id="filter" placeholder="search — text, /regex/, proto==dns AND bytes>10k  ( / )">
+        <button class="clear" id="filterClear" title="clear search (Esc)">✕</button>
+      </span>
       <button class="btn" id="qhelpBtn" title="query syntax">syntax ?</button>
       <select id="sortSel" title="sibling sort order">
         <option value="bytes">sort: bytes</option>
@@ -310,7 +394,7 @@ details.raw pre { font-family: var(--mono); font-size: 11.5px; background: var(-
       </select>
       <button class="btn" id="expandAll">expand all</button>
       <button class="btn" id="collapseAll">collapse all</button>
-      <span class="hint">click a stream to drill in · ↑↓←→ navigate</span>
+      <span class="hint">click a stream to drill in · ↑↓←→ navigate · / search · ? syntax</span>
     </div>
     <div id="qhelp">
       <div class="qrow"><span class="qk">free text</span><span><code>dns</code> · <code>192.168.203</code> · <code>"quoted text"</code> · <code>/vni=10\d/</code> (regex)</span></div>
@@ -332,7 +416,7 @@ details.raw pre { font-family: var(--mono); font-size: 11.5px; background: var(-
       <input type="range" id="tlScrub" min="0" max="1000" value="1000">
       <span id="tlTime"></span>
       <span id="tlActive"></span>
-      <span class="hint">drag to scrub · matches the search on the Streams tab · click a lane to drill in</span>
+      <span class="hint">drag or ←→ to scrub · space plays · matches the search on the Streams tab · click a lane to drill in</span>
     </div>
     <div class="tl-scroll" id="tlScroll"></div>
   </section>
@@ -350,6 +434,18 @@ details.raw pre { font-family: var(--mono); font-size: 11.5px; background: var(-
 </main>
 
 <div id="tooltip"></div>
+<div id="drop">
+  <div class="zone">
+    <div class="big">⏏</div>
+    <div>drop to load capture</div>
+    <div class="sub">.pcap or .pcapng — replaces the current view</div>
+  </div>
+</div>
+<div id="toasts"></div>
+<div id="boot">
+  <svg width="36" height="36" viewBox="0 0 32 32"><circle cx="16" cy="16" r="13" fill="#3987e5"/><path d="M8 16h5l2-6 3 12 2-6h4" stroke="#fff" stroke-width="2.4" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>
+  <div class="pulse">connecting to pktflow…</div>
+</div>
 
 <script>
 "use strict";
@@ -366,6 +462,8 @@ const S = {
   sel: null,            // selected stream id
   unkSel: 0,
   gen: -1,
+  source: null,         // current capture name — a change resets view state
+  uploads: false,       // server accepts POST /api/upload
 };
 const MAX_TREE_ROWS = 2000;
 const $ = s => document.querySelector(s);
@@ -431,10 +529,21 @@ function endpointsStr(s) {
   return out;
 }
 /* ── data intake ───────────────────────────────────────── */
+/* A new capture (upload, or the server restarted over another source)
+   invalidates every per-stream bit of view state. */
+function resetForNewSource() {
+  S.sel = null;
+  S.collapsed = new Set();
+  S.unkSel = 0;
+  stopPlay();
+  $("#tlScrub").value = 1000;
+}
 async function refetch() {
   try {
     const r = await fetch("/api/snapshot");
     const doc = await r.json();
+    if (S.source !== null && doc.meta.source !== S.source) resetForNewSource();
+    S.source = doc.meta.source;
     S.data = doc;
     S.byId = new Map(doc.streams.map(s => [s.id, s]));
     S.kids = new Map();
@@ -458,6 +567,8 @@ function setConn(ok, text) {
 function renderHeader() {
   const m = S.data.meta;
   $("#source").textContent = m.source;
+  S.uploads = !!m.uploads;
+  $("#openCap").hidden = !S.uploads;
   const badge = $("#modeBadge");
   if (m.error) { badge.className = "badge"; badge.textContent = "ERROR"; }
   else if (m.mode === "live" && !m.finished) { badge.className = "badge live"; badge.innerHTML = '<span class="dot"></span>LIVE'; }
@@ -468,6 +579,7 @@ function renderHeader() {
   bar.style.display = m.error ? "block" : "none";
   if (m.error) bar.textContent = "pipeline error: " + m.error;
 }
+const lastTiles = new Map(); // previous values, to flash changed ones
 function renderTiles() {
   const sum = S.data.summary;
   const tiles = [
@@ -481,7 +593,9 @@ function renderTiles() {
   host.replaceChildren();
   for (const [k, v, s] of tiles) {
     const t = el("div", "tile");
-    t.append(el("div", "k", k), el("div", "v", v));
+    const changed = lastTiles.has(k) && lastTiles.get(k) !== v;
+    lastTiles.set(k, v);
+    t.append(el("div", "k", k), el("div", "v" + (changed ? " bump" : ""), v));
     if (s) t.append(el("div", "s", s));
     host.append(t);
   }
@@ -526,7 +640,10 @@ function renderTree() {
   const scroll = host.scrollTop;
   host.replaceChildren();
   if (!S.data.streams.length) {
-    host.append(el("div", "empty", S.data.summary.packets ? "no streams yet" : "waiting for packets…"));
+    const msg = S.data.summary.packets ? "no streams yet"
+      : S.uploads ? "waiting for packets — or drop a .pcap / .pcapng anywhere to load it"
+      : "waiting for packets…";
+    host.append(el("div", "empty", msg));
     $("#detail").replaceChildren(el("div", "empty", "select a stream"));
     return;
   }
@@ -668,7 +785,17 @@ function renderDetail() {
   }
 
   const raw = el("details", "raw");
-  raw.append(el("summary", null, "raw record (JSON)"));
+  const summary = el("summary", null, "raw record (JSON)");
+  const copy = el("button", "copybtn", "copy");
+  copy.onclick = ev => {
+    ev.preventDefault();
+    navigator.clipboard.writeText(JSON.stringify(s, null, 2)).then(() => {
+      copy.textContent = "copied ✓";
+      setTimeout(() => { copy.textContent = "copy"; }, 1200);
+    }, () => toast("clipboard unavailable", "err"));
+  };
+  summary.append(copy);
+  raw.append(summary);
   raw.append(el("pre", null, JSON.stringify(s, null, 2)));
   host.append(raw);
 }
@@ -1011,6 +1138,80 @@ function hexDump(hex) {
   return box;
 }
 
+/* ── toasts ────────────────────────────────────────────── */
+function toast(msg, kind) {
+  const t = el("div", "toast" + (kind ? " " + kind : ""), msg);
+  $("#toasts").append(t);
+  setTimeout(() => {
+    t.classList.add("out");
+    setTimeout(() => t.remove(), 300);
+  }, 4500);
+}
+
+/* ── capture upload ────────────────────────────────────── */
+/* XHR instead of fetch for the upload progress events; the thin line
+   under the header is the progress bar. On success the server has
+   already swapped to the new pipeline's hub — reset and refetch. */
+let uploading = false;
+function uploadCapture(file) {
+  if (!S.uploads || uploading) {
+    if (uploading) toast("an upload is already in progress", "err");
+    return;
+  }
+  uploading = true;
+  const fill = $("#upfill");
+  fill.style.width = "3%";
+  const xhr = new XMLHttpRequest();
+  xhr.open("POST", "/api/upload?name=" + encodeURIComponent(file.name));
+  xhr.upload.onprogress = e => {
+    if (e.lengthComputable) fill.style.width = (e.loaded / e.total * 100).toFixed(1) + "%";
+  };
+  const done = () => { uploading = false; fill.style.width = "0"; };
+  xhr.onload = () => {
+    done();
+    if (xhr.status === 200) {
+      toast(`loaded ${file.name}`, "ok");
+      resetForNewSource();
+      S.gen = -1; // any tick generation now counts as news
+      refetch();
+    } else {
+      let msg = `upload failed (${xhr.status})`;
+      try { msg = JSON.parse(xhr.responseText).error || msg; } catch {}
+      toast(msg, "err");
+    }
+  };
+  xhr.onerror = () => { done(); toast("upload failed — connection error", "err"); };
+  xhr.send(file);
+}
+$("#openCap").onclick = () => $("#fileInput").click();
+$("#fileInput").addEventListener("change", ev => {
+  const f = ev.target.files[0];
+  if (f) uploadCapture(f);
+  ev.target.value = ""; // re-selecting the same file fires change again
+});
+/* drag-and-drop anywhere on the page; depth counter because dragenter/
+   dragleave fire per element crossed */
+let dragDepth = 0;
+addEventListener("dragenter", ev => {
+  if (!S.uploads || ![...ev.dataTransfer.types].includes("Files")) return;
+  ev.preventDefault();
+  dragDepth++;
+  $("#drop").classList.add("on");
+});
+addEventListener("dragover", ev => {
+  if ($("#drop").classList.contains("on")) ev.preventDefault();
+});
+addEventListener("dragleave", () => {
+  if (dragDepth > 0 && --dragDepth === 0) $("#drop").classList.remove("on");
+});
+addEventListener("drop", ev => {
+  ev.preventDefault();
+  dragDepth = 0;
+  $("#drop").classList.remove("on");
+  const f = ev.dataTransfer.files[0];
+  if (f && S.uploads) uploadCapture(f);
+});
+
 /* ── tooltip ───────────────────────────────────────────── */
 const tip = $("#tooltip");
 function showTip(ev, text) {
@@ -1035,6 +1236,7 @@ function esc(s) {
 /* ── render root ───────────────────────────────────────── */
 function renderAll() {
   if (!S.data) return;
+  $("#boot").classList.add("off");
   renderHeader();
   renderTiles();
   renderTree();
@@ -1059,8 +1261,23 @@ $("#tabs").addEventListener("click", ev => {
 let searchTimer = null;
 $("#filter").addEventListener("input", ev => {
   S.filter = ev.target.value;
+  $("#searchwrap").classList.toggle("filled", !!S.filter);
   clearTimeout(searchTimer);
   searchTimer = setTimeout(runSearch, 160);
+});
+function clearFilter() {
+  S.filter = "";
+  $("#filter").value = "";
+  $("#searchwrap").classList.remove("filled");
+  clearTimeout(searchTimer);
+  runSearch();
+}
+$("#filterClear").onclick = () => { clearFilter(); $("#filter").focus(); };
+$("#filter").addEventListener("keydown", ev => {
+  if (ev.key === "Escape") {
+    if (S.filter) clearFilter();
+    ev.target.blur();
+  }
 });
 $("#qhelpBtn").onclick = () => $("#qhelp").classList.toggle("on");
 async function runSearch() {
@@ -1109,10 +1326,28 @@ $("#collapseAll").onclick = () => {
   renderTree();
 };
 document.addEventListener("keydown", ev => {
-  if (ev.key === "/" && document.activeElement !== $("#filter")) {
-    ev.preventDefault(); $("#filter").focus(); return;
+  const typing = document.activeElement === $("#filter");
+  if (ev.key === "/" && !typing) {
+    ev.preventDefault(); activateTab("streams"); $("#filter").focus(); return;
   }
-  if (S.tab !== "streams" || document.activeElement === $("#filter") || !S.data) return;
+  if (ev.key === "?" && !typing && S.tab === "streams") {
+    $("#qhelp").classList.toggle("on"); return;
+  }
+  // Timeline: arrows nudge the playhead, space toggles play (unless the
+  // scrubber itself has focus — then its native arrow handling wins).
+  if (S.tab === "timeline" && !typing && document.activeElement !== $("#tlScrub") && S.data) {
+    const scrub = $("#tlScrub");
+    if (ev.key === "ArrowLeft" || ev.key === "ArrowRight") {
+      stopPlay();
+      const step = ev.shiftKey ? 50 : 10;
+      scrub.value = Math.max(0, Math.min(1000, +scrub.value + (ev.key === "ArrowRight" ? step : -step)));
+      updatePlayhead();
+      ev.preventDefault();
+      return;
+    }
+    if (ev.key === " ") { $("#tlPlay").click(); ev.preventDefault(); return; }
+  }
+  if (S.tab !== "streams" || typing || !S.data) return;
   const rows = visibleRows();
   const i = rows.findIndex(r => r.s.id === S.sel);
   if (ev.key === "ArrowDown" && i < rows.length - 1) { select(rows[i + 1].s.id); ev.preventDefault(); }

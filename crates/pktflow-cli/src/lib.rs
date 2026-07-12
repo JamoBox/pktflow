@@ -152,17 +152,54 @@ pub fn dispatch(cli: Cli, stop: &StopFlags) -> Result<(), CliError> {
             pipeline_result
         }
         Command::Serve(args) => {
-            let hub = std::sync::Arc::new(run::hub_for(&args.shared));
+            use std::sync::{Arc, Mutex};
+            let hub = Arc::new(run::hub_for(&args.shared));
+            // Every pipeline gets its own stop flags: an upload can then
+            // replace the running pipeline without tripping the server's
+            // Ctrl-C shutdown. `active_stop` always points at the flags
+            // of whichever pipeline currently feeds the page.
+            let pipeline_stop = StopFlags::default();
+            let active_stop = Arc::new(Mutex::new(pipeline_stop.clone()));
             let pipeline =
-                run::spawn_hub_pipeline(args.shared, stop.clone(), std::sync::Arc::clone(&hub));
+                run::spawn_hub_pipeline(args.shared.clone(), pipeline_stop, Arc::clone(&hub));
+            let upload_shared = args.shared;
+            let upload_active = Arc::clone(&active_stop);
+            let state = Arc::new(pktflow_web::WebState::with_uploads(
+                hub,
+                Box::new(move |name, path| {
+                    // Same knobs as the command line (--depth, -c, …),
+                    // input swapped for the uploaded file.
+                    let mut shared = upload_shared.clone();
+                    shared.input = cli::InputArgs {
+                        read: Some(path),
+                        iface: None,
+                    };
+                    let fresh = Arc::new(pktflow_view::SnapshotHub::new(name, "offline"));
+                    let fresh_stop = StopFlags::default();
+                    match upload_active.lock() {
+                        Ok(mut current) => {
+                            current.trigger();
+                            *current = fresh_stop.clone();
+                        }
+                        Err(_) => return Err("pipeline registry poisoned".into()),
+                    }
+                    // Detached: an offline replay ends at EOF, and the
+                    // next upload (or shutdown) triggers its stop flags.
+                    run::spawn_hub_pipeline(shared, fresh_stop, Arc::clone(&fresh));
+                    Ok(fresh)
+                }),
+            ));
             let shutdown_stop = stop.clone();
             let served = pktflow_web::serve(
                 &args.listen,
-                std::sync::Arc::clone(&hub),
+                state,
                 move || shutdown_stop.is_stopped(),
                 |addr| eprintln!("pktflow web UI on http://{addr}/ — Ctrl-C to stop"),
             );
             stop.trigger();
+            if let Ok(current) = active_stop.lock() {
+                current.trigger();
+            }
             let pipeline_result = pipeline
                 .join()
                 .map_err(|_| CliError::Internal("pipeline thread panicked".into()))?;
