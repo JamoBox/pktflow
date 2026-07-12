@@ -3,7 +3,9 @@ use std::time::{Duration, SystemTime};
 
 use pktflow_core::{FieldMap, RouteId, Value};
 
-static RESOLVER: RwLock<Option<Box<dyn Fn(RouteId) -> Option<String> + Send + Sync>>> = RwLock::new(None);
+type RouteResolver = Box<dyn Fn(RouteId) -> Option<String> + Send + Sync>;
+
+static RESOLVER: RwLock<Option<RouteResolver>> = RwLock::new(None);
 
 pub fn register_route_resolver<F>(f: F)
 where
@@ -46,7 +48,10 @@ fn format_protocol_display_name(name: &str) -> String {
 }
 
 fn resolve_field_route_id(protocol: &str, name: &str, val: u64) -> Option<RouteId> {
-    if name == "ethertype" || (protocol == "gre" && name == "protocol") || (protocol == "llc" && name == "pid") {
+    if name == "ethertype"
+        || (protocol == "gre" && name == "protocol")
+        || (protocol == "llc" && name == "pid")
+    {
         if let Ok(v) = u16::try_from(val) {
             return Some(RouteId::EtherType(v));
         }
@@ -67,10 +72,16 @@ fn resolve_field_route_id(protocol: &str, name: &str, val: u64) -> Option<RouteI
         }
     }
     if protocol == "llc" && (name == "dsap" || name == "ssap") {
-        return Some(RouteId::Custom { space: "llc_dsap", id: val });
+        return Some(RouteId::Custom {
+            space: "llc_dsap",
+            id: val,
+        });
     }
     if protocol == "icmpv6" && name == "type" {
-        return Some(RouteId::Custom { space: "icmpv6_type", id: val });
+        return Some(RouteId::Custom {
+            space: "icmpv6_type",
+            id: val,
+        });
     }
     None
 }
@@ -79,8 +90,14 @@ fn format_resolved_value(route_id: &RouteId, name: &str) -> String {
     let display_name = format_protocol_display_name(name);
     match route_id {
         RouteId::EtherType(val) => format!("{display_name} (0x{val:04x})"),
-        RouteId::Custom { space: "snap_pid", id } => format!("{display_name} (0x{id:04x})"),
-        RouteId::Custom { space: "llc_dsap", id } => format!("{display_name} (0x{id:02x})"),
+        RouteId::Custom {
+            space: "snap_pid",
+            id,
+        } => format!("{display_name} (0x{id:04x})"),
+        RouteId::Custom {
+            space: "llc_dsap",
+            id,
+        } => format!("{display_name} (0x{id:02x})"),
         RouteId::IpProtocol(val) => format!("{display_name} ({val})"),
         RouteId::UdpPort(val) => format!("{display_name} ({val})"),
         RouteId::TcpPort(val) => format!("{display_name} ({val})"),
@@ -92,8 +109,14 @@ fn format_resolved_value(route_id: &RouteId, name: &str) -> String {
 fn format_unresolved_value(route_id: &RouteId) -> String {
     match route_id {
         RouteId::EtherType(val) => format!("0x{val:04x}"),
-        RouteId::Custom { space: "snap_pid", id } => format!("0x{id:04x}"),
-        RouteId::Custom { space: "llc_dsap", id } => format!("0x{id:02x}"),
+        RouteId::Custom {
+            space: "snap_pid",
+            id,
+        } => format!("0x{id:04x}"),
+        RouteId::Custom {
+            space: "llc_dsap",
+            id,
+        } => format!("0x{id:02x}"),
         RouteId::IpProtocol(val) => val.to_string(),
         RouteId::UdpPort(val) => val.to_string(),
         RouteId::TcpPort(val) => val.to_string(),
@@ -475,7 +498,10 @@ mod tests {
             RouteId::EtherType(0x8847) => Some("mpls".to_string()),
             RouteId::IpProtocol(6) => Some("tcp".to_string()),
             RouteId::UdpPort(53) => Some("dns".to_string()),
-            RouteId::Custom { space: "llc_dsap", id: 0x42 } => Some("stp".to_string()),
+            RouteId::Custom {
+                space: "llc_dsap",
+                id: 0x42,
+            } => Some("stp".to_string()),
             _ => None,
         });
 
@@ -500,10 +526,7 @@ mod tests {
             "TCP (6)"
         );
         // IP Protocol unresolved
-        assert_eq!(
-            field_value_str("ipv4", "protocol", &Value::U64(99)),
-            "99"
-        );
+        assert_eq!(field_value_str("ipv4", "protocol", &Value::U64(99)), "99");
 
         // Port resolved
         assert_eq!(
@@ -522,10 +545,6 @@ mod tests {
             "STP (0x42)"
         );
         // Custom space unresolved
-        assert_eq!(
-            field_value_str("llc", "ssap", &Value::U64(0x55)),
-            "0x55"
-        );
+        assert_eq!(field_value_str("llc", "ssap", &Value::U64(0x55)), "0x55");
     }
 }
-
