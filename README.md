@@ -42,6 +42,26 @@ picture, not just decoding bytes. See [`PRD.md`](PRD.md) for the full product ra
 - 13 reference protocol plugins today: Ethernet, 802.1Q VLAN, ARP, IPv4, IPv6, ICMPv4, IGMP,
   TCP, UDP, GRE, VXLAN, DNS, DHCP, NTP.
 
+## Screenshots
+
+The embedded web UI (`pktflow serve`) drilling into a nested VXLAN overlay — the inner
+conversation's full lineage, direction split, and rollups:
+
+![Stream hierarchy drill-down](docs/screenshots/web-streams.png)
+
+The Timeline tab, scrubbed to mid-capture: crossed lanes are active, passed lanes dim,
+short-lived broadcast flows show as slivers near the start:
+
+![Timeline lane view with playhead](docs/screenshots/web-timeline.png)
+
+| Query search (`under == vxlan AND bytes > 100`) | Unknown-traffic triage (QUIC as unclaimed `udp:443`) |
+|---|---|
+| ![Query search](docs/screenshots/web-search.png) | ![Unknown triage](docs/screenshots/web-unknown.png) |
+
+The TUI (`pktflow tui`) offers the same lenses — tree, timeline, unknown triage,
+summary — in the terminal.
+
+
 ## Quick start
 
 ```sh
