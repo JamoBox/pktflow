@@ -5,6 +5,7 @@ use std::collections::HashSet;
 use std::sync::Arc;
 
 use pktflow_flows::AggregatorSnapshot;
+use pktflow_view::StreamQuery;
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 use crate::tree::{flatten, Sort};
@@ -37,6 +38,10 @@ pub struct App {
     pub selected: Option<u64>,
     pub filter: String,
     pub filter_editing: bool,
+    /// The filter parsed as a query — `None` while empty or broken.
+    pub query: Option<StreamQuery>,
+    /// Why the filter failed to parse, shown until the next edit.
+    pub query_error: Option<String>,
     pub detail_scroll: u16,
     pub unknown_index: usize,
     pub unknown_open: bool,
@@ -57,6 +62,8 @@ impl Default for App {
             selected: None,
             filter: String::new(),
             filter_editing: false,
+            query: None,
+            query_error: None,
             detail_scroll: 0,
             unknown_index: 0,
             unknown_open: false,
@@ -90,6 +97,7 @@ impl App {
                 KeyCode::Char(c) => self.filter.push(c),
                 _ => {}
             }
+            self.refresh_query();
             return;
         }
 
@@ -134,8 +142,30 @@ impl App {
         }
     }
 
+    /// Re-parse the filter box into a query. A broken expression keeps
+    /// the tree unfiltered and surfaces the error instead of silently
+    /// hiding streams.
+    pub fn refresh_query(&mut self) {
+        let trimmed = self.filter.trim();
+        if trimmed.is_empty() {
+            self.query = None;
+            self.query_error = None;
+            return;
+        }
+        match StreamQuery::parse(trimmed) {
+            Ok(query) => {
+                self.query = Some(query);
+                self.query_error = None;
+            }
+            Err(e) => {
+                self.query = None;
+                self.query_error = Some(e.to_string());
+            }
+        }
+    }
+
     fn on_streams_key(&mut self, key: KeyEvent, snapshot: &Arc<AggregatorSnapshot>) {
-        let rows = flatten(snapshot, self.sort, &self.collapsed, &self.filter);
+        let rows = flatten(snapshot, self.sort, &self.collapsed, self.query.as_ref());
         let index = self.selected_index(&rows);
         match key.code {
             KeyCode::Up | KeyCode::Char('k') => self.select_row(&rows, index.saturating_sub(1)),

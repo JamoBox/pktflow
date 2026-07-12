@@ -66,6 +66,11 @@ pub struct StreamsArgs {
     /// Sibling sort order in the tree
     #[arg(long, value_enum, default_value_t = SortOrder::Bytes)]
     pub sort: SortOrder,
+    /// Show only streams matching a query expression: free text,
+    /// /regex/, and field comparisons combined with AND/OR/NOT — e.g.
+    /// 'proto == dns AND bytes > 10k' (see docs/query-language.md)
+    #[arg(long = "where", value_name = "QUERY")]
+    pub where_: Option<String>,
 }
 
 #[derive(Args, Debug)]

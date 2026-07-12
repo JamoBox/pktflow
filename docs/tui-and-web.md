@@ -29,8 +29,11 @@ A full-screen ratatui session with three tabs:
 
 Keys (also on `?` in-app): `↑↓/jk` move · `←→/hl` fold/unfold (`h` on a leaf
 jumps to its parent) · `Enter`/`Space` toggle · `e`/`c` expand/collapse all ·
-`s` cycle sort · `/` filter (protocol, endpoint, `#id`, state; matches stay
-reachable through auto-expanded ancestors) · `J/K` scroll the detail pane ·
+`s` cycle sort · `/` query filter (free text, `/regex/`, and field
+comparisons with AND/OR/NOT — see
+[`query-language.md`](query-language.md); matches stay reachable through
+auto-expanded ancestors, and a parse error is shown instead of silently
+filtering) · `J/K` scroll the detail pane ·
 `p` freeze live updates · `1/2/3`/`Tab` switch tabs · `q` quit. Quitting also
 stops a live capture (the run ends like Ctrl-C on `streams`).
 
@@ -42,8 +45,11 @@ pktflow serve -i eth0 --listen 0.0.0.0:9000      # live, LAN-visible
 ```
 
 The whole front-end is embedded in the binary — no build step, no CDN, works
-air-gapped. The page is a dark single-screen app: stat tiles, a filterable/
-sortable stream tree with per-protocol color chips, a drill-down panel
+air-gapped. The page is a dark single-screen app: stat tiles, a searchable/
+sortable stream tree with per-protocol color chips (the search bar speaks
+the full [query language](query-language.md), evaluated server-side, with
+a live match count, dimmed ancestor-context rows, and a `syntax ?`
+cheat-sheet), a drill-down panel
 (breadcrumb lineage, direction-split bar, rollups with hoverable series
 charts, child links, raw JSON), a protocol byte-distribution chart with
 stop-class chips, and the unknown-triage table with in-browser hex dumps.
@@ -63,6 +69,7 @@ record shape from `pktflow streams --format json`:
 | `GET /api/meta` | source, mode (`offline`/`live`), finished flag, snapshot generation, pipeline error |
 | `GET /api/snapshot` | one document: meta + summary (incl. per-protocol live bytes) + `roots` + `streams[]` (D8 records) + `unknowns[]` (with hex-encoded retained samples) |
 | `GET /api/stream/{id}` | a single D8 record by display id; 404 if evicted/absent |
+| `GET /api/search?q=EXPR` | evaluate a [query](query-language.md): `matches` (selected ids), `visible` (matches + ancestors), or `error` for a bad expression |
 | `GET /api/events` | SSE `tick` events (~2/s): generation, finished, packets, bytes, live streams — refetch `/api/snapshot` when the generation moves |
 
 ```sh

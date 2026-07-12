@@ -5,7 +5,8 @@
 use std::collections::{HashMap, HashSet};
 
 use pktflow_flows::{AggregatorSnapshot, Stream, StreamId};
-use pktflow_view::{by_id, endpoints_str, total_bytes, total_packets};
+use pktflow_view::query::matching_with_ancestors;
+use pktflow_view::{by_id, total_bytes, total_packets, StreamQuery};
 
 /// Sibling sort order (mirrors the CLI's `--sort` values).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -56,58 +57,27 @@ fn sort_siblings(streams: &mut [&Stream], order: Sort) {
     }
 }
 
-/// Case-insensitive match against the searchable text of one stream:
-/// protocol, `#id`, rendered endpoints, and lifecycle state.
-pub fn matches_filter(s: &Stream, needle_lower: &str) -> bool {
-    if needle_lower.is_empty() {
-        return true;
-    }
-    let mut haystack = format!("{} #{} {}", s.protocol, s.created_seq, endpoints_str(s));
-    if let Some(state) = s.state {
-        haystack.push(' ');
-        haystack.push_str(state);
-    }
-    haystack.to_lowercase().contains(needle_lower)
-}
-
-/// Flattens the hierarchy into visible rows. With an empty filter, a
-/// collapsed node hides its subtree. With a filter, rows are the matches
-/// plus every ancestor of a match (auto-expanded so results are always
-/// reachable).
+/// Flattens the hierarchy into visible rows. With no query, a collapsed
+/// node hides its subtree. With a query, rows are the matches plus every
+/// ancestor of a match (auto-expanded so results are always reachable).
 pub fn flatten<'a>(
     snapshot: &'a AggregatorSnapshot,
     sort: Sort,
     collapsed: &HashSet<u64>,
-    filter: &str,
+    query: Option<&StreamQuery>,
 ) -> Vec<TreeRow<'a>> {
     let ids = by_id(snapshot);
-    let needle = filter.trim().to_lowercase();
 
     // Filtered mode: the visible set is matches ∪ their ancestors.
-    let mut visible: Option<HashSet<StreamId>> = None;
-    if !needle.is_empty() {
-        let mut keep: HashSet<StreamId> = HashSet::new();
-        for s in &snapshot.streams {
-            if matches_filter(s, &needle) {
-                keep.insert(s.id);
-                let mut cursor = s.parent;
-                while let Some(pid) = cursor {
-                    if !keep.insert(pid) {
-                        break; // ancestry above already recorded
-                    }
-                    cursor = ids.get(&pid).and_then(|p| p.parent);
-                }
-            }
-        }
-        visible = Some(keep);
-    }
+    let visible: Option<HashSet<u64>> =
+        query.map(|q| matching_with_ancestors(&snapshot.streams, &ids, q));
 
     let mut rows = Vec::new();
     let mut roots: Vec<&Stream> = snapshot
         .roots
         .iter()
         .filter_map(|id| ids.get(id).copied())
-        .filter(|s| visible.as_ref().is_none_or(|v| v.contains(&s.id)))
+        .filter(|s| visible.as_ref().is_none_or(|v| v.contains(&s.created_seq)))
         .collect();
     sort_siblings(&mut roots, sort);
     for root in roots {
@@ -122,19 +92,19 @@ fn push_subtree<'a>(
     prefix: &str,
     sort: Sort,
     collapsed: &HashSet<u64>,
-    visible: Option<&HashSet<StreamId>>,
+    visible: Option<&HashSet<u64>>,
     rows: &mut Vec<TreeRow<'a>>,
 ) {
     let mut children: Vec<&Stream> = s
         .children
         .iter()
         .filter_map(|id| ids.get(id).copied())
-        .filter(|c| visible.is_none_or(|v| v.contains(&c.id)))
+        .filter(|c| visible.is_none_or(|v| v.contains(&c.created_seq)))
         .collect();
     sort_siblings(&mut children, sort);
 
     let has_children = !children.is_empty();
-    // A filter auto-expands: matches must always be reachable.
+    // A query auto-expands: matches must always be reachable.
     let expanded = visible.is_some() || !collapsed.contains(&s.created_seq);
     rows.push(TreeRow {
         stream: s,

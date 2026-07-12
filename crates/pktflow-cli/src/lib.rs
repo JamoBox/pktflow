@@ -21,13 +21,30 @@ use run::StopFlags;
 pub fn dispatch(cli: Cli, stop: &StopFlags) -> Result<(), CliError> {
     match cli.command {
         Command::Streams(args) => {
+            // `--where` parses before any capture opens: a bad query is a
+            // usage error (exit 2), not a mid-run surprise.
+            let query = args
+                .where_
+                .as_deref()
+                .map(pktflow_view::StreamQuery::parse)
+                .transpose()
+                .map_err(|e| CliError::Usage(format!("--where: {e}")))?;
             // The live view only ever redraws the tree; `--layer`'s flat
             // table (and `--merged`) has no live-redraw form, so it
             // implies --batch rather than silently ignoring the flag.
             if !args.batch && args.layer.is_none() {
                 return match args.shared.format {
-                    Format::Text => watch(&args, stop),
-                    Format::Json => watch_json(&args, stop),
+                    Format::Text => watch(&args, stop, query.as_ref()),
+                    Format::Json => {
+                        if query.is_some() {
+                            // NDJSON events are per-stream and unfiltered;
+                            // refusing beats silently ignoring the flag.
+                            return Err(CliError::Usage(
+                                "--where with --format json requires --batch".into(),
+                            ));
+                        }
+                        watch_json(&args, stop)
+                    }
                 };
             }
             let outcome = run_paced(&args, stop)?;
@@ -37,13 +54,17 @@ pub fn dispatch(cli: Cli, stop: &StopFlags) -> Result<(), CliError> {
                         return Err(CliError::Internal("streams run without snapshot".into()));
                     };
                     let body = match (&args.layer, args.merged) {
-                        (Some(layer), false) => views::streams_flat(snapshot, layer),
-                        (Some(layer), true) => views::streams_merged(snapshot, layer),
-                        _ => views::streams_tree(snapshot, args.sort),
+                        (Some(layer), false) => {
+                            views::streams_flat(snapshot, layer, query.as_ref())
+                        }
+                        (Some(layer), true) => {
+                            views::streams_merged(snapshot, layer, query.as_ref())
+                        }
+                        _ => views::streams_tree(snapshot, args.sort, query.as_ref()),
                     };
                     print!("{body}");
                 }
-                Format::Json => print_json(&views::json_envelope(&outcome))?,
+                Format::Json => print_json(&views::json_envelope(&outcome, query.as_ref()))?,
             }
             eprint!("{}", summary::render(&outcome));
             Ok(())
@@ -59,7 +80,7 @@ pub fn dispatch(cli: Cli, stop: &StopFlags) -> Result<(), CliError> {
             match args.shared.format {
                 Format::Text => print!("{detail}"),
                 // 08.3 narrows the JSON to the selected stream.
-                Format::Json => print_json(&views::json_envelope(&outcome))?,
+                Format::Json => print_json(&views::json_envelope(&outcome, None))?,
             }
             eprint!("{}", summary::render(&outcome));
             Ok(())
@@ -231,7 +252,11 @@ fn run_paced(args: &cli::StreamsArgs, stop: &StopFlags) -> Result<run::RunOutcom
 /// The default (08.2): full-screen redraw at least every second while
 /// packets flow, plus a final frame after `finish()` that matches the
 /// `--batch` tree. Snapshot-based; stdout only.
-fn watch(args: &cli::StreamsArgs, stop: &StopFlags) -> Result<(), CliError> {
+fn watch(
+    args: &cli::StreamsArgs,
+    stop: &StopFlags,
+    query: Option<&pktflow_view::StreamQuery>,
+) -> Result<(), CliError> {
     use std::time::{Duration, Instant};
     let interval = Duration::from_secs(1);
     let pace = args.pace_ms.map(Duration::from_millis);
@@ -260,7 +285,7 @@ fn watch(args: &cli::StreamsArgs, stop: &StopFlags) -> Result<(), CliError> {
         |agg| {
             if last_draw.elapsed() >= interval {
                 last_draw = Instant::now();
-                let frame = views::watch_frame(&agg.snapshot(), sort, &source);
+                let frame = views::watch_frame(&agg.snapshot(), sort, &source, query);
                 let _ = write!(out, "{frame}");
                 let _ = out.flush();
             }
@@ -272,7 +297,7 @@ fn watch(args: &cli::StreamsArgs, stop: &StopFlags) -> Result<(), CliError> {
         return Err(CliError::Internal("watch run without snapshot".into()));
     };
     let source = &outcome.source_name;
-    print!("{}", views::watch_frame(snapshot, args.sort, source));
+    print!("{}", views::watch_frame(snapshot, args.sort, source, query));
     eprint!("{}", summary::render(&outcome));
     Ok(())
 }

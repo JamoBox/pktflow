@@ -8,6 +8,8 @@ use pktflow_capture::InterfaceInfo;
 use pktflow_core::{DissectedPacket, PacketDirection, StopReason};
 use pktflow_flows::{AggregatorSnapshot, Rollup, SeriesPoint, Stream, StreamId};
 use pktflow_view::json::{close_reason_json, stream_record};
+use pktflow_view::query::matching_with_ancestors;
+use pktflow_view::StreamQuery;
 use pktflow_view::{
     by_id, child_chain_str, close_reason_str, endpoint_sides, endpoints_str, lineage_str,
     total_bytes, total_packets,
@@ -106,18 +108,25 @@ fn render_rows(rows: &[Row]) -> String {
 }
 
 /// The default lens (FR-24): the flow hierarchy, roots down, `├─`/`└─`
-/// glyphs, one line per stream.
-pub fn streams_tree(snapshot: &AggregatorSnapshot, sort: SortOrder) -> String {
+/// glyphs, one line per stream. A `--where` query narrows the tree to
+/// matches plus their ancestors, so results keep their lineage context.
+pub fn streams_tree(
+    snapshot: &AggregatorSnapshot,
+    sort: SortOrder,
+    query: Option<&StreamQuery>,
+) -> String {
     let ids = by_id(snapshot);
+    let keep = query.map(|q| matching_with_ancestors(&snapshot.streams, &ids, q));
     let mut rows = Vec::new();
     let mut roots: Vec<&Stream> = snapshot
         .roots
         .iter()
         .filter_map(|id| ids.get(id).copied())
+        .filter(|s| keep.as_ref().is_none_or(|k| k.contains(&s.created_seq)))
         .collect();
     sort_siblings(&mut roots, sort);
     for root in &roots {
-        collect_subtree(root, &ids, "", sort, &mut rows);
+        collect_subtree(root, &ids, "", sort, keep.as_ref(), &mut rows);
     }
     render_rows(&rows)
 }
@@ -127,6 +136,7 @@ fn collect_subtree(
     ids: &HashMap<StreamId, &Stream>,
     prefix: &str,
     sort: SortOrder,
+    keep: Option<&std::collections::HashSet<u64>>,
     rows: &mut Vec<Row>,
 ) {
     rows.push(stream_row(prefix, s, false));
@@ -134,6 +144,7 @@ fn collect_subtree(
         .children
         .iter()
         .filter_map(|id| ids.get(id).copied())
+        .filter(|c| keep.is_none_or(|k| k.contains(&c.created_seq)))
         .collect();
     sort_siblings(&mut children, sort);
     // Glyph prefixes: the label prefix ends with the branch glyph; child
@@ -143,17 +154,23 @@ fn collect_subtree(
     for (i, child) in children.into_iter().enumerate() {
         let last = i + 1 == count;
         let branch = if last { "└─ " } else { "├─ " };
-        collect_subtree(child, ids, &format!("{bare}{branch}"), sort, rows);
+        collect_subtree(child, ids, &format!("{bare}{branch}"), sort, keep, rows);
     }
 }
 
 /// `--layer PROTO` flat table (FR-24's literal "list streams at a chosen
 /// layer"): one row per node, `created_seq` order, plus first-seen.
-pub fn streams_flat(snapshot: &AggregatorSnapshot, protocol: &str) -> String {
+pub fn streams_flat(
+    snapshot: &AggregatorSnapshot,
+    protocol: &str,
+    query: Option<&StreamQuery>,
+) -> String {
+    let ids = by_id(snapshot);
     let rows: Vec<Row> = snapshot
         .streams
         .iter()
         .filter(|s| s.protocol == protocol)
+        .filter(|s| query.is_none_or(|q| q.matches(s, &ids)))
         .map(|s| stream_row("", s, true))
         .collect();
     render_rows(&rows)
@@ -161,11 +178,21 @@ pub fn streams_flat(snapshot: &AggregatorSnapshot, protocol: &str) -> String {
 
 /// `--layer PROTO --merged`: the D10 fold, one row per key with the
 /// folded nodes' ids listed.
-pub fn streams_merged(snapshot: &AggregatorSnapshot, protocol: &str) -> String {
+pub fn streams_merged(
+    snapshot: &AggregatorSnapshot,
+    protocol: &str,
+    query: Option<&StreamQuery>,
+) -> String {
+    let ids = by_id(snapshot);
     // Snapshot-side re-fold: group same-protocol streams by key.
     let mut order: Vec<&pktflow_core::FlowKey> = Vec::new();
     let mut groups: HashMap<&pktflow_core::FlowKey, Vec<&Stream>> = HashMap::new();
-    for s in snapshot.streams.iter().filter(|s| s.protocol == protocol) {
+    for s in snapshot
+        .streams
+        .iter()
+        .filter(|s| s.protocol == protocol)
+        .filter(|s| query.is_none_or(|q| q.matches(s, &ids)))
+    {
         let slot = groups.entry(&s.key).or_default();
         if slot.is_empty() {
             order.push(&s.key);
@@ -205,8 +232,13 @@ pub fn streams_merged(snapshot: &AggregatorSnapshot, protocol: &str) -> String {
 pub const WATCH_CLEAR: &str = "\x1b[2J\x1b[H";
 const WATCH_MAX_ROWS: usize = 40;
 
-pub fn watch_frame(snapshot: &AggregatorSnapshot, sort: SortOrder, source: &str) -> String {
-    let tree = streams_tree(snapshot, sort);
+pub fn watch_frame(
+    snapshot: &AggregatorSnapshot,
+    sort: SortOrder,
+    source: &str,
+    query: Option<&StreamQuery>,
+) -> String {
+    let tree = streams_tree(snapshot, sort, query);
     let mut body = String::new();
     let total_lines = tree.lines().count();
     for (i, line) in tree.lines().enumerate() {
@@ -668,8 +700,10 @@ fn summary_json(
 }
 
 /// The offline JSON envelope (D8): `{"pktflow": 1, …}`, schema
-/// `schema/streams-v1.json`.
-pub fn json_envelope(outcome: &RunOutcome) -> Json {
+/// `schema/streams-v1.json`. A `--where` query filters `streams[]` to
+/// matches only (the summary still describes the whole capture; id
+/// references may point outside the filtered set).
+pub fn json_envelope(outcome: &RunOutcome, query: Option<&StreamQuery>) -> Json {
     let mut doc = json!({
         "pktflow": 1,
         "mode": outcome.mode,
@@ -683,6 +717,7 @@ pub fn json_envelope(outcome: &RunOutcome) -> Json {
             snapshot
                 .streams
                 .iter()
+                .filter(|s| query.is_none_or(|q| q.matches(s, &ids)))
                 .map(|s| Json::Object(stream_record(s, &seq_of)))
                 .collect(),
         );

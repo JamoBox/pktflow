@@ -1547,6 +1547,7 @@ version = "0.1.0"
 dependencies = [
  "pktflow-core",
  "pktflow-flows",
+ "regex",
  "serde_json",
  "time",
 ]

@@ -141,6 +141,15 @@ main > section.on { display: flex; }
 .row .stats { margin-left: auto; display: flex; gap: 14px; color: var(--muted); font-family: var(--mono); font-size: 12px; font-variant-numeric: tabular-nums; }
 .row .stats b { color: var(--ink-2); font-weight: 500; }
 .empty { padding: 40px; text-align: center; color: var(--muted); }
+.row.ctx { opacity: .5; }
+.qstatus { padding: 4px 14px 0; font-family: var(--mono); font-size: 12px; color: var(--muted); }
+.qstatus.err { color: var(--serious); }
+.qstatus:empty { display: none; }
+#qhelp { display: none; margin: 8px 14px 0; padding: 10px 14px; background: var(--surface-2); border: 1px solid var(--border); border-radius: 6px; font-size: 12.5px; }
+#qhelp.on { display: block; }
+#qhelp .qrow { display: grid; grid-template-columns: 120px 1fr; gap: 10px; padding: 2px 0; }
+#qhelp .qk { color: var(--muted); }
+#qhelp code { font-family: var(--mono); color: var(--ink); background: var(--surface-3); border-radius: 3px; padding: 0 4px; }
 
 /* ── detail pane ────────────────────────────────────────── */
 .crumbs { font-family: var(--mono); font-size: 12px; color: var(--muted); margin-bottom: 8px; overflow-wrap: anywhere; }
@@ -246,7 +255,8 @@ details.raw pre { font-family: var(--mono); font-size: 11.5px; background: var(-
 <main>
   <section id="view-streams" class="on">
     <div class="toolbar">
-      <input type="search" id="filter" placeholder="filter — protocol, endpoint, #id, state  ( / )">
+      <input type="search" id="filter" placeholder="search — text, /regex/, proto==dns AND bytes>10k  ( / )">
+      <button class="btn" id="qhelpBtn" title="query syntax">syntax ?</button>
       <select id="sortSel" title="sibling sort order">
         <option value="bytes">sort: bytes</option>
         <option value="packets">sort: packets</option>
@@ -257,6 +267,14 @@ details.raw pre { font-family: var(--mono); font-size: 11.5px; background: var(-
       <button class="btn" id="collapseAll">collapse all</button>
       <span class="hint">click a stream to drill in · ↑↓←→ navigate</span>
     </div>
+    <div id="qhelp">
+      <div class="qrow"><span class="qk">free text</span><span><code>dns</code> · <code>192.168.203</code> · <code>"quoted text"</code> · <code>/vni=10\d/</code> (regex)</span></div>
+      <div class="qrow"><span class="qk">comparisons</span><span><code>proto == dns</code> · <code>bytes > 10k</code> · <code>duration >= 5m</code> · <code>port == 443</code> · <code>qname =~ /google/</code> · <code>endpoint contains 192.168</code></span></div>
+      <div class="qrow"><span class="qk">booleans</span><span><code>AND</code> <code>OR</code> <code>NOT</code> <code>( )</code> — adjacent terms are AND · optional leading <code>WHERE</code></span></div>
+      <div class="qrow"><span class="qk">structure</span><span><code>under == vxlan</code> (any ancestor) · <code>parent == udp</code> · <code>depth == 0</code> · flags: <code>root</code> <code>leaf</code> <code>closed</code> <code>live</code></span></div>
+      <div class="qrow"><span class="qk">fields</span><span><code>proto id packets bytes opaque duration depth children state reason endpoint port</code> — any other name reads key fields &amp; rollups (<code>vni == 100</code>)</span></div>
+    </div>
+    <div id="queryStatus" class="qstatus"></div>
     <div class="split">
       <div class="tree-pane" id="tree" tabindex="0"></div>
       <div class="detail-pane" id="detail"><div class="empty">select a stream</div></div>
@@ -288,6 +306,7 @@ const S = {
   filter: "",
   sort: "bytes",
   collapsed: new Set(), // stream ids folded shut (default: all open)
+  search: { matches: null, visible: null, error: null }, // server-evaluated query
   sel: null,            // selected stream id
   unkSel: 0,
   gen: -1,
@@ -355,12 +374,6 @@ function endpointsStr(s) {
   if (extras) out += (out ? " " : "") + extras;
   return out;
 }
-function searchText(s) {
-  let t = `${s.protocol} #${s.id} ${endpointsStr(s)}`;
-  if (s.state) t += " " + s.state;
-  return t.toLowerCase();
-}
-
 /* ── data intake ───────────────────────────────────────── */
 async function refetch() {
   try {
@@ -374,6 +387,7 @@ async function refetch() {
     }
     for (const s of doc.streams) protoColor(s.protocol); // stable slot order
     renderAll();
+    if (S.filter.trim()) runSearch(); // fresh data, fresh match set
   } catch (e) {
     setConn(false, "fetch failed");
   }
@@ -434,23 +448,10 @@ function sortSiblings(list) {
   });
 }
 
-/* Visible rows under filter/collapse — the same rules as the TUI:
-   a filter shows matches plus ancestors, auto-expanded. */
+/* Visible rows under query/collapse — the same rules as the TUI: the
+   server-evaluated query yields matches plus ancestors, auto-expanded. */
 function visibleRows() {
-  const needle = S.filter.trim().toLowerCase();
-  let keep = null;
-  if (needle) {
-    keep = new Set();
-    for (const s of S.data.streams) {
-      if (searchText(s).includes(needle)) {
-        let cur = s;
-        while (cur && !keep.has(cur.id)) {
-          keep.add(cur.id);
-          cur = cur.parent === null ? null : S.byId.get(cur.parent);
-        }
-      }
-    }
-  }
+  const keep = S.search.visible; // Set<id> | null (null = unfiltered)
   const rows = [];
   const roots = sortSiblings(S.data.roots.map(id => S.byId.get(id)).filter(Boolean));
   const walk = (s, depth) => {
@@ -475,14 +476,15 @@ function renderTree() {
   }
   const rows = visibleRows();
   if (!rows.length) {
-    host.append(el("div", "empty", "no streams match the filter"));
+    host.append(el("div", "empty", "no streams match the query"));
     return;
   }
   if (S.sel === null || !S.byId.has(S.sel)) S.sel = rows[0].s.id;
 
   for (const r of rows.slice(0, MAX_TREE_ROWS)) {
     const { s } = r;
-    const row = el("div", "row" + (s.id === S.sel ? " sel" : ""));
+    const ctx = S.search.matches && !S.search.matches.has(s.id);
+    const row = el("div", "row" + (s.id === S.sel ? " sel" : "") + (ctx ? " ctx" : ""));
     row.dataset.id = s.id;
     row.style.paddingLeft = 6 + r.depth * 18 + "px";
     const caret = el("span", "caret" + (r.hasKids ? " toggle" : ""), r.hasKids ? (r.expanded ? "▼" : "▶") : "·");
@@ -882,7 +884,50 @@ $("#tabs").addEventListener("click", ev => {
     sec.classList.toggle("on", sec.id === "view-" + S.tab);
   }
 });
-$("#filter").addEventListener("input", ev => { S.filter = ev.target.value; renderTree(); });
+let searchTimer = null;
+$("#filter").addEventListener("input", ev => {
+  S.filter = ev.target.value;
+  clearTimeout(searchTimer);
+  searchTimer = setTimeout(runSearch, 160);
+});
+$("#qhelpBtn").onclick = () => $("#qhelp").classList.toggle("on");
+async function runSearch() {
+  const q = S.filter.trim();
+  if (!q) {
+    S.search = { matches: null, visible: null, error: null };
+    updateQueryStatus();
+    renderTree();
+    return;
+  }
+  try {
+    const r = await fetch("/api/search?q=" + encodeURIComponent(q));
+    const doc = await r.json();
+    if ((doc.query || "").trim() !== S.filter.trim()) return; // stale reply
+    S.search = {
+      matches: doc.matches ? new Set(doc.matches) : null,
+      visible: doc.visible ? new Set(doc.visible) : null,
+      error: doc.error,
+    };
+  } catch (e) {
+    S.search = { matches: null, visible: null, error: "search request failed" };
+  }
+  updateQueryStatus();
+  renderTree();
+}
+function updateQueryStatus() {
+  const st = $("#queryStatus");
+  if (S.search.error) {
+    st.textContent = "✗ " + S.search.error;
+    st.className = "qstatus err";
+  } else if (S.search.matches) {
+    const n = S.search.matches.size;
+    st.textContent = `${n} match${n === 1 ? "" : "es"}`;
+    st.className = "qstatus";
+  } else {
+    st.textContent = "";
+    st.className = "qstatus";
+  }
+}
 $("#sortSel").addEventListener("change", ev => { S.sort = ev.target.value; renderTree(); });
 $("#expandAll").onclick = () => { S.collapsed.clear(); renderTree(); };
 $("#collapseAll").onclick = () => {

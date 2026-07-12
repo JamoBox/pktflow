@@ -28,6 +28,10 @@ picture, not just decoding bytes. See [`PRD.md`](PRD.md) for the full product ra
   everything no plugin claimed or no heuristic was confident about, ranked with near-miss
   scores and real sample bytes — with `--export` and `--scaffold` as the on-ramp to writing
   the plugin that's missing. See [`docs/unknown-diagnostics.md`](docs/unknown-diagnostics.md).
+- **One query language across every surface.** The TUI filter box, the web UI search
+  bar, and `pktflow streams --where` all speak the same expression language — free
+  text, `/regex/`, and field comparisons with AND/OR/NOT (`proto == dns AND bytes > 10k`,
+  `under == vxlan`, `qname =~ /google/`). See [`docs/query-language.md`](docs/query-language.md).
 - **Two first-class front-ends beyond the CLI.** `pktflow tui` opens a full-screen
   terminal browser (ratatui) over the stream hierarchy — fold/unfold subtrees, drill into
   any stream's rollups, triage unknowns — and `pktflow serve` embeds a zero-dependency
@@ -47,6 +51,7 @@ cargo build --release
 ./target/release/pktflow unknown -r capture.pcap          # triage unclaimed/unrecognized traffic
 ./target/release/pktflow tui -r capture.pcap              # interactive terminal UI (browse + drill down)
 ./target/release/pktflow serve -r capture.pcap            # web UI + JSON API on http://127.0.0.1:8320/
+./target/release/pktflow streams -r capture.pcap --batch --where 'proto == tcp AND bytes > 1M'
 ./target/release/pktflow ifaces                           # list capturable interfaces
 sudo ./target/release/pktflow streams -i eth0             # live, full-screen view (the default)
 ```

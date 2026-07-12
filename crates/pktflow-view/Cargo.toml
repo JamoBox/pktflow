@@ -9,6 +9,7 @@ license.workspace = true
 pktflow-core.workspace = true
 pktflow-flows.workspace = true
 serde_json.workspace = true
+regex.workspace = true
 time.workspace = true
 
 [lints]

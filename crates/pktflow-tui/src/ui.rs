@@ -174,8 +174,13 @@ fn draw_footer(frame: &mut Frame, area: Rect, app: &App, status: &HubStatus) {
             format!(" error: {err}"),
             Style::new().fg(Color::Red).add_modifier(Modifier::BOLD),
         ))
+    } else if let Some(err) = &app.query_error {
+        Line::from(Span::styled(
+            format!(" query error: {err} — plain terms, /regex/, or field OP value"),
+            Style::new().fg(Color::Yellow),
+        ))
     } else if app.filter_editing {
-        Line::from(" type to filter · Enter keep · Esc clear ")
+        Line::from(" query: text · /regex/ · proto==dns AND bytes>10k · Enter keep · Esc clear ")
     } else {
         let hints = match app.tab {
             Tab::Streams => {
@@ -190,7 +195,7 @@ fn draw_footer(frame: &mut Frame, area: Rect, app: &App, status: &HubStatus) {
 }
 
 fn draw_streams(frame: &mut Frame, area: Rect, app: &mut App, snapshot: &AggregatorSnapshot) {
-    let rows = flatten(snapshot, app.sort, &app.collapsed, &app.filter);
+    let rows = flatten(snapshot, app.sort, &app.collapsed, app.query.as_ref());
     if rows.is_empty() {
         let msg = if snapshot.summary.packets == 0 {
             "waiting for packets…"
@@ -821,7 +826,11 @@ fn draw_help(frame: &mut Frame) {
         ("Enter / Space", "toggle fold"),
         ("e / c", "expand all / collapse all"),
         ("s", "cycle sort (bytes → packets → first-seen → duration)"),
-        ("/", "filter streams (protocol, endpoint, state)"),
+        ("/", "query filter — text, /regex/, AND/OR/NOT, field ops"),
+        (
+            "",
+            "  e.g. proto==dns AND bytes>10k · under==vxlan · port==443",
+        ),
         ("J / K", "scroll the detail pane"),
         ("p", "pause/resume live snapshot updates"),
         ("g / G", "jump to top / bottom"),

@@ -16,4 +16,5 @@ Options:
       --merged               Fold same-key streams across parents (needs --layer)
       --batch                Run once and print a single final result instead of the default live view (full-screen text, redrawn every second; NDJSON events for `--format json`)
       --sort <SORT>          Sibling sort order in the tree [default: bytes] [possible values: bytes, packets, first-seen, duration]
+      --where <QUERY>        Show only streams matching a query expression: free text, /regex/, and field comparisons combined with AND/OR/NOT — e.g. 'proto == dns AND bytes > 10k' (see docs/query-language.md)
   -h, --help                 Print help

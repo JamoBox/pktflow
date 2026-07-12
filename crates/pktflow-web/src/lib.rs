@@ -13,7 +13,9 @@ use std::io;
 use std::sync::Arc;
 use std::time::Duration;
 
-use axum::extract::{Path, State};
+use std::collections::HashMap;
+
+use axum::extract::{Path, Query as UrlQuery, State};
 use axum::http::StatusCode;
 use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::response::{Html, IntoResponse, Response};
@@ -36,6 +38,7 @@ pub fn router(hub: Arc<SnapshotHub>) -> Router {
         .route("/api/meta", get(meta))
         .route("/api/snapshot", get(snapshot))
         .route("/api/stream/{id}", get(stream_detail))
+        .route("/api/search", get(search))
         .route("/api/events", get(events))
         .with_state(hub)
 }
@@ -61,6 +64,14 @@ async fn stream_detail(State(hub): State<Arc<SnapshotHub>>, Path(id): Path<u64>)
         )
             .into_response(),
     }
+}
+
+async fn search(
+    State(hub): State<Arc<SnapshotHub>>,
+    UrlQuery(params): UrlQuery<HashMap<String, String>>,
+) -> Json<serde_json::Value> {
+    let q = params.get("q").map(String::as_str).unwrap_or("");
+    Json(api::search_json(&hub, q))
 }
 
 async fn events(
@@ -234,6 +245,31 @@ mod tests {
         assert_eq!(streams[0]["protocol"], "eth");
         assert_eq!(streams[1]["parent"], 0);
         assert_eq!(doc["summary"]["packets"], 1);
+    }
+
+    #[tokio::test]
+    async fn search_evaluates_queries_and_reports_errors() {
+        let hub = hub_with_streams();
+        let (status, body) = get_body(
+            super::router(Arc::clone(&hub)),
+            "/api/search?q=proto%20%3D%3D%20ip",
+        )
+        .await;
+        assert_eq!(status, 200);
+        let doc: serde_json::Value = serde_json::from_str(&body).expect("json");
+        assert_eq!(doc["matches"], serde_json::json!([1]), "the ip child");
+        assert_eq!(
+            doc["visible"],
+            serde_json::json!([0, 1]),
+            "plus its eth ancestor"
+        );
+        assert_eq!(doc["error"], serde_json::Value::Null);
+
+        // A broken expression reports instead of filtering.
+        let (_, body) = get_body(super::router(hub), "/api/search?q=bytes%20%3E").await;
+        let doc: serde_json::Value = serde_json::from_str(&body).expect("json");
+        assert_eq!(doc["matches"], serde_json::Value::Null);
+        assert!(doc["error"].as_str().is_some_and(|e| e.contains("value")));
     }
 
     #[tokio::test]

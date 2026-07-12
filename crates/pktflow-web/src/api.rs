@@ -7,7 +7,8 @@ use pktflow_core::StopClass;
 use pktflow_flows::{AggregatorSnapshot, UnknownGroup};
 use pktflow_view::fmt::rfc3339;
 use pktflow_view::json::stream_record;
-use pktflow_view::{by_id, total_bytes, SnapshotHub};
+use pktflow_view::query::matching_with_ancestors;
+use pktflow_view::{by_id, total_bytes, SnapshotHub, StreamQuery};
 use serde_json::{json, Value as Json};
 
 /// JSON key for a stop class (D8 stable names, same as the CLI summary).
@@ -155,6 +156,45 @@ pub fn snapshot_json(hub: &SnapshotHub) -> Json {
         "streams": streams,
         "unknowns": unknowns,
     })
+}
+
+/// `/api/search?q=…`: evaluate one query expression against the current
+/// snapshot. `matches` are the streams the query selects; `visible` adds
+/// every ancestor of a match so the client can keep results in their
+/// hierarchy context. A parse failure comes back as `error` with both
+/// lists null — the client keeps showing the unfiltered tree.
+pub fn search_json(hub: &SnapshotHub, q: &str) -> Json {
+    let base = |matches: Json, visible: Json, error: Json| {
+        json!({
+            "pktflow": 1,
+            "query": q,
+            "generation": hub.generation(),
+            "matches": matches,
+            "visible": visible,
+            "error": error,
+        })
+    };
+    if q.trim().is_empty() {
+        return base(Json::Null, Json::Null, Json::Null);
+    }
+    let query = match StreamQuery::parse(q) {
+        Ok(query) => query,
+        Err(e) => return base(Json::Null, Json::Null, json!(e.to_string())),
+    };
+    let snap = hub.latest();
+    let ids = by_id(&snap);
+    let mut matches: Vec<u64> = snap
+        .streams
+        .iter()
+        .filter(|s| query.matches(s, &ids))
+        .map(|s| s.created_seq)
+        .collect();
+    matches.sort_unstable();
+    let mut visible: Vec<u64> = matching_with_ancestors(&snap.streams, &ids, &query)
+        .into_iter()
+        .collect();
+    visible.sort_unstable();
+    base(json!(matches), json!(visible), Json::Null)
 }
 
 /// `/api/stream/{id}`: one D8 record by display id.

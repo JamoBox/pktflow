@@ -76,6 +76,8 @@ mod tests {
     use ratatui::crossterm::event::{KeyCode, KeyEvent};
     use ratatui::Terminal;
 
+    use pktflow_view::StreamQuery;
+
     use crate::app::App;
     use crate::tree::{flatten, Sort};
 
@@ -155,7 +157,7 @@ mod tests {
     #[test]
     fn flatten_walks_roots_then_children_with_glyphs() {
         let snap = snapshot();
-        let rows = flatten(&snap, Sort::FirstSeen, &Default::default(), "");
+        let rows = flatten(&snap, Sort::FirstSeen, &Default::default(), None);
         let labels: Vec<(u64, &str)> = rows
             .iter()
             .map(|r| (r.stream.created_seq, r.stream.protocol))
@@ -169,13 +171,14 @@ mod tests {
     fn collapse_hides_the_subtree_and_filter_reveals_it() {
         let snap = snapshot();
         let collapsed = std::iter::once(0).collect();
-        let rows = flatten(&snap, Sort::FirstSeen, &collapsed, "");
+        let rows = flatten(&snap, Sort::FirstSeen, &collapsed, None);
         let seqs: Vec<u64> = rows.iter().map(|r| r.stream.created_seq).collect();
         assert_eq!(seqs, [0, 2], "collapsed root hides ip");
 
-        // The filter matches the ip child; its collapsed ancestor is
+        // The query matches the ip child; its collapsed ancestor is
         // auto-expanded so the match is reachable.
-        let rows = flatten(&snap, Sort::FirstSeen, &collapsed, "ip");
+        let query = StreamQuery::parse("proto == ip").expect("query parses");
+        let rows = flatten(&snap, Sort::FirstSeen, &collapsed, Some(&query));
         let seqs: Vec<u64> = rows.iter().map(|r| r.stream.created_seq).collect();
         assert_eq!(seqs, [0, 1]);
     }
