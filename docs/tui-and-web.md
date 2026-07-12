@@ -15,7 +15,7 @@ pktflow tui -r capture.pcap        # browse an offline capture
 sudo pktflow tui -i eth0           # watch a live interface
 ```
 
-A full-screen ratatui session with three tabs:
+A full-screen ratatui session with four tabs:
 
 - **Streams** — the hierarchy as a foldable tree (same glyphs and sort orders
   as the `streams` view) beside a live drill-down pane: endpoints, lineage,
@@ -40,7 +40,7 @@ comparisons with AND/OR/NOT — see
 [`query-language.md`](query-language.md); matches stay reachable through
 auto-expanded ancestors, and a parse error is shown instead of silently
 filtering) · `J/K` scroll the detail pane ·
-`p` freeze live updates · `1/2/3`/`Tab` switch tabs · `q` quit. Quitting also
+`p` freeze live updates · `1/2/3/4`/`Tab` switch tabs · `q` quit. Quitting also
 stops a live capture (the run ends like Ctrl-C on `streams`).
 
 ## `pktflow serve` — the web UI + JSON API
