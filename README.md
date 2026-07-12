@@ -28,6 +28,11 @@ picture, not just decoding bytes. See [`PRD.md`](PRD.md) for the full product ra
   everything no plugin claimed or no heuristic was confident about, ranked with near-miss
   scores and real sample bytes — with `--export` and `--scaffold` as the on-ramp to writing
   the plugin that's missing. See [`docs/unknown-diagnostics.md`](docs/unknown-diagnostics.md).
+- **Two first-class front-ends beyond the CLI.** `pktflow tui` opens a full-screen
+  terminal browser (ratatui) over the stream hierarchy — fold/unfold subtrees, drill into
+  any stream's rollups, triage unknowns — and `pktflow serve` embeds a zero-dependency
+  web UI + JSON API + SSE live events in the binary. Both work offline and live. See
+  [`docs/tui-and-web.md`](docs/tui-and-web.md).
 - 13 reference protocol plugins today: Ethernet, 802.1Q VLAN, ARP, IPv4, IPv6, ICMPv4, IGMP,
   TCP, UDP, GRE, VXLAN, DNS, DHCP, NTP.
 
@@ -40,6 +45,8 @@ cargo build --release
 ./target/release/pktflow stream -r capture.pcap '#3'      # drill into one stream (by id from a streams view)
 ./target/release/pktflow packets -r capture.pcap -v       # per-packet debug lens
 ./target/release/pktflow unknown -r capture.pcap          # triage unclaimed/unrecognized traffic
+./target/release/pktflow tui -r capture.pcap              # interactive terminal UI (browse + drill down)
+./target/release/pktflow serve -r capture.pcap            # web UI + JSON API on http://127.0.0.1:8320/
 ./target/release/pktflow ifaces                           # list capturable interfaces
 sudo ./target/release/pktflow streams -i eth0             # live, full-screen view (the default)
 ```
@@ -59,6 +66,9 @@ dissection, and more).
 | `pktflow-plugins` | The reference protocol set and its registration list |
 | `pktflow-flows` | The stream aggregator: store, hierarchy, rollups, lifecycle, queries |
 | `pktflow-capture` | The only crate touching libpcap/Npcap — offline files, live devices |
+| `pktflow-view` | Shared presentation layer: value/endpoint formatting, JSON records, snapshot hub |
+| `pktflow-tui` | The `pktflow tui` terminal UI (ratatui): tree browser, drill-down, unknown triage |
+| `pktflow-web` | The `pktflow serve` web UI: axum JSON API, SSE live events, embedded SPA |
 | `pktflow-cli` | The `pktflow` binary: streams view, drill-down, packet mode, JSON output |
 | `pktflow-testkit` | Synthetic wire-format packet/capture builders shared by tests |
 

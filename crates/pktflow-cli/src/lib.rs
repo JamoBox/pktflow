@@ -114,6 +114,40 @@ pub fn dispatch(cli: Cli, stop: &StopFlags) -> Result<(), CliError> {
             eprint!("{}", summary::render(&outcome));
             Ok(())
         }
+        Command::Tui(args) => {
+            // Pipeline on a background thread, UI on this one; the hub is
+            // the only thing they share. Quitting the TUI stops a live
+            // capture; a finished offline run just leaves the final
+            // snapshot up for browsing.
+            let hub = std::sync::Arc::new(run::hub_for(&args.shared));
+            let pipeline =
+                run::spawn_hub_pipeline(args.shared, stop.clone(), std::sync::Arc::clone(&hub));
+            let ui = pktflow_tui::run(std::sync::Arc::clone(&hub));
+            stop.trigger();
+            let pipeline_result = pipeline
+                .join()
+                .map_err(|_| CliError::Internal("pipeline thread panicked".into()))?;
+            ui?;
+            pipeline_result
+        }
+        Command::Serve(args) => {
+            let hub = std::sync::Arc::new(run::hub_for(&args.shared));
+            let pipeline =
+                run::spawn_hub_pipeline(args.shared, stop.clone(), std::sync::Arc::clone(&hub));
+            let shutdown_stop = stop.clone();
+            let served = pktflow_web::serve(
+                &args.listen,
+                std::sync::Arc::clone(&hub),
+                move || shutdown_stop.is_stopped(),
+                |addr| eprintln!("pktflow web UI on http://{addr}/ — Ctrl-C to stop"),
+            );
+            stop.trigger();
+            let pipeline_result = pipeline
+                .join()
+                .map_err(|_| CliError::Internal("pipeline thread panicked".into()))?;
+            served?;
+            pipeline_result
+        }
         Command::Ifaces => {
             let interfaces = pktflow_capture::list_interfaces()?;
             print!("{}", views::ifaces_text(&interfaces));

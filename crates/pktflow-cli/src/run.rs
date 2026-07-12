@@ -14,6 +14,7 @@ use pktflow_core::{DissectedPacket, LinkType, ParseOpts};
 use pktflow_flows::{
     Aggregator, AggregatorConfig, AggregatorSnapshot, EvictedStream, EvictionPolicy,
 };
+use pktflow_view::SnapshotHub;
 
 use crate::cli::SharedArgs;
 use crate::error::CliError;
@@ -334,6 +335,66 @@ pub fn run_observed(
         elapsed: started.elapsed(),
         mode,
         source_name,
+    })
+}
+
+/// How often the hub pipeline publishes a fresh snapshot while packets
+/// are flowing: frequent enough to feel live, cheap enough that the
+/// snapshot copy stays off the hot path (its cost is bounded by
+/// `max_streams`, measured in 09.4).
+const PUBLISH_INTERVAL: Duration = Duration::from_millis(250);
+
+/// A hub named for this run's source — the TUI/web header line.
+pub fn hub_for(shared: &SharedArgs) -> SnapshotHub {
+    match (&shared.input.read, &shared.input.iface) {
+        (Some(path), _) => SnapshotHub::new(path.display().to_string(), "offline"),
+        (_, Some(iface)) => SnapshotHub::new(iface.clone(), "live"),
+        // clap's required input group makes this unreachable in practice.
+        _ => SnapshotHub::new(String::new(), "offline"),
+    }
+}
+
+/// Runs the full pipeline on a background thread, publishing throttled
+/// snapshots into `hub`: the TUI and web server render from the hub while
+/// this thread stays the aggregator's single writer (D5). Unknown
+/// diagnostics are on — the Unknown lens is a first-class pane in both
+/// UIs. Errors land in the hub (`set_error`) so a UI already on screen
+/// can display them, and are also returned for the process exit code.
+pub fn spawn_hub_pipeline(
+    shared: SharedArgs,
+    stop: StopFlags,
+    hub: Arc<SnapshotHub>,
+) -> std::thread::JoinHandle<Result<(), CliError>> {
+    std::thread::spawn(move || {
+        let publish_hub = Arc::clone(&hub);
+        let mut last_publish: Option<Instant> = None;
+        let result = run_observed(
+            &shared,
+            &stop,
+            true,
+            true,
+            |_, _| {},
+            |agg| {
+                // First snapshot ships immediately; then throttled.
+                if last_publish.is_none_or(|t| t.elapsed() >= PUBLISH_INTERVAL) {
+                    last_publish = Some(Instant::now());
+                    publish_hub.publish(agg.snapshot());
+                }
+            },
+        );
+        match result {
+            Ok(outcome) => {
+                if let Some(snapshot) = outcome.snapshot {
+                    hub.publish(snapshot);
+                }
+                hub.mark_finished();
+                Ok(())
+            }
+            Err(e) => {
+                hub.set_error(e.to_string());
+                Err(e)
+            }
+        }
     })
 }
 

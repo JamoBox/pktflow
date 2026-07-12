@@ -29,6 +29,10 @@ pub enum Command {
     Stream(StreamArgs),
     /// Per-packet debug lens
     Packets(PacketsArgs),
+    /// Interactive terminal UI: browse and drill into streams
+    Tui(TuiArgs),
+    /// Web UI + JSON API over the stream hierarchy
+    Serve(ServeArgs),
     /// List capturable interfaces
     Ifaces,
     /// Dev/debug lens over unclassified traffic (10)
@@ -37,7 +41,9 @@ pub enum Command {
 
 /// Names accepted as a subcommand, used by the bare-path shorthand to
 /// decide whether the first argument is a path.
-pub const SUBCOMMANDS: [&str; 5] = ["streams", "stream", "packets", "ifaces", "unknown"];
+pub const SUBCOMMANDS: [&str; 7] = [
+    "streams", "stream", "packets", "tui", "serve", "ifaces", "unknown",
+];
 
 #[derive(Args, Debug)]
 pub struct StreamsArgs {
@@ -128,8 +134,26 @@ pub struct UnknownArgs {
     pub plugins_dir: Option<PathBuf>,
 }
 
-/// Exactly one input: a capture file or a live interface.
+/// The interactive TUI (12.1): same input grammar as `streams`, full
+/// unknown diagnostics on (the Unknown tab is a first-class pane).
 #[derive(Args, Debug)]
+pub struct TuiArgs {
+    #[command(flatten)]
+    pub shared: SharedArgs,
+}
+
+/// The web UI + JSON API (12.2).
+#[derive(Args, Debug)]
+pub struct ServeArgs {
+    #[command(flatten)]
+    pub shared: SharedArgs,
+    /// Address to bind the web UI + API on
+    #[arg(long, value_name = "ADDR", default_value = "127.0.0.1:8320")]
+    pub listen: String,
+}
+
+/// Exactly one input: a capture file or a live interface.
+#[derive(Args, Clone, Debug)]
 #[group(id = "input", required = true, multiple = false)]
 pub struct InputArgs {
     /// Read packets from a capture file (offline replay)
@@ -140,7 +164,7 @@ pub struct InputArgs {
     pub iface: Option<String>,
 }
 
-#[derive(Args, Debug)]
+#[derive(Args, Clone, Debug)]
 pub struct SharedArgs {
     #[command(flatten)]
     pub input: InputArgs,

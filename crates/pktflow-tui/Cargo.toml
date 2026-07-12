@@ -1,0 +1,15 @@
+[package]
+name = "pktflow-tui"
+description = "Interactive terminal UI: browse the stream hierarchy, drill into streams, triage unknowns"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+pktflow-core.workspace = true
+pktflow-flows.workspace = true
+pktflow-view.workspace = true
+ratatui.workspace = true
+
+[lints]
+workspace = true
