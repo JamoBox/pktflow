@@ -6,28 +6,44 @@ mod kit;
 use pktflow_core::{Canonicalize, FieldMap, KeyField, LayerRecord, StreamIdentity};
 use pktflow_core::{Hint, RouteId, Value};
 use pktflow_plugins::arp::Arp;
+use pktflow_plugins::bacnet_ip::BacnetIp;
+use pktflow_plugins::bgp::Bgp;
 use pktflow_plugins::cdp::Cdp;
 use pktflow_plugins::dhcp::Dhcp;
+use pktflow_plugins::dhcpv6::Dhcpv6;
+use pktflow_plugins::dnp3::Dnp3;
 use pktflow_plugins::dns::Dns;
 use pktflow_plugins::dot11::Dot11;
 use pktflow_plugins::eapol::Eapol;
 use pktflow_plugins::ethernet::Ethernet;
 use pktflow_plugins::gre::Gre;
+use pktflow_plugins::hsrp::Hsrp;
 use pktflow_plugins::icmpv4::Icmpv4;
+use pktflow_plugins::icmpv6::Icmpv6;
 use pktflow_plugins::igmp::Igmp;
+use pktflow_plugins::ipfix::Ipfix;
 use pktflow_plugins::ipv4::{internet_checksum, Ipv4};
 use pktflow_plugins::ipv6::Ipv6;
 use pktflow_plugins::lacp::Lacp;
 use pktflow_plugins::llc::Llc;
 use pktflow_plugins::lldp::Lldp;
+use pktflow_plugins::mdns::Mdns;
+use pktflow_plugins::mld::Mld;
+use pktflow_plugins::modbus::Modbus;
+use pktflow_plugins::ndp::Ndp;
+use pktflow_plugins::netflow9::Netflow9;
 use pktflow_plugins::ntp::Ntp;
+use pktflow_plugins::ospf::Ospf;
 use pktflow_plugins::pvst_plus::PvstPlus;
 use pktflow_plugins::radiotap::Radiotap;
+use pktflow_plugins::snmp::Snmp;
 use pktflow_plugins::stp::Stp;
+use pktflow_plugins::syslog::Syslog;
 use pktflow_plugins::tcp::Tcp;
 use pktflow_plugins::template::Template;
 use pktflow_plugins::udp::Udp;
 use pktflow_plugins::vlan::Vlan;
+use pktflow_plugins::vrrp::Vrrp;
 use pktflow_plugins::vxlan::Vxlan;
 
 use kit::{run_conformance, ConformanceCase, GoodPacket};
@@ -283,6 +299,305 @@ fn icmpv4_conforms() {
 }
 
 #[test]
+fn icmpv6_conforms() {
+    // Every case shares the RFC 4443 §2.1 fixed shape: type(1) code(1)
+    // checksum(2) rest_of_header(4, kept raw — layout is type-specific and
+    // parsed no further here, same stance as icmpv4/06.3). Checksum bytes
+    // are filler; the parser doesn't validate them (icmpv4 precedent).
+    fn case(icmp_type: u8, code: u8, rest: [u8; 4], hint: Hint) -> GoodPacket {
+        let mut bytes = vec![icmp_type, code, 0xBE, 0xEF];
+        bytes.extend_from_slice(&rest);
+        GoodPacket {
+            bytes,
+            expected_header_len: 8,
+            expected_full_fields: vec![
+                ("type", Value::U64(u64::from(icmp_type))),
+                ("code", Value::U64(u64::from(code))),
+                ("rest_of_header", Value::from(&rest[..])),
+            ],
+            expected_hint: hint,
+        }
+    }
+
+    fn dispatch(icmp_type: u8) -> Hint {
+        Hint::Route(RouteId::Custom {
+            space: "icmpv6_type",
+            id: u64::from(icmp_type),
+        })
+    }
+
+    run_conformance(&ConformanceCase {
+        plugin: Box::new(Icmpv6),
+        good: vec![
+            // RFC 4443 §3.1 Destination Unreachable, code 4 (port unreachable).
+            case(1, 4, [0x00, 0x00, 0x00, 0x00], Hint::Terminal),
+            // RFC 4443 §3.2 Packet Too Big, MTU = 1280 (IPv6 minimum link MTU).
+            case(2, 0, [0x00, 0x00, 0x05, 0x00], Hint::Terminal),
+            // RFC 4443 §3.3 Time Exceeded, code 0 (hop limit exceeded in transit).
+            case(3, 0, [0x00, 0x00, 0x00, 0x00], Hint::Terminal),
+            // RFC 4443 §3.4 Parameter Problem, pointer = 6 (Next Header octet).
+            case(4, 0, [0x00, 0x00, 0x00, 0x06], Hint::Terminal),
+            // RFC 4443 §4.1 Echo Request, id=0x1234 seq=0x0001.
+            case(128, 0, [0x12, 0x34, 0x00, 0x01], Hint::Terminal),
+            // RFC 4443 §4.2 Echo Reply, id=0x1234 seq=0x0001.
+            case(129, 0, [0x12, 0x34, 0x00, 0x01], Hint::Terminal),
+            // RFC 2710 §3 MLD Query -> mld (max resp delay 10000ms, reserved 0).
+            case(130, 0, [0x27, 0x10, 0x00, 0x00], dispatch(130)),
+            // RFC 2710 §3 MLDv1 Report -> mld.
+            case(131, 0, [0x00, 0x00, 0x00, 0x00], dispatch(131)),
+            // RFC 2710 §3 MLD Done -> mld.
+            case(132, 0, [0x00, 0x00, 0x00, 0x00], dispatch(132)),
+            // RFC 4861 §4.1 Router Solicitation -> ndp (reserved = 0).
+            case(133, 0, [0x00, 0x00, 0x00, 0x00], dispatch(133)),
+            // RFC 4861 §4.2 Router Advertisement -> ndp (cur hop limit 64,
+            // M+O flags set, router lifetime 1800s).
+            case(134, 0, [0x40, 0xC0, 0x07, 0x08], dispatch(134)),
+            // RFC 4861 §4.3 Neighbor Solicitation -> ndp (reserved = 0).
+            case(135, 0, [0x00, 0x00, 0x00, 0x00], dispatch(135)),
+            // RFC 4861 §4.4 Neighbor Advertisement -> ndp (R/S/O flags set).
+            case(136, 0, [0xE0, 0x00, 0x00, 0x00], dispatch(136)),
+            // RFC 4861 §4.5 Redirect -> ndp (reserved = 0).
+            case(137, 0, [0x00, 0x00, 0x00, 0x00], dispatch(137)),
+            // RFC 3810 §5.2 MLDv2 Report -> mld (1 multicast address record).
+            case(143, 0, [0x00, 0x00, 0x00, 0x01], dispatch(143)),
+        ],
+        outer_ctx: Vec::new(),
+    });
+}
+
+/// A synthetic `icmpv6` predecessor carrying exactly the fields the real
+/// plugin would have extracted at `Depth::Full` — `type` always, plus
+/// `rest_of_header` for the two dispatch types (RA, NA) that pack extra
+/// data into the word `icmpv6` already consumed (11.3's `ndp` module doc).
+fn icmpv6_predecessor(icmp_type: u8, rest: Option<[u8; 4]>) -> LayerRecord {
+    let mut fields = FieldMap::new();
+    fields.insert("type", Value::U64(u64::from(icmp_type)));
+    if let Some(r) = rest {
+        fields.insert("rest_of_header", Value::from(&r[..]));
+    }
+    LayerRecord {
+        protocol: "icmpv6",
+        offset: 54,
+        header_len: 8,
+        fields,
+    }
+}
+
+/// Zero-option fixtures only (11.3's `ndp` module doc): NDP has no
+/// self-describing length or explicit end-of-options marker, so a capture
+/// truncated exactly on an option boundary is indistinguishable from a
+/// legitimately shorter message — the same limitation CDP (11.1)
+/// documents for its own unterminated TLV walk. The kit's exhaustive
+/// truncation sweep (rule 1) therefore only runs against messages whose
+/// every byte belongs to a fixed-size read; the options walk itself
+/// (link-layer address / SLAAC prefix-info extraction, multi-option
+/// messages, the type=0/length=0 padding convention) is covered by
+/// `ndp.rs`'s own unit tests instead.
+#[test]
+fn ndp_conforms() {
+    // RFC 4861 §4.1 Router Solicitation: nothing left after icmpv6's
+    // Reserved word, so a bare RS is the empty message.
+    run_conformance(&ConformanceCase {
+        plugin: Box::new(Ndp),
+        good: vec![GoodPacket {
+            bytes: vec![],
+            expected_header_len: 0,
+            expected_full_fields: vec![("msg_type", Value::U64(133))],
+            expected_hint: Hint::Terminal,
+        }],
+        outer_ctx: vec![icmpv6_predecessor(133, None)],
+    });
+
+    // RFC 4861 §4.2 Router Advertisement: cur_hop_limit=64, M+O set,
+    // router_lifetime=1800s (icmpv6_conforms' own RA fixture) — all
+    // inside the already-consumed word — then reachable_time=7500ms,
+    // retrans_timer=1000ms in this plugin's own bytes.
+    run_conformance(&ConformanceCase {
+        plugin: Box::new(Ndp),
+        good: vec![GoodPacket {
+            bytes: vec![0x00, 0x00, 0x1D, 0x4C, 0x00, 0x00, 0x03, 0xE8],
+            expected_header_len: 8,
+            expected_full_fields: vec![
+                ("msg_type", Value::U64(134)),
+                ("flags", Value::U64(0xC0)),
+                ("router_lifetime", Value::U64(1800)),
+                ("reachable_time", Value::U64(7500)),
+                ("retrans_timer", Value::U64(1000)),
+            ],
+            expected_hint: Hint::Terminal,
+        }],
+        outer_ctx: vec![icmpv6_predecessor(134, Some([0x40, 0xC0, 0x07, 0x08]))],
+    });
+
+    // RFC 4861 §4.3 Neighbor Solicitation: 16-byte target, no flags.
+    let ns_target: [u8; 16] = [
+        0x20, 0x01, 0x0D, 0xB8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x01,
+    ];
+    run_conformance(&ConformanceCase {
+        plugin: Box::new(Ndp),
+        good: vec![GoodPacket {
+            bytes: ns_target.to_vec(),
+            expected_header_len: 16,
+            expected_full_fields: vec![
+                ("msg_type", Value::U64(135)),
+                ("target_address", Value::from(&ns_target[..])),
+            ],
+            expected_hint: Hint::Terminal,
+        }],
+        outer_ctx: vec![icmpv6_predecessor(135, None)],
+    });
+
+    // RFC 4861 §4.4 Neighbor Advertisement: R/S/O flags set (0xE0, same
+    // byte icmpv6_conforms' own NA fixture uses) plus a 16-byte target.
+    let na_target: [u8; 16] = [
+        0x20, 0x01, 0x0D, 0xB8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x02,
+    ];
+    run_conformance(&ConformanceCase {
+        plugin: Box::new(Ndp),
+        good: vec![GoodPacket {
+            bytes: na_target.to_vec(),
+            expected_header_len: 16,
+            expected_full_fields: vec![
+                ("msg_type", Value::U64(136)),
+                ("flags", Value::U64(0xE0)),
+                ("target_address", Value::from(&na_target[..])),
+            ],
+            expected_hint: Hint::Terminal,
+        }],
+        outer_ctx: vec![icmpv6_predecessor(136, Some([0xE0, 0, 0, 0]))],
+    });
+
+    // RFC 4861 §4.5 Redirect: target address then destination address —
+    // only the target is in 11.3's field list for this plugin, but the
+    // destination address must still be walked to keep header_len honest.
+    let redirect_target = [0xAAu8; 16];
+    let mut redirect_bytes = redirect_target.to_vec();
+    redirect_bytes.extend_from_slice(&[0xBB; 16]);
+    run_conformance(&ConformanceCase {
+        plugin: Box::new(Ndp),
+        good: vec![GoodPacket {
+            bytes: redirect_bytes,
+            expected_header_len: 32,
+            expected_full_fields: vec![
+                ("msg_type", Value::U64(137)),
+                ("target_address", Value::from(&redirect_target[..])),
+            ],
+            expected_hint: Hint::Terminal,
+        }],
+        outer_ctx: vec![icmpv6_predecessor(137, None)],
+    });
+}
+
+/// Zero-extension fixtures only, same rationale as `ndp_conforms`: the
+/// MLDv2 Query extension and the MLDv2 Report's multi-record walk have no
+/// self-describing outer length beyond what `N`/`M` themselves state, so
+/// the kit's exhaustive truncation sweep (rule 1) only runs against
+/// messages whose every byte belongs to a fixed-size read. The variable
+/// walks (v2 query extension, multi-record v2 report, zero-record report)
+/// are covered by `mld.rs`'s own unit tests instead.
+#[test]
+fn mld_conforms() {
+    // RFC 2710 §3 MLD Query: max resp delay 10000ms (icmpv6_conforms'
+    // own MLD Query fixture), multicast address = all-nodes (::) query.
+    let group = [0xFFu8, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1];
+    run_conformance(&ConformanceCase {
+        plugin: Box::new(Mld),
+        good: vec![GoodPacket {
+            bytes: group.to_vec(),
+            expected_header_len: 16,
+            expected_full_fields: vec![
+                ("msg_type", Value::U64(130)),
+                ("max_resp_delay", Value::U64(10000)),
+                ("multicast_addr", Value::from(&group[..])),
+            ],
+            expected_hint: Hint::Terminal,
+        }],
+        outer_ctx: vec![icmpv6_predecessor(130, Some([0x27, 0x10, 0, 0]))],
+    });
+
+    // RFC 2710 §4 MLDv1 Report: max resp delay unused (0), same 16-byte
+    // multicast-address body as Query.
+    run_conformance(&ConformanceCase {
+        plugin: Box::new(Mld),
+        good: vec![GoodPacket {
+            bytes: group.to_vec(),
+            expected_header_len: 16,
+            expected_full_fields: vec![
+                ("msg_type", Value::U64(131)),
+                ("max_resp_delay", Value::U64(0)),
+                ("multicast_addr", Value::from(&group[..])),
+            ],
+            expected_hint: Hint::Terminal,
+        }],
+        outer_ctx: vec![icmpv6_predecessor(131, Some([0, 0, 0, 0]))],
+    });
+
+    // RFC 2710 §5 MLD Done: identical body shape to Report.
+    run_conformance(&ConformanceCase {
+        plugin: Box::new(Mld),
+        good: vec![GoodPacket {
+            bytes: group.to_vec(),
+            expected_header_len: 16,
+            expected_full_fields: vec![
+                ("msg_type", Value::U64(132)),
+                ("max_resp_delay", Value::U64(0)),
+                ("multicast_addr", Value::from(&group[..])),
+            ],
+            expected_hint: Hint::Terminal,
+        }],
+        outer_ctx: vec![icmpv6_predecessor(132, Some([0, 0, 0, 0]))],
+    });
+
+    // RFC 3810 §5.2 MLDv2 Report, M=1 (icmpv6_conforms' own fixture):
+    // one address record, MODE_IS_EXCLUDE(2), aux_data_len=0, N=0 sources.
+    let mut record = vec![2u8, 0, 0x00, 0x00];
+    record.extend_from_slice(&group);
+    run_conformance(&ConformanceCase {
+        plugin: Box::new(Mld),
+        good: vec![GoodPacket {
+            bytes: record.clone(),
+            expected_header_len: record.len(),
+            expected_full_fields: vec![
+                ("msg_type", Value::U64(143)),
+                ("multicast_addr", Value::from(&group[..])),
+                ("num_sources", Value::U64(0)),
+                ("source_addrs", Value::List(vec![])),
+            ],
+            expected_hint: Hint::Terminal,
+        }],
+        outer_ctx: vec![icmpv6_predecessor(143, Some([0, 0, 0, 1]))],
+    });
+}
+
+/// Bare-header fixture only, same rationale as `ndp_conforms`/`mld_conforms`:
+/// DHCPv6's options list (RFC 8415 §21.1) has no self-describing outer
+/// length or end marker, so a capture truncated exactly on an option
+/// boundary is indistinguishable from a legitimately shorter message. The
+/// kit's exhaustive truncation sweep (rule 1) therefore only runs against a
+/// message with zero options; the options walk itself (Client/Server
+/// Identifier DUIDs, the nested IA_NA/IA_TA -> IAADDR walk, relay-message
+/// rejection) is covered by `dhcpv6.rs`'s own unit tests instead.
+#[test]
+fn dhcpv6_conforms() {
+    // RFC 8415 §18.2.2 INFORMATION-REQUEST: no address needed, so no IA
+    // option — a legitimately option-free message.
+    run_conformance(&ConformanceCase {
+        plugin: Box::new(Dhcpv6),
+        good: vec![GoodPacket {
+            bytes: vec![11, 0x12, 0x34, 0x56],
+            expected_header_len: 4,
+            expected_full_fields: vec![
+                ("app", Value::from("dhcpv6")),
+                ("msg_type", Value::U64(11)),
+                ("transaction_id", Value::U64(0x123456)),
+            ],
+            expected_hint: Hint::Terminal,
+        }],
+        outer_ctx: Vec::new(),
+    });
+}
+
+#[test]
 fn igmp_conforms() {
     // IGMPv2 general membership query (RFC 2236).
     let bytes = vec![0x11, 0x64, 0xEE, 0x9B, 0x00, 0x00, 0x00, 0x00];
@@ -295,6 +610,281 @@ fn igmp_conforms() {
                 ("type", Value::U64(0x11)),
                 ("max_resp", Value::U64(0x64)),
                 ("group_addr", Value::from(&[0, 0, 0, 0][..])),
+            ],
+            expected_hint: Hint::Terminal,
+        }],
+        outer_ctx: Vec::new(),
+    });
+}
+
+#[test]
+fn vrrp_conforms() {
+    // RFC 5798 VRRPv3 advertisement over IPv4: VRID 7, priority 255 (the
+    // address owner), one virtual IP, Max Adver Int 100 centiseconds.
+    let bytes = vec![0x31, 7, 255, 1, 0x00, 100, 0x00, 0x00, 10, 0, 0, 1];
+    run_conformance(&ConformanceCase {
+        plugin: Box::new(Vrrp),
+        good: vec![GoodPacket {
+            bytes,
+            expected_header_len: 12,
+            expected_full_fields: vec![
+                ("vrid", Value::U64(7)),
+                ("version", Value::U64(3)),
+                ("type", Value::U64(1)),
+                ("priority", Value::U64(255)),
+                ("count_ip_addrs", Value::U64(1)),
+                ("adver_int", Value::U64(100)),
+                (
+                    "ip_addresses",
+                    Value::List(vec![Value::from(&[10u8, 0, 0, 1][..])]),
+                ),
+            ],
+            expected_hint: Hint::Terminal,
+        }],
+        // The immediate predecessor VRRPv3 reads its address width from
+        // (module doc) — an IPv4 layer here, so the fixture's 4-byte
+        // address is interpreted correctly.
+        outer_ctx: vec![LayerRecord {
+            protocol: "ipv4",
+            offset: 14,
+            header_len: 20,
+            fields: FieldMap::new(),
+        }],
+    });
+}
+
+#[test]
+fn hsrp_conforms() {
+    // RFC 2281 §5 Hello message: version 0, group 1, priority 100,
+    // Active (16), hellotime 3s, holdtime 10s, "cisco" auth data padded
+    // to 8 bytes, virtual IP 192.168.1.1.
+    let mut bytes = vec![0, 0, 16, 3, 10, 100, 1, 0];
+    bytes.extend_from_slice(b"cisco\0\0\0");
+    bytes.extend_from_slice(&[192, 168, 1, 1]);
+    run_conformance(&ConformanceCase {
+        plugin: Box::new(Hsrp),
+        good: vec![GoodPacket {
+            bytes,
+            expected_header_len: 20,
+            expected_full_fields: vec![
+                ("group", Value::U64(1)),
+                ("version", Value::U64(0)),
+                ("opcode", Value::U64(0)),
+                ("state", Value::U64(16)),
+                ("priority", Value::U64(100)),
+                ("hellotime", Value::U64(3)),
+                ("holdtime", Value::U64(10)),
+                ("virtual_ip", Value::from(&[192u8, 168, 1, 1][..])),
+                ("auth_data", Value::from(&b"cisco\0\0\0"[..])),
+            ],
+            expected_hint: Hint::Terminal,
+        }],
+        outer_ctx: Vec::new(),
+    });
+}
+
+/// The OSPF common header (RFC 2328 A.3.1 / RFC 5340 A.3.1) with a zero
+/// `packet_length` placeholder patched in by [`ospf_finish`].
+fn ospf_header_prefix(version: u8, msg_type: u8) -> Vec<u8> {
+    let mut b = vec![version, msg_type, 0, 0];
+    b.extend_from_slice(&[10, 0, 0, 1]); // router_id
+    b.extend_from_slice(&[0, 0, 0, 1]); // area_id
+    b.extend_from_slice(&[0, 0]); // checksum
+    if version == 2 {
+        b.extend_from_slice(&[0, 0]); // AuType: none
+        b.extend_from_slice(&[0; 8]); // Authentication
+    } else {
+        b.push(0); // Instance ID
+        b.push(0); // reserved
+    }
+    b
+}
+
+/// Patches `packet_length` (bytes 2-3) to `b`'s final length.
+fn ospf_finish(mut b: Vec<u8>) -> Vec<u8> {
+    let len = u16::try_from(b.len()).expect("fixture fits in u16");
+    b[2..4].copy_from_slice(&len.to_be_bytes());
+    b
+}
+
+#[test]
+fn ospf_conforms() {
+    // RFC 2328 A.3.2 Hello: network mask, hello_interval 10s, options
+    // 0x02, rtr_pri 1, router_dead_interval 40s, DR/BDR by interface
+    // address, two neighbors.
+    let mut hello_v2 = ospf_header_prefix(2, 1);
+    hello_v2.extend_from_slice(&[255, 255, 255, 0]);
+    hello_v2.extend_from_slice(&10u16.to_be_bytes());
+    hello_v2.push(0x02);
+    hello_v2.push(1);
+    hello_v2.extend_from_slice(&40u32.to_be_bytes());
+    hello_v2.extend_from_slice(&[10, 0, 0, 1]);
+    hello_v2.extend_from_slice(&[10, 0, 0, 2]);
+    hello_v2.extend_from_slice(&[10, 0, 0, 3]);
+    hello_v2.extend_from_slice(&[10, 0, 0, 4]);
+    let hello_v2 = ospf_finish(hello_v2);
+    let hello_v2_len = hello_v2.len();
+
+    run_conformance(&ConformanceCase {
+        plugin: Box::new(Ospf),
+        good: vec![GoodPacket {
+            bytes: hello_v2,
+            expected_header_len: hello_v2_len,
+            expected_full_fields: vec![
+                ("version", Value::U64(2)),
+                ("type", Value::U64(1)),
+                ("packet_length", Value::U64(hello_v2_len as u64)),
+                ("router_id", Value::from(&[10u8, 0, 0, 1][..])),
+                ("area_id", Value::from(&[0u8, 0, 0, 1][..])),
+                ("hello_interval", Value::U64(10)),
+                ("router_dead_interval", Value::U64(40)),
+                ("designated_router", Value::from(&[10u8, 0, 0, 1][..])),
+                (
+                    "neighbors",
+                    Value::List(vec![
+                        Value::from(&[10u8, 0, 0, 3][..]),
+                        Value::from(&[10u8, 0, 0, 4][..]),
+                    ]),
+                ),
+            ],
+            expected_hint: Hint::Terminal,
+        }],
+        outer_ctx: Vec::new(),
+    });
+
+    // RFC 5340 A.3.2 Hello: no network mask, 24-bit options, DR/BDR by
+    // Router ID, one neighbor.
+    let mut hello_v3 = ospf_header_prefix(3, 1);
+    hello_v3.extend_from_slice(&7u32.to_be_bytes()); // interface_id
+    hello_v3.push(1); // rtr_pri
+    hello_v3.extend_from_slice(&[0, 0, 0x02]); // options
+    hello_v3.extend_from_slice(&10u16.to_be_bytes()); // hello_interval
+    hello_v3.extend_from_slice(&40u16.to_be_bytes()); // router_dead_interval
+    hello_v3.extend_from_slice(&[10, 0, 0, 1]); // designated_router
+    hello_v3.extend_from_slice(&[10, 0, 0, 2]); // backup_designated_router
+    hello_v3.extend_from_slice(&[10, 0, 0, 5]); // neighbor
+    let hello_v3 = ospf_finish(hello_v3);
+    let hello_v3_len = hello_v3.len();
+
+    run_conformance(&ConformanceCase {
+        plugin: Box::new(Ospf),
+        good: vec![GoodPacket {
+            bytes: hello_v3,
+            expected_header_len: hello_v3_len,
+            expected_full_fields: vec![
+                ("version", Value::U64(3)),
+                ("type", Value::U64(1)),
+                ("packet_length", Value::U64(hello_v3_len as u64)),
+                ("router_id", Value::from(&[10u8, 0, 0, 1][..])),
+                ("area_id", Value::from(&[0u8, 0, 0, 1][..])),
+                ("hello_interval", Value::U64(10)),
+                ("router_dead_interval", Value::U64(40)),
+                ("designated_router", Value::from(&[10u8, 0, 0, 1][..])),
+                (
+                    "neighbors",
+                    Value::List(vec![Value::from(&[10u8, 0, 0, 5][..])]),
+                ),
+            ],
+            expected_hint: Hint::Terminal,
+        }],
+        outer_ctx: Vec::new(),
+    });
+
+    // RFC 2328 A.3.3 Database Description: interface_mtu 1500,
+    // dd_sequence, plus a trailing (unwalked) LSA-header entry —
+    // header_len still covers it via packet_length (module doc).
+    let mut dbd_v2 = ospf_header_prefix(2, 2);
+    dbd_v2.extend_from_slice(&1500u16.to_be_bytes());
+    dbd_v2.push(0x02); // options
+    dbd_v2.push(0x07); // bits: I|M|MS
+    dbd_v2.extend_from_slice(&0xAABB_CCDDu32.to_be_bytes());
+    dbd_v2.extend_from_slice(&[0xEE; 20]); // unwalked LSA-header trailer
+    let dbd_v2 = ospf_finish(dbd_v2);
+    let dbd_v2_len = dbd_v2.len();
+
+    run_conformance(&ConformanceCase {
+        plugin: Box::new(Ospf),
+        good: vec![GoodPacket {
+            bytes: dbd_v2,
+            expected_header_len: dbd_v2_len,
+            expected_full_fields: vec![
+                ("version", Value::U64(2)),
+                ("type", Value::U64(2)),
+                ("packet_length", Value::U64(dbd_v2_len as u64)),
+                ("router_id", Value::from(&[10u8, 0, 0, 1][..])),
+                ("area_id", Value::from(&[0u8, 0, 0, 1][..])),
+                ("interface_mtu", Value::U64(1500)),
+                ("dd_sequence", Value::U64(0xAABB_CCDD)),
+            ],
+            expected_hint: Hint::Terminal,
+        }],
+        outer_ctx: Vec::new(),
+    });
+
+    // RFC 5340 A.3.3 Database Description: leading reserved byte,
+    // 24-bit options, same interface_mtu/dd_sequence pair.
+    let mut dbd_v3 = ospf_header_prefix(3, 2);
+    dbd_v3.push(0); // reserved1
+    dbd_v3.extend_from_slice(&[0, 0, 0x02]); // options
+    dbd_v3.extend_from_slice(&1500u16.to_be_bytes());
+    dbd_v3.push(0); // reserved2
+    dbd_v3.push(0x07); // bits
+    dbd_v3.extend_from_slice(&0xAABB_CCDDu32.to_be_bytes());
+    let dbd_v3 = ospf_finish(dbd_v3);
+    let dbd_v3_len = dbd_v3.len();
+
+    run_conformance(&ConformanceCase {
+        plugin: Box::new(Ospf),
+        good: vec![GoodPacket {
+            bytes: dbd_v3,
+            expected_header_len: dbd_v3_len,
+            expected_full_fields: vec![
+                ("version", Value::U64(3)),
+                ("type", Value::U64(2)),
+                ("packet_length", Value::U64(dbd_v3_len as u64)),
+                ("router_id", Value::from(&[10u8, 0, 0, 1][..])),
+                ("area_id", Value::from(&[0u8, 0, 0, 1][..])),
+                ("interface_mtu", Value::U64(1500)),
+                ("dd_sequence", Value::U64(0xAABB_CCDD)),
+            ],
+            expected_hint: Hint::Terminal,
+        }],
+        outer_ctx: Vec::new(),
+    });
+
+    // RFC 2328 A.3.5 / RFC 5340 A.4.1/A.4.2.1 Link State Update: one LSA,
+    // a 20-byte header plus a 4-byte body this plugin skips by the
+    // header's own `length` field without decoding it. The kit's rule-1
+    // truncation sweep below exercises that internal length boundary.
+    let mut lsa_header = vec![0x00, 0x01]; // age
+    lsa_header.extend_from_slice(&[0x00, 0x01]); // type field (router-LSA)
+    lsa_header.extend_from_slice(&[10, 0, 0, 9]); // link_state_id
+    lsa_header.extend_from_slice(&[10, 0, 0, 1]); // advertising_router
+    lsa_header.extend_from_slice(&0x8000_0001u32.to_be_bytes()); // sequence
+    lsa_header.extend_from_slice(&[0xBE, 0xEF]); // checksum
+    lsa_header.extend_from_slice(&24u16.to_be_bytes()); // length: 20 + 4
+    let mut lsu = ospf_header_prefix(2, 4);
+    lsu.extend_from_slice(&1u32.to_be_bytes()); // num_lsas
+    lsu.extend_from_slice(&lsa_header);
+    lsu.extend_from_slice(&[0xDE, 0xAD, 0xBE, 0xEF]); // LSA body, undecoded
+    let lsu = ospf_finish(lsu);
+    let lsu_len = lsu.len();
+
+    run_conformance(&ConformanceCase {
+        plugin: Box::new(Ospf),
+        good: vec![GoodPacket {
+            bytes: lsu,
+            expected_header_len: lsu_len,
+            expected_full_fields: vec![
+                ("version", Value::U64(2)),
+                ("type", Value::U64(4)),
+                ("packet_length", Value::U64(lsu_len as u64)),
+                ("router_id", Value::from(&[10u8, 0, 0, 1][..])),
+                ("area_id", Value::from(&[0u8, 0, 0, 1][..])),
+                (
+                    "lsa_headers",
+                    Value::List(vec![Value::from(&lsa_header[..])]),
+                ),
             ],
             expected_hint: Hint::Terminal,
         }],
@@ -510,6 +1100,83 @@ fn dns_conforms_over_tcp_with_length_prefix() {
             bytes,
             expected_header_len: 31,
             expected_full_fields: dns_query_fields(),
+            expected_hint: Hint::Terminal,
+        }],
+        outer_ctx: vec![tcp_layer],
+    });
+}
+
+/// RFC 6762 standard query for example.local (A, IN), QU bit set on the
+/// question's class field (§5.4) — mDNS's one class-field bit `dns`'s own
+/// fixture never exercises.
+fn mdns_query_bytes() -> Vec<u8> {
+    let mut m = vec![0x00, 0x00, 0x00, 0x00, 0, 1, 0, 0, 0, 0, 0, 0];
+    m.extend_from_slice(&[7]);
+    m.extend_from_slice(b"example");
+    m.extend_from_slice(&[5]);
+    m.extend_from_slice(b"local");
+    m.extend_from_slice(&[0, 0, 1, 0x80, 0x01]); // type A, class IN | QU bit
+    m
+}
+
+#[test]
+fn mdns_conforms() {
+    run_conformance(&ConformanceCase {
+        plugin: Box::new(Mdns),
+        good: vec![GoodPacket {
+            expected_header_len: mdns_query_bytes().len(),
+            bytes: mdns_query_bytes(),
+            expected_full_fields: vec![
+                ("app", Value::from("mdns")),
+                ("id", Value::U64(0)),
+                ("is_response", Value::Bool(false)),
+                ("opcode", Value::U64(0)),
+                ("rcode", Value::U64(0)),
+                ("qname", Value::from("example.local")),
+                ("qtype", Value::U64(1)),
+                ("is_multicast_query", Value::Bool(true)),
+                ("answers", Value::List(vec![])),
+            ],
+            expected_hint: Hint::Terminal,
+        }],
+        outer_ctx: Vec::new(),
+    });
+}
+
+#[test]
+fn bgp_conforms() {
+    // RFC 4271 §4.2 OPEN: version 4, AS 65001, hold time 180, router id
+    // 10.0.0.1, no optional parameters.
+    let mut bytes = vec![0xFFu8; 16]; // Marker
+    bytes.extend_from_slice(&29u16.to_be_bytes()); // Length
+    bytes.push(1); // Type: OPEN
+    bytes.push(4); // Version
+    bytes.extend_from_slice(&65001u16.to_be_bytes());
+    bytes.extend_from_slice(&180u16.to_be_bytes());
+    bytes.extend_from_slice(&[10, 0, 0, 1]);
+    bytes.push(0); // Opt Parm Len
+
+    // Like DNS, BGP's real identity is its TCP session (module doc).
+    let tcp_layer = LayerRecord {
+        protocol: "tcp",
+        offset: 34,
+        header_len: 20,
+        fields: FieldMap::new(),
+    };
+
+    run_conformance(&ConformanceCase {
+        plugin: Box::new(Bgp),
+        good: vec![GoodPacket {
+            bytes,
+            expected_header_len: 29,
+            expected_full_fields: vec![
+                ("app", Value::from("bgp")),
+                ("msg_type", Value::U64(1)),
+                ("length", Value::U64(29)),
+                ("my_as", Value::U64(65001)),
+                ("hold_time", Value::U64(180)),
+                ("bgp_identifier", Value::from(&[10u8, 0, 0, 1][..])),
+            ],
             expected_hint: Hint::Terminal,
         }],
         outer_ctx: vec![tcp_layer],
@@ -1093,6 +1760,454 @@ fn vlan_conforms() {
                 expected_hint: Hint::Route(RouteId::EtherType(0x8100)),
             },
         ],
+        outer_ctx: Vec::new(),
+    });
+}
+
+/// MBAP header (transaction id, protocol id = 0, length, unit id) + PDU.
+fn modbus_frame(unit_id: u8, pdu: &[u8]) -> Vec<u8> {
+    let mut f = vec![0x00, 0x01, 0x00, 0x00];
+    let length = (1 + pdu.len()) as u16; // unit_id + PDU
+    f.extend_from_slice(&length.to_be_bytes());
+    f.push(unit_id);
+    f.extend_from_slice(pdu);
+    f
+}
+
+#[test]
+fn modbus_conforms() {
+    // Read Holding Registers (0x03): start 0x0000, quantity 10.
+    let read_holding_registers = modbus_frame(1, &[0x03, 0x00, 0x00, 0x00, 0x0A]);
+    // Write Single Register (0x06): address 0x0001, value 0x0003.
+    let write_single_register = modbus_frame(1, &[0x06, 0x00, 0x01, 0x00, 0x03]);
+    // Exception response to a Read Holding Registers request: function
+    // code with the top bit set, exception code 2 (Illegal Data Address).
+    let exception = modbus_frame(1, &[0x83, 0x02]);
+
+    run_conformance(&ConformanceCase {
+        plugin: Box::new(Modbus),
+        good: vec![
+            GoodPacket {
+                expected_header_len: read_holding_registers.len(),
+                bytes: read_holding_registers,
+                expected_full_fields: vec![
+                    ("unit_id", Value::U64(1)),
+                    ("function_code", Value::U64(0x03)),
+                    ("is_exception", Value::Bool(false)),
+                    ("start_address", Value::U64(0)),
+                    ("quantity", Value::U64(10)),
+                ],
+                expected_hint: Hint::Terminal,
+            },
+            GoodPacket {
+                expected_header_len: write_single_register.len(),
+                bytes: write_single_register,
+                expected_full_fields: vec![
+                    ("unit_id", Value::U64(1)),
+                    ("function_code", Value::U64(0x06)),
+                    ("is_exception", Value::Bool(false)),
+                    ("start_address", Value::U64(1)),
+                    ("register_value", Value::U64(3)),
+                ],
+                expected_hint: Hint::Terminal,
+            },
+            GoodPacket {
+                expected_header_len: exception.len(),
+                bytes: exception,
+                expected_full_fields: vec![
+                    ("unit_id", Value::U64(1)),
+                    ("function_code", Value::U64(0x83)),
+                    ("is_exception", Value::Bool(true)),
+                    ("exception_code", Value::U64(2)),
+                ],
+                expected_hint: Hint::Terminal,
+            },
+        ],
+        outer_ctx: Vec::new(),
+    });
+}
+
+/// A DNP3 Data Link Layer frame: sync + length + control, little-endian
+/// destination/source, a 2-byte header CRC (not validated), and — when
+/// `pdu` is non-empty — a transport header + application control byte
+/// ahead of it (IEEE 1815-2012 §9-10).
+fn dnp3_frame(destination: u16, source: u16, control: u8, pdu: &[u8]) -> Vec<u8> {
+    let user_data_len = if pdu.is_empty() { 0 } else { 1 + pdu.len() };
+    let length = 5 + user_data_len;
+    let mut f = vec![0x05, 0x64, length as u8, control];
+    f.extend_from_slice(&destination.to_le_bytes());
+    f.extend_from_slice(&source.to_le_bytes());
+    f.extend_from_slice(&[0xAB, 0xCD]); // header CRC
+    if !pdu.is_empty() {
+        f.push(0xC1); // transport header: FIN|FIR, seq 1
+        f.extend_from_slice(pdu);
+    }
+    f
+}
+
+#[test]
+fn dnp3_conforms() {
+    // Application Layer control byte + function code 1 (Read). The rollup
+    // kit requires every "good" sample to carry every declared rollup
+    // field (rule 3) — the no-user-data, link-layer-only shape (RESET_
+    // LINK_STATES et al.) is covered instead by `dnp3.rs`'s own unit test.
+    let read_request = dnp3_frame(1024, 3, 0xC4, &[0xC0, 0x01]);
+    // Function code 0x81 (a response), different control/addresses.
+    let response = dnp3_frame(3, 1024, 0x44, &[0xC0, 0x81]);
+
+    run_conformance(&ConformanceCase {
+        plugin: Box::new(Dnp3),
+        good: vec![
+            GoodPacket {
+                expected_header_len: response.len(),
+                bytes: response,
+                expected_full_fields: vec![
+                    ("source", Value::U64(1024)),
+                    ("destination", Value::U64(3)),
+                    ("start_bytes", Value::U64(0x0564)),
+                    ("length", Value::U64(8)),
+                    ("control", Value::U64(0x44)),
+                    ("function_code", Value::U64(0x81)),
+                ],
+                expected_hint: Hint::Terminal,
+            },
+            GoodPacket {
+                expected_header_len: read_request.len(),
+                bytes: read_request,
+                expected_full_fields: vec![
+                    ("source", Value::U64(3)),
+                    ("destination", Value::U64(1024)),
+                    ("start_bytes", Value::U64(0x0564)),
+                    ("length", Value::U64(8)),
+                    ("control", Value::U64(0xC4)),
+                    ("function_code", Value::U64(1)),
+                ],
+                expected_hint: Hint::Terminal,
+            },
+        ],
+        outer_ctx: Vec::new(),
+    });
+}
+
+/// A BACnet/IP (Annex J) message: 4-byte BVLC header (type `0x81`,
+/// `function`, big-endian total-length) wrapping `npdu_and_after` (NPDU +
+/// APDU, present only for `Original-Unicast-NPDU`/`Original-Broadcast-
+/// NPDU`/`Forwarded-NPDU`).
+fn bacnet_ip_frame(function: u8, npdu_and_after: &[u8]) -> Vec<u8> {
+    let length = (4 + npdu_and_after.len()) as u16;
+    let mut b = vec![0x81, function];
+    b.extend_from_slice(&length.to_be_bytes());
+    b.extend_from_slice(npdu_and_after);
+    b
+}
+
+#[test]
+fn bacnet_ip_conforms() {
+    // Unrestricted Who-Is broadcast (Original-Broadcast-NPDU, 0x0B):
+    // NPDU version 1, control 0x00 (no routing, local broadcast),
+    // Unconfirmed-Request APDU, service choice 8 (Who-Is).
+    let who_is = bacnet_ip_frame(0x0B, &[0x01, 0x00, 0x10, 0x08]);
+
+    // Unicast ReadProperty (Original-Unicast-NPDU, 0x0A) answered by a
+    // ComplexACK, both unsegmented, service choice 12 (ReadProperty),
+    // trailing bytes are the (undecoded) object-identifier/property-value
+    // parameters.
+    let mut complex_ack_npdu = vec![0x01, 0x00, 0x30, 0x01, 0x0C];
+    complex_ack_npdu.extend_from_slice(&[0x3E, 0x44, 0x00, 0x00, 0x00, 0x00, 0x3F]);
+    let read_property_ack = bacnet_ip_frame(0x0A, &complex_ack_npdu);
+
+    run_conformance(&ConformanceCase {
+        plugin: Box::new(BacnetIp),
+        good: vec![
+            GoodPacket {
+                expected_header_len: who_is.len(),
+                bytes: who_is,
+                expected_full_fields: vec![
+                    ("app", Value::from("bacnet")),
+                    ("bvlc_function", Value::U64(0x0B)),
+                    ("npdu_control", Value::U64(0x00)),
+                    ("apdu_type", Value::U64(1)),
+                    ("service_choice", Value::U64(8)),
+                ],
+                expected_hint: Hint::Terminal,
+            },
+            GoodPacket {
+                expected_header_len: read_property_ack.len(),
+                bytes: read_property_ack,
+                expected_full_fields: vec![
+                    ("app", Value::from("bacnet")),
+                    ("bvlc_function", Value::U64(0x0A)),
+                    ("npdu_control", Value::U64(0x00)),
+                    ("apdu_type", Value::U64(3)),
+                    ("service_choice", Value::U64(12)),
+                ],
+                expected_hint: Hint::Terminal,
+            },
+        ],
+        outer_ctx: Vec::new(),
+    });
+}
+
+#[test]
+fn syslog_conforms() {
+    // Both samples are RFC 5424 §6.5 Example 1 / RFC 3164 §5.4 Example 1
+    // (same PRI, same hostname/TAG in both RFCs), each truncated at its
+    // last unambiguous, self-terminated token — see syslog.rs's module
+    // doc for why the trailing `[SP MSG]`/CONTENT is exercised separately
+    // in application.rs instead of here.
+    let rfc5424 = b"<34>1 2003-10-11T22:14:15.003Z mymachine.example.com su - ID47 -".to_vec();
+    let rfc3164 = b"<34>Oct 11 22:14:15 mymachine su:".to_vec();
+
+    run_conformance(&ConformanceCase {
+        plugin: Box::new(Syslog),
+        good: vec![
+            GoodPacket {
+                expected_header_len: rfc5424.len(),
+                bytes: rfc5424,
+                expected_full_fields: vec![
+                    ("app", Value::from("syslog")),
+                    ("facility", Value::U64(4)),
+                    ("severity", Value::U64(2)),
+                    ("version", Value::U64(1)),
+                    ("hostname", Value::from("mymachine.example.com")),
+                    ("app_name", Value::from("su")),
+                ],
+                expected_hint: Hint::Terminal,
+            },
+            GoodPacket {
+                expected_header_len: rfc3164.len(),
+                bytes: rfc3164,
+                expected_full_fields: vec![
+                    ("app", Value::from("syslog")),
+                    ("facility", Value::U64(4)),
+                    ("severity", Value::U64(2)),
+                    ("version", Value::U64(0)),
+                    ("hostname", Value::from("mymachine")),
+                    ("app_name", Value::from("su")),
+                ],
+                expected_hint: Hint::Terminal,
+            },
+        ],
+        outer_ctx: Vec::new(),
+    });
+}
+
+#[test]
+fn snmp_conforms() {
+    // Hand-built and byte-verified against RFC 1157 §4.1 (v1 PDUs/Trap-PDU),
+    // RFC 3416 §3 (v2c PDUs), RFC 1213 (sysDescr.0/sysUpTime.0 OIDs), and
+    // X.690 (BER TLV encoding) — not captured from a live agent. See
+    // snmp.rs's own fixture builders for a byte-by-byte breakdown of the
+    // same structure.
+
+    // v1 GetRequest for sysDescr.0, community "public", request-id 1.
+    let get_request_v1 = vec![
+        0x30, 0x26, 0x02, 0x01, 0x00, 0x04, 0x06, 0x70, 0x75, 0x62, 0x6C, 0x69, 0x63, 0xA0, 0x19,
+        0x02, 0x01, 0x01, 0x02, 0x01, 0x00, 0x02, 0x01, 0x00, 0x30, 0x0E, 0x30, 0x0C, 0x06, 0x08,
+        0x2B, 0x06, 0x01, 0x02, 0x01, 0x01, 0x01, 0x00, 0x05, 0x00,
+    ];
+
+    // v2c GetResponse answering the request above with sysDescr.0 =
+    // "Linux".
+    let get_response_v2c = vec![
+        0x30, 0x2B, 0x02, 0x01, 0x01, 0x04, 0x06, 0x70, 0x75, 0x62, 0x6C, 0x69, 0x63, 0xA2, 0x1E,
+        0x02, 0x01, 0x01, 0x02, 0x01, 0x00, 0x02, 0x01, 0x00, 0x30, 0x13, 0x30, 0x11, 0x06, 0x08,
+        0x2B, 0x06, 0x01, 0x02, 0x01, 0x01, 0x01, 0x00, 0x04, 0x05, 0x4C, 0x69, 0x6E, 0x75, 0x78,
+    ];
+
+    // v2c SNMPv2-Trap (tag [7]) carrying sysUpTime.0.
+    let snmpv2_trap = vec![
+        0x30, 0x26, 0x02, 0x01, 0x01, 0x04, 0x06, 0x70, 0x75, 0x62, 0x6C, 0x69, 0x63, 0xA7, 0x19,
+        0x02, 0x01, 0x00, 0x02, 0x01, 0x00, 0x02, 0x01, 0x00, 0x30, 0x0E, 0x30, 0x0C, 0x06, 0x08,
+        0x2B, 0x06, 0x01, 0x02, 0x01, 0x01, 0x03, 0x00, 0x05, 0x00,
+    ];
+
+    // v1 Trap-PDU (tag [4]): structurally different from the other PDUs
+    // (RFC 1157 §4.1.6) — its first element is an enterprise OID, not
+    // request-id, so `request_id` is absent from the expected field set.
+    let trap_v1 = vec![
+        0x30, 0x26, 0x02, 0x01, 0x00, 0x04, 0x06, 0x70, 0x75, 0x62, 0x6C, 0x69, 0x63, 0xA4, 0x19,
+        0x06, 0x06, 0x2B, 0x06, 0x01, 0x04, 0x01, 0x09, 0x40, 0x04, 0xC0, 0x00, 0x02, 0x01, 0x02,
+        0x01, 0x06, 0x02, 0x01, 0x00, 0x43, 0x01, 0x00, 0x30, 0x00,
+    ];
+
+    run_conformance(&ConformanceCase {
+        plugin: Box::new(Snmp),
+        good: vec![
+            GoodPacket {
+                expected_header_len: get_request_v1.len(),
+                bytes: get_request_v1,
+                expected_full_fields: vec![
+                    ("app", Value::from("snmp")),
+                    ("version", Value::U64(0)),
+                    ("community", Value::from("public")),
+                    ("pdu_type", Value::U64(0)),
+                    ("request_id", Value::U64(1)),
+                ],
+                expected_hint: Hint::Terminal,
+            },
+            GoodPacket {
+                expected_header_len: get_response_v2c.len(),
+                bytes: get_response_v2c,
+                expected_full_fields: vec![
+                    ("app", Value::from("snmp")),
+                    ("version", Value::U64(1)),
+                    ("community", Value::from("public")),
+                    ("pdu_type", Value::U64(2)),
+                    ("request_id", Value::U64(1)),
+                ],
+                expected_hint: Hint::Terminal,
+            },
+            GoodPacket {
+                expected_header_len: snmpv2_trap.len(),
+                bytes: snmpv2_trap,
+                expected_full_fields: vec![
+                    ("app", Value::from("snmp")),
+                    ("version", Value::U64(1)),
+                    ("community", Value::from("public")),
+                    ("pdu_type", Value::U64(7)),
+                    ("request_id", Value::U64(0)),
+                ],
+                expected_hint: Hint::Terminal,
+            },
+            GoodPacket {
+                expected_header_len: trap_v1.len(),
+                bytes: trap_v1,
+                expected_full_fields: vec![
+                    ("app", Value::from("snmp")),
+                    ("version", Value::U64(0)),
+                    ("community", Value::from("public")),
+                    ("pdu_type", Value::U64(4)),
+                ],
+                expected_hint: Hint::Terminal,
+            },
+        ],
+        outer_ctx: Vec::new(),
+    });
+}
+
+#[test]
+fn netflow9_conforms() {
+    // RFC 3954 §5.1 fixed header, count=1 (one FlowSet in this packet).
+    let mut bytes = vec![0, 9, 0, 1];
+    bytes.extend_from_slice(&1_000u32.to_be_bytes()); // sys_uptime
+    bytes.extend_from_slice(&1_700_000_000u32.to_be_bytes()); // unix_secs
+    bytes.extend_from_slice(&42u32.to_be_bytes()); // sequence
+    bytes.extend_from_slice(&7u32.to_be_bytes()); // source_id
+
+    // A single Template FlowSet (id=0), one record: template_id=256,
+    // fields IN_BYTES(8)/4 and PROTOCOL(4)/4 (RFC 3954 §8's field-type
+    // registry). Exactly one FlowSet — the module doc's truncation-
+    // honesty note — so every strict prefix still declines.
+    let mut record = 256u16.to_be_bytes().to_vec();
+    record.extend_from_slice(&2u16.to_be_bytes()); // field_count
+    record.extend_from_slice(&8u16.to_be_bytes());
+    record.extend_from_slice(&4u16.to_be_bytes());
+    record.extend_from_slice(&4u16.to_be_bytes());
+    record.extend_from_slice(&4u16.to_be_bytes());
+    let flowset_len = 4 + record.len();
+    bytes.extend_from_slice(&0u16.to_be_bytes()); // flowset_id = 0 (Template)
+    bytes.extend_from_slice(&(flowset_len as u16).to_be_bytes());
+    bytes.extend_from_slice(&record);
+
+    run_conformance(&ConformanceCase {
+        plugin: Box::new(Netflow9),
+        good: vec![GoodPacket {
+            // Fixed 20-byte header only — FlowSets are optional
+            // repetition and thus trailing payload beyond header_len
+            // (module doc's truncation-honesty note).
+            expected_header_len: 20,
+            bytes: bytes.clone(),
+            expected_full_fields: vec![
+                ("app", Value::from("netflow9")),
+                ("version", Value::U64(9)),
+                ("count", Value::U64(1)),
+                ("sequence", Value::U64(42)),
+                ("source_id", Value::U64(7)),
+                (
+                    "flowsets",
+                    Value::List(vec![Value::List(vec![
+                        Value::U64(0),
+                        Value::U64(flowset_len as u64),
+                        Value::List(vec![Value::List(vec![
+                            Value::U64(256),
+                            Value::U64(2),
+                            Value::List(vec![
+                                Value::U64(8),
+                                Value::U64(4),
+                                Value::U64(4),
+                                Value::U64(4),
+                            ]),
+                        ])]),
+                    ])]),
+                ),
+            ],
+            expected_hint: Hint::Terminal,
+        }],
+        outer_ctx: Vec::new(),
+    });
+}
+
+#[test]
+fn ipfix_conforms() {
+    // RFC 7011 §3.1 fixed header (16 bytes) plus a single Template Set
+    // (id=2), one record: template_id=256, one plain field (IE 8,
+    // length 4) and one Enterprise-specific field (IE 12345 with the
+    // Enterprise bit set, length 4, enterprise number 99999) — proves
+    // the Enterprise-bit shift, not just the common case.
+    let mut record = 256u16.to_be_bytes().to_vec();
+    record.extend_from_slice(&2u16.to_be_bytes()); // field_count
+    record.extend_from_slice(&8u16.to_be_bytes());
+    record.extend_from_slice(&4u16.to_be_bytes());
+    let enterprise_ie = 12345u16 | 0x8000;
+    record.extend_from_slice(&enterprise_ie.to_be_bytes());
+    record.extend_from_slice(&4u16.to_be_bytes());
+    record.extend_from_slice(&99999u32.to_be_bytes());
+    let set_len = 4 + record.len();
+    let total_len = 16 + set_len;
+
+    let mut bytes = vec![0, 10];
+    bytes.extend_from_slice(&(total_len as u16).to_be_bytes());
+    bytes.extend_from_slice(&1_700_000_000u32.to_be_bytes()); // export_time
+    bytes.extend_from_slice(&42u32.to_be_bytes()); // sequence
+    bytes.extend_from_slice(&7u32.to_be_bytes()); // domain_id
+    bytes.extend_from_slice(&2u16.to_be_bytes()); // Set id = 2 (Template)
+    bytes.extend_from_slice(&(set_len as u16).to_be_bytes());
+    bytes.extend_from_slice(&record);
+
+    run_conformance(&ConformanceCase {
+        plugin: Box::new(Ipfix),
+        good: vec![GoodPacket {
+            expected_header_len: total_len,
+            bytes,
+            expected_full_fields: vec![
+                ("app", Value::from("ipfix")),
+                ("version", Value::U64(10)),
+                ("length", Value::U64(total_len as u64)),
+                ("sequence", Value::U64(42)),
+                ("domain_id", Value::U64(7)),
+                (
+                    "sets",
+                    Value::List(vec![Value::List(vec![
+                        Value::U64(2),
+                        Value::U64(set_len as u64),
+                        Value::List(vec![Value::List(vec![
+                            Value::U64(256),
+                            Value::U64(2),
+                            Value::List(vec![
+                                Value::List(vec![Value::U64(8), Value::U64(4), Value::U64(0)]),
+                                Value::List(vec![
+                                    Value::U64(12345),
+                                    Value::U64(4),
+                                    Value::U64(99999),
+                                ]),
+                            ]),
+                        ])]),
+                    ])]),
+                ),
+            ],
+            expected_hint: Hint::Terminal,
+        }],
         outer_ctx: Vec::new(),
     });
 }

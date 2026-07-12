@@ -6,28 +6,44 @@
 use pktflow_core::Engine;
 
 pub mod arp;
+pub mod bacnet_ip;
+pub mod bgp;
 pub mod cdp;
 pub mod dhcp;
+pub mod dhcpv6;
+pub mod dnp3;
 pub mod dns;
 pub mod dot11;
 pub mod eapol;
 pub mod ethernet;
 pub mod gre;
+pub mod hsrp;
 pub mod icmpv4;
+pub mod icmpv6;
 pub mod igmp;
+pub mod ipfix;
 pub mod ipv4;
 pub mod ipv6;
 pub mod lacp;
 pub mod llc;
 pub mod lldp;
+pub mod mdns;
+pub mod mld;
+pub mod modbus;
+pub mod ndp;
+pub mod netflow9;
 pub mod ntp;
+pub mod ospf;
 pub mod pvst_plus;
 pub mod radiotap;
+pub mod snmp;
 pub mod stp;
+pub mod syslog;
 pub mod tcp;
 pub mod template;
 pub mod udp;
 pub mod vlan;
+pub mod vrrp;
 pub mod vxlan;
 
 /// The one registration list (PRD §8): adding a protocol end-to-end is a
@@ -42,13 +58,22 @@ pub fn default_engine() -> Engine {
         .plugin(arp::Arp)
         .plugin(cdp::Cdp)
         .plugin(icmpv4::Icmpv4)
+        .plugin(icmpv6::Icmpv6)
+        .plugin(ndp::Ndp)
+        .plugin(mld::Mld)
         .plugin(igmp::Igmp)
+        .plugin(vrrp::Vrrp)
+        .plugin(hsrp::Hsrp)
+        .plugin(ospf::Ospf)
         .plugin(tcp::Tcp)
         .plugin(udp::Udp)
+        .plugin(bgp::Bgp)
         .plugin(gre::Gre)
         .plugin(vxlan::Vxlan)
         .plugin(dns::Dns)
+        .plugin(mdns::Mdns)
         .plugin(dhcp::Dhcp)
+        .plugin(dhcpv6::Dhcpv6)
         .plugin(ntp::Ntp)
         .plugin(lldp::Lldp)
         .plugin(llc::Llc)
@@ -58,6 +83,13 @@ pub fn default_engine() -> Engine {
         .plugin(eapol::Eapol)
         .plugin(radiotap::Radiotap)
         .plugin(dot11::Dot11)
+        .plugin(modbus::Modbus)
+        .plugin(dnp3::Dnp3)
+        .plugin(bacnet_ip::BacnetIp)
+        .plugin(syslog::Syslog)
+        .plugin(snmp::Snmp)
+        .plugin(netflow9::Netflow9)
+        .plugin(ipfix::Ipfix)
         .build()
         // Not input-derived: a collision here is a bug in this very list,
         // caught by the registry's build-time validation (03.2).

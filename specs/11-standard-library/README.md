@@ -19,15 +19,15 @@ D13).
 
 - [x] [11.1 Link & LAN control/discovery](01-link-lan.md) — STP/RSTP, PVST+, LLDP, CDP, LACP, EAPOL/802.1X
 - [x] [11.2 Wireless link (802.11)](02-wireless-link.md) — 802.11 frame + radiotap, WPA2/3 handshake
-- [ ] [11.3 IPv6 control plane](03-ipv6-control-plane.md) — ICMPv6, NDP, MLDv1/v2, DHCPv6
-- [ ] [11.4 Routing protocols](04-routing-protocols.md) — BGP-4, OSPFv2/v3, VRRP, HSRP
+- [x] [11.3 IPv6 control plane](03-ipv6-control-plane.md) — ICMPv6, NDP, MLDv1/v2, DHCPv6
+- [x] [11.4 Routing protocols](04-routing-protocols.md) — BGP-4, OSPFv2/v3, VRRP, HSRP
 - [ ] [11.5 Tunnels, overlays & VPN](05-tunnels-overlays-vpn.md) — IPsec ESP/AH, WireGuard, L2TPv3, PPPoE, Geneve
 - [ ] [11.6 Transport extensions](06-transport-extensions.md) — SCTP, QUIC (invariants)
 - [ ] [11.7 Security, auth & directory](07-security-auth-directory.md) — TLS, SSH, RADIUS, Kerberos, LDAP
 - [ ] [11.8 Web & RPC](08-web-rpc.md) — HTTP/1.1, HTTP/2, WebSocket, STUN, TURN
 - [ ] [11.9 File & mail transfer](09-file-mail-transfer.md) — FTP, TFTP, SMTP, IMAP, POP3, SMB2/3, NFS
 - [ ] [11.10 Voice, video & real-time](10-voice-video-realtime.md) — SIP, RTP, RTCP
-- [ ] [11.11 Network management & telemetry](11-network-management-telemetry.md) — SNMP, Syslog, NetFlow v9, IPFIX
+- [x] [11.11 Network management & telemetry](11-network-management-telemetry.md) — SNMP, Syslog, NetFlow v9, IPFIX
 - [ ] [11.12 Service & name discovery](12-service-name-discovery.md) — mDNS, SSDP, LLMNR, NetBIOS-NS
 - [ ] [11.13 Industrial/OT (ICS-SCADA)](13-industrial-ot.md) — Modbus/TCP, DNP3, EtherNet/IP (CIP), BACnet/IP
 - [ ] [11.14 Data-center & app messaging](14-datacenter-app-messaging.md) — MQTT, AMQP 0-9-1, Redis (RESP)
