@@ -10,6 +10,7 @@ use pktflow_plugins::bgp::Bgp;
 use pktflow_plugins::cdp::Cdp;
 use pktflow_plugins::dhcp::Dhcp;
 use pktflow_plugins::dhcpv6::Dhcpv6;
+use pktflow_plugins::dnp3::Dnp3;
 use pktflow_plugins::dns::Dns;
 use pktflow_plugins::dot11::Dot11;
 use pktflow_plugins::eapol::Eapol;
@@ -1779,6 +1780,68 @@ fn modbus_conforms() {
                     ("function_code", Value::U64(0x83)),
                     ("is_exception", Value::Bool(true)),
                     ("exception_code", Value::U64(2)),
+                ],
+                expected_hint: Hint::Terminal,
+            },
+        ],
+        outer_ctx: Vec::new(),
+    });
+}
+
+/// A DNP3 Data Link Layer frame: sync + length + control, little-endian
+/// destination/source, a 2-byte header CRC (not validated), and — when
+/// `pdu` is non-empty — a transport header + application control byte
+/// ahead of it (IEEE 1815-2012 §9-10).
+fn dnp3_frame(destination: u16, source: u16, control: u8, pdu: &[u8]) -> Vec<u8> {
+    let user_data_len = if pdu.is_empty() { 0 } else { 1 + pdu.len() };
+    let length = 5 + user_data_len;
+    let mut f = vec![0x05, 0x64, length as u8, control];
+    f.extend_from_slice(&destination.to_le_bytes());
+    f.extend_from_slice(&source.to_le_bytes());
+    f.extend_from_slice(&[0xAB, 0xCD]); // header CRC
+    if !pdu.is_empty() {
+        f.push(0xC1); // transport header: FIN|FIR, seq 1
+        f.extend_from_slice(pdu);
+    }
+    f
+}
+
+#[test]
+fn dnp3_conforms() {
+    // Application Layer control byte + function code 1 (Read). The rollup
+    // kit requires every "good" sample to carry every declared rollup
+    // field (rule 3) — the no-user-data, link-layer-only shape (RESET_
+    // LINK_STATES et al.) is covered instead by `dnp3.rs`'s own unit test.
+    let read_request = dnp3_frame(1024, 3, 0xC4, &[0xC0, 0x01]);
+    // Function code 0x81 (a response), different control/addresses.
+    let response = dnp3_frame(3, 1024, 0x44, &[0xC0, 0x81]);
+
+    run_conformance(&ConformanceCase {
+        plugin: Box::new(Dnp3),
+        good: vec![
+            GoodPacket {
+                expected_header_len: response.len(),
+                bytes: response,
+                expected_full_fields: vec![
+                    ("source", Value::U64(1024)),
+                    ("destination", Value::U64(3)),
+                    ("start_bytes", Value::U64(0x0564)),
+                    ("length", Value::U64(8)),
+                    ("control", Value::U64(0x44)),
+                    ("function_code", Value::U64(0x81)),
+                ],
+                expected_hint: Hint::Terminal,
+            },
+            GoodPacket {
+                expected_header_len: read_request.len(),
+                bytes: read_request,
+                expected_full_fields: vec![
+                    ("source", Value::U64(3)),
+                    ("destination", Value::U64(1024)),
+                    ("start_bytes", Value::U64(0x0564)),
+                    ("length", Value::U64(8)),
+                    ("control", Value::U64(0xC4)),
+                    ("function_code", Value::U64(1)),
                 ],
                 expected_hint: Hint::Terminal,
             },

@@ -10,6 +10,7 @@ pub mod bgp;
 pub mod cdp;
 pub mod dhcp;
 pub mod dhcpv6;
+pub mod dnp3;
 pub mod dns;
 pub mod dot11;
 pub mod eapol;
@@ -80,6 +81,7 @@ pub fn default_engine() -> Engine {
         .plugin(radiotap::Radiotap)
         .plugin(dot11::Dot11)
         .plugin(modbus::Modbus)
+        .plugin(dnp3::Dnp3)
         .plugin(syslog::Syslog)
         .plugin(snmp::Snmp)
         .plugin(netflow9::Netflow9)

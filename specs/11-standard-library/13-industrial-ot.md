@@ -68,7 +68,7 @@ cross-segment reassembly).
 - [x] `modbus` fixtures cover Read Holding Registers, Write Single Register, and an
       exception response; two different `unit_id`s over one TCP connection produce two
       sibling streams (mirrors 06.5's two-VNIs test shape).
-- [ ] `dnp3` fixture parses link-layer header exactly; `start_bytes` probe honesty verified
+- [x] `dnp3` fixture parses link-layer header exactly; `start_bytes` probe honesty verified
       (non-`0x0564` bytes score `None`/low even with a plausible-looking rest of header).
 - [ ] `enip` fixture: RegisterSession → SendRRData sequence forms one `session_handle`
       stream; `cip_service` best-effort extraction verified against a real capture.
