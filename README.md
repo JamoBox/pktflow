@@ -2,7 +2,7 @@
 
 A plugin-extensible Rust engine that dissects captured network traffic and aggregates it
 into a browsable hierarchy of conversations and streams — MAC conversations, IP
-conversations, TCP/UDP sessions, and application-level streams (DNS, DHCP, ...), each
+conversations, TCP/UDP sessions, and application-level streams each
 carrying rolled-up metadata over its lifetime.
 
 A packet in isolation is noise. The signal is that two endpoints have an ongoing session,
