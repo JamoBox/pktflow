@@ -151,6 +151,50 @@ main > section.on { display: flex; }
 #qhelp .qk { color: var(--muted); }
 #qhelp code { font-family: var(--mono); color: var(--ink); background: var(--surface-3); border-radius: 3px; padding: 0 4px; }
 
+/* ── timeline view ──────────────────────────────────────── */
+.tl-scroll { flex: 1; min-height: 0; overflow: auto; }
+.tl-body { position: relative; min-width: 640px; }
+.tl-axis {
+  position: sticky; top: 0; z-index: 3; display: grid;
+  grid-template-columns: 340px 1fr; align-items: center;
+  background: var(--surface); border-bottom: 1px solid var(--border);
+  height: 26px; font-family: var(--mono); font-size: 11px; color: var(--muted);
+}
+.tl-axis .ticks { position: relative; height: 100%; }
+.tl-axis .tick { position: absolute; top: 5px; transform: translateX(-50%); white-space: nowrap; }
+.tl-axis .tick:first-child { transform: none; }
+.tl-axis .tick:last-child { transform: translateX(-100%); }
+.tl-row {
+  display: grid; grid-template-columns: 340px 1fr; align-items: center;
+  height: 24px; cursor: pointer; border-left: 2px solid transparent;
+}
+.tl-row:hover { background: var(--surface-2); }
+.tl-row.sel { background: var(--surface-3); border-left-color: var(--accent); }
+.tl-row.ctx { opacity: .5; }
+.tl-label {
+  font-family: var(--mono); font-size: 12px; white-space: nowrap;
+  overflow: hidden; text-overflow: ellipsis; padding: 0 10px;
+}
+.tl-label .chip { font-size: 12px; }
+.tl-label .sid { color: var(--muted); margin-left: 4px; }
+.tl-label .eps { color: var(--ink-2); margin-left: 8px; }
+.tl-track { position: relative; height: 100%; border-left: 1px solid var(--grid); }
+.tl-bar {
+  position: absolute; top: 6px; height: 12px; border-radius: 3px;
+  min-width: 3px; transition: opacity .15s, filter .15s;
+}
+.tl-bar.unborn { opacity: .16; }
+.tl-bar.done { opacity: .45; }
+.tl-bar.act { opacity: 1; box-shadow: 0 0 6px 0 rgba(255,255,255,.25); }
+.tl-ph {
+  position: absolute; top: 0; bottom: 0; width: 2px; z-index: 2;
+  background: #fff; opacity: .85; pointer-events: none;
+  box-shadow: 0 0 8px rgba(255,255,255,.4);
+}
+#tlTime { font-family: var(--mono); font-size: 13px; color: var(--ink); min-width: 110px; }
+#tlActive { font-family: var(--mono); font-size: 12px; color: var(--warning); }
+#tlScrub { flex: 1; accent-color: var(--accent); min-width: 160px; }
+
 /* ── detail pane ────────────────────────────────────────── */
 .crumbs { font-family: var(--mono); font-size: 12px; color: var(--muted); margin-bottom: 8px; overflow-wrap: anywhere; }
 .crumbs a { color: var(--accent); text-decoration: none; cursor: pointer; }
@@ -248,6 +292,7 @@ details.raw pre { font-family: var(--mono); font-size: 11.5px; background: var(-
 
 <nav class="tabs" id="tabs">
   <button data-tab="streams" class="on">Streams<span class="count" id="cStreams"></span></button>
+  <button data-tab="timeline">Timeline</button>
   <button data-tab="protocols">Protocols<span class="count" id="cProtos"></span></button>
   <button data-tab="unknown">Unknown<span class="count" id="cUnknown"></span></button>
 </nav>
@@ -279,6 +324,17 @@ details.raw pre { font-family: var(--mono); font-size: 11.5px; background: var(-
       <div class="tree-pane" id="tree" tabindex="0"></div>
       <div class="detail-pane" id="detail"><div class="empty">select a stream</div></div>
     </div>
+  </section>
+
+  <section id="view-timeline">
+    <div class="toolbar">
+      <button class="btn" id="tlPlay">▶ play</button>
+      <input type="range" id="tlScrub" min="0" max="1000" value="1000">
+      <span id="tlTime"></span>
+      <span id="tlActive"></span>
+      <span class="hint">drag to scrub · matches the search on the Streams tab · click a lane to drill in</span>
+    </div>
+    <div class="tl-scroll" id="tlScroll"></div>
   </section>
 
   <section id="view-protocols">
@@ -695,6 +751,119 @@ function seriesChart(points, values) {
   return wrap;
 }
 
+/* ── timeline view ─────────────────────────────────────── */
+/* One lane per visible stream (hierarchy order, query-aware): a bar
+   spanning the stream's lifetime on a shared time axis, plus a playhead.
+   Bars after the playhead are unborn (ghosted), bars it crosses are
+   active (bright + glow), bars before it are finished (dimmed). */
+const TL = { start: 0, end: 1, playTimer: null };
+function tlSpan() {
+  let start = Infinity, end = -Infinity;
+  for (const s of S.data.streams) {
+    start = Math.min(start, +new Date(s.first_seen));
+    end = Math.max(end, +new Date(s.last_seen));
+  }
+  if (!isFinite(start)) return null;
+  return { start, end: Math.max(end, start + 1) };
+}
+function fmtClock(ms) {
+  const d = new Date(ms);
+  return `${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}:${pad(d.getUTCSeconds())}.${pad(d.getUTCMilliseconds(), 3)}`;
+}
+function renderTimeline() {
+  const host = $("#tlScroll");
+  host.replaceChildren();
+  const span = tlSpan();
+  if (!span) {
+    host.append(el("div", "empty", S.data.summary.packets ? "no streams yet" : "waiting for packets…"));
+    return;
+  }
+  TL.start = span.start;
+  TL.end = span.end;
+
+  const body = el("div", "tl-body");
+  const axis = el("div", "tl-axis");
+  axis.append(el("span", null, ""));
+  const ticks = el("div", "ticks");
+  for (let i = 0; i <= 4; i++) {
+    const t = el("span", "tick", fmtClock(span.start + (span.end - span.start) * i / 4));
+    t.style.left = (i * 25) + "%";
+    ticks.append(t);
+  }
+  axis.append(ticks);
+  body.append(axis);
+
+  const spanMs = span.end - span.start;
+  for (const r of visibleRows().slice(0, MAX_TREE_ROWS)) {
+    const s = r.s;
+    const ctx = S.search.matches && !S.search.matches.has(s.id);
+    const row = el("div", "tl-row" + (s.id === S.sel ? " sel" : "") + (ctx ? " ctx" : ""));
+    row.dataset.id = s.id;
+
+    const label = el("div", "tl-label");
+    label.style.paddingLeft = 10 + r.depth * 14 + "px";
+    label.append(protoChip(s.protocol), el("span", "sid", "#" + s.id));
+    const eps = endpointsStr(s);
+    if (eps) label.append(el("span", "eps", eps));
+    row.append(label);
+
+    const track = el("div", "tl-track");
+    const bar = el("div", "tl-bar");
+    const first = +new Date(s.first_seen), last = +new Date(s.last_seen);
+    bar.dataset.first = first;
+    bar.dataset.last = last;
+    bar.style.left = ((first - span.start) / spanMs * 100) + "%";
+    bar.style.width = Math.max(0.3, (last - first) / spanMs * 100) + "%";
+    bar.style.background = protoColor(s.protocol);
+    hover(bar, () =>
+      `${s.protocol} #${s.id}  ${eps || ""}  ·  ${timeOfDay(s.first_seen)} → ${timeOfDay(s.last_seen)}` +
+      `  ·  ${thousands(tPkts(s))} pkts / ${humanBytes(tBytes(s))}`);
+    track.append(bar);
+    row.append(track);
+
+    row.onclick = () => { select(s.id); activateTab("streams"); };
+    body.append(row);
+  }
+
+  const ph = el("div", "tl-ph");
+  ph.id = "tlPh";
+  body.append(ph);
+  host.append(body);
+  updatePlayhead();
+}
+function updatePlayhead() {
+  const ph = $("#tlPh");
+  if (!ph) return;
+  const f = +$("#tlScrub").value / 1000;
+  const T = TL.start + (TL.end - TL.start) * f;
+  ph.style.left = `calc(340px + (100% - 340px) * ${f})`;
+  $("#tlTime").textContent = fmtClock(T);
+  let active = 0;
+  for (const bar of document.querySelectorAll("#tlScroll .tl-bar")) {
+    const first = +bar.dataset.first, last = +bar.dataset.last;
+    const cls = first > T ? "unborn" : last < T ? "done" : "act";
+    if (cls === "act") active++;
+    bar.className = "tl-bar " + cls;
+  }
+  $("#tlActive").textContent = `${active} active at playhead`;
+}
+$("#tlScrub").addEventListener("input", () => { stopPlay(); updatePlayhead(); });
+function stopPlay() {
+  if (TL.playTimer) { clearInterval(TL.playTimer); TL.playTimer = null; }
+  $("#tlPlay").textContent = "▶ play";
+}
+$("#tlPlay").onclick = () => {
+  if (TL.playTimer) { stopPlay(); return; }
+  const scrub = $("#tlScrub");
+  if (+scrub.value >= 1000) scrub.value = 0; // replay from the start
+  $("#tlPlay").textContent = "⏸ pause";
+  TL.playTimer = setInterval(() => {
+    scrub.value = Math.min(1000, +scrub.value + 5);
+    updatePlayhead();
+    if (+scrub.value >= 1000) stopPlay();
+  }, 50);
+};
+
 /* ── protocols view ────────────────────────────────────── */
 function renderProtocols() {
   const host = $("#protocols");
@@ -870,19 +1039,22 @@ function renderAll() {
   renderTiles();
   renderTree();
   renderDetail();
+  renderTimeline();
   renderProtocols();
   renderUnknown();
 }
 
 /* ── events ────────────────────────────────────────────── */
+function activateTab(name) {
+  S.tab = name;
+  for (const b of $("#tabs").children) b.classList.toggle("on", b.dataset.tab === name);
+  for (const sec of document.querySelectorAll("main > section")) {
+    sec.classList.toggle("on", sec.id === "view-" + name);
+  }
+}
 $("#tabs").addEventListener("click", ev => {
   const btn = ev.target.closest("button");
-  if (!btn) return;
-  S.tab = btn.dataset.tab;
-  for (const b of $("#tabs").children) b.classList.toggle("on", b === btn);
-  for (const sec of document.querySelectorAll("main > section")) {
-    sec.classList.toggle("on", sec.id === "view-" + S.tab);
-  }
+  if (btn) activateTab(btn.dataset.tab);
 });
 let searchTimer = null;
 $("#filter").addEventListener("input", ev => {
@@ -897,6 +1069,7 @@ async function runSearch() {
     S.search = { matches: null, visible: null, error: null };
     updateQueryStatus();
     renderTree();
+    renderTimeline();
     return;
   }
   try {
@@ -913,6 +1086,7 @@ async function runSearch() {
   }
   updateQueryStatus();
   renderTree();
+  renderTimeline();
 }
 function updateQueryStatus() {
   const st = $("#queryStatus");

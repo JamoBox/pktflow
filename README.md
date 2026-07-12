@@ -35,8 +35,10 @@ picture, not just decoding bytes. See [`PRD.md`](PRD.md) for the full product ra
 - **Two first-class front-ends beyond the CLI.** `pktflow tui` opens a full-screen
   terminal browser (ratatui) over the stream hierarchy — fold/unfold subtrees, drill into
   any stream's rollups, triage unknowns — and `pktflow serve` embeds a zero-dependency
-  web UI + JSON API + SSE live events in the binary. Both work offline and live. See
-  [`docs/tui-and-web.md`](docs/tui-and-web.md).
+  web UI + JSON API + SSE live events in the binary. Both include a **timeline view**:
+  per-stream lifetime lanes with a scrubbable/playable playhead, so temporal causality
+  (the DNS lookup firing just before the TCP session opens) is visible at a glance.
+  Both work offline and live. See [`docs/tui-and-web.md`](docs/tui-and-web.md).
 - 13 reference protocol plugins today: Ethernet, 802.1Q VLAN, ARP, IPv4, IPv6, ICMPv4, IGMP,
   TCP, UDP, GRE, VXLAN, DNS, DHCP, NTP.
 

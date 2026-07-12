@@ -48,6 +48,7 @@ fn event_loop(terminal: &mut ratatui::DefaultTerminal, hub: &Arc<SnapshotHub>) -
             paused: app.paused,
         };
         terminal.draw(|frame| ui::draw(frame, &mut app, &snapshot, &status))?;
+        app.tick(); // timeline playback advances with the redraw cadence
 
         // 100 ms tick: snappy keys, ~10 fps refresh while live.
         if event::poll(Duration::from_millis(100))? {
@@ -202,6 +203,44 @@ mod tests {
     }
 
     #[test]
+    fn timeline_tab_scrubs_and_renders_lanes() {
+        let snap = Arc::new(snapshot());
+        let mut app = App::default();
+        app.on_key(KeyEvent::from(KeyCode::Char('2')), &snap);
+        assert_eq!(app.tab, crate::app::Tab::Timeline);
+
+        // Scrub back from the live edge, coarse then fine.
+        app.on_key(KeyEvent::from(KeyCode::Char('[')), &snap);
+        app.on_key(KeyEvent::from(KeyCode::Left), &snap);
+        assert!((app.timeline_t - 0.88).abs() < 1e-9, "{}", app.timeline_t);
+        // Space from a mid-position plays without rewinding.
+        app.on_key(KeyEvent::from(KeyCode::Char(' ')), &snap);
+        assert!(app.timeline_playing);
+        app.tick();
+        assert!(app.timeline_t > 0.88);
+
+        let status = crate::ui::HubStatus {
+            source: "test.pcap".into(),
+            mode: "offline",
+            finished: true,
+            error: None,
+            paused: false,
+        };
+        let backend = TestBackend::new(120, 30);
+        let mut terminal = Terminal::new(backend).expect("test terminal");
+        terminal
+            .draw(|frame| crate::ui::draw(frame, &mut app, &snap, &status))
+            .expect("draw");
+        let rendered = format!("{:?}", terminal.backend().buffer());
+        for expect in ["timeline (3 lanes)", "active at playhead", "█"] {
+            assert!(
+                rendered.contains(expect),
+                "expected {expect:?} in frame:\n{rendered}"
+            );
+        }
+    }
+
+    #[test]
     fn frames_render_streams_unknown_and_summary_tabs() {
         let snap = Arc::new(snapshot());
         let mut app = App::default();
@@ -217,8 +256,8 @@ mod tests {
 
         for (key, expect) in [
             (None, "streams (3)"),
-            (Some(KeyCode::Char('2')), "no unknown protocols observed"),
-            (Some(KeyCode::Char('3')), "capture totals"),
+            (Some(KeyCode::Char('3')), "no unknown protocols observed"),
+            (Some(KeyCode::Char('4')), "capture totals"),
             (Some(KeyCode::Char('?')), "any key to close"),
         ] {
             if let Some(code) = key {

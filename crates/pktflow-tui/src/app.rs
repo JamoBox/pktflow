@@ -13,6 +13,7 @@ use crate::tree::{flatten, Sort};
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Tab {
     Streams,
+    Timeline,
     Unknown,
     Summary,
 }
@@ -20,7 +21,8 @@ pub enum Tab {
 impl Tab {
     pub fn next(self) -> Self {
         match self {
-            Tab::Streams => Tab::Unknown,
+            Tab::Streams => Tab::Timeline,
+            Tab::Timeline => Tab::Unknown,
             Tab::Unknown => Tab::Summary,
             Tab::Summary => Tab::Streams,
         }
@@ -50,6 +52,10 @@ pub struct App {
     /// Freeze the rendered snapshot during live capture (aggregation
     /// keeps running; unfreezing jumps to the newest state).
     pub paused: bool,
+    /// Timeline playhead as a fraction of the capture span; 1.0 = the
+    /// live edge / capture end (the neutral position).
+    pub timeline_t: f64,
+    pub timeline_playing: bool,
     pub quit: bool,
 }
 
@@ -70,6 +76,8 @@ impl Default for App {
             popup_scroll: 0,
             help: false,
             paused: false,
+            timeline_t: 1.0,
+            timeline_playing: false,
             quit: false,
         }
     }
@@ -129,13 +137,17 @@ impl App {
             KeyCode::Char('q') => self.quit = true,
             KeyCode::Char('?') => self.help = true,
             KeyCode::Char('1') => self.tab = Tab::Streams,
-            KeyCode::Char('2') => self.tab = Tab::Unknown,
-            KeyCode::Char('3') => self.tab = Tab::Summary,
+            KeyCode::Char('2') => self.tab = Tab::Timeline,
+            KeyCode::Char('3') => self.tab = Tab::Unknown,
+            KeyCode::Char('4') => self.tab = Tab::Summary,
             KeyCode::Tab => self.tab = self.tab.next(),
             KeyCode::Char('p') => self.paused = !self.paused,
-            KeyCode::Char('/') if self.tab == Tab::Streams => self.filter_editing = true,
+            KeyCode::Char('/') if matches!(self.tab, Tab::Streams | Tab::Timeline) => {
+                self.filter_editing = true
+            }
             _ => match self.tab {
                 Tab::Streams => self.on_streams_key(key, snapshot),
+                Tab::Timeline => self.on_timeline_key(key, snapshot),
                 Tab::Unknown => self.on_unknown_key(key, snapshot),
                 Tab::Summary => {}
             },
@@ -215,6 +227,49 @@ impl App {
             KeyCode::Char('J') => self.detail_scroll = self.detail_scroll.saturating_add(1),
             KeyCode::Char('K') => self.detail_scroll = self.detail_scroll.saturating_sub(1),
             _ => {}
+        }
+    }
+
+    /// Timeline: ←→ scrub (2% steps), `[`/`]` coarse (10%), Space
+    /// plays the playhead across the span, ↑↓ move the lane selection,
+    /// Enter opens the selected stream in the Streams tab.
+    fn on_timeline_key(&mut self, key: KeyEvent, snapshot: &Arc<AggregatorSnapshot>) {
+        let rows = flatten(snapshot, self.sort, &self.collapsed, self.query.as_ref());
+        let index = self.selected_index(&rows);
+        match key.code {
+            KeyCode::Left | KeyCode::Char('h') => self.scrub(-0.02),
+            KeyCode::Right | KeyCode::Char('l') => self.scrub(0.02),
+            KeyCode::Char('[') | KeyCode::PageUp => self.scrub(-0.10),
+            KeyCode::Char(']') | KeyCode::PageDown => self.scrub(0.10),
+            KeyCode::Home | KeyCode::Char('g') => self.scrub(f64::NEG_INFINITY),
+            KeyCode::End | KeyCode::Char('G') => self.scrub(f64::INFINITY),
+            KeyCode::Char(' ') => {
+                // Replay from the start when playing from the live edge.
+                if !self.timeline_playing && self.timeline_t >= 1.0 {
+                    self.timeline_t = 0.0;
+                }
+                self.timeline_playing = !self.timeline_playing;
+            }
+            KeyCode::Up | KeyCode::Char('k') => self.select_row(&rows, index.saturating_sub(1)),
+            KeyCode::Down | KeyCode::Char('j') => self.select_row(&rows, index.saturating_add(1)),
+            KeyCode::Enter => self.tab = Tab::Streams,
+            _ => {}
+        }
+    }
+
+    fn scrub(&mut self, delta: f64) {
+        self.timeline_playing = false;
+        self.timeline_t = (self.timeline_t + delta).clamp(0.0, 1.0);
+    }
+
+    /// One animation tick from the event loop (~10/s while playing).
+    pub fn tick(&mut self) {
+        if self.tab == Tab::Timeline && self.timeline_playing {
+            self.timeline_t += 0.01;
+            if self.timeline_t >= 1.0 {
+                self.timeline_t = 1.0;
+                self.timeline_playing = false;
+            }
         }
     }
 

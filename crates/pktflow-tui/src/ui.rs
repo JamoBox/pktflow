@@ -8,8 +8,8 @@ use pktflow_core::{PacketDirection, Value};
 use pktflow_flows::{AggregatorSnapshot, Rollup, Stream, StreamId, UnknownGroup};
 use pktflow_view::fmt::{hex_dump_lines, human_bytes, human_duration, thousands, time_of_day};
 use pktflow_view::{
-    by_id, child_chain_str, close_reason_str, endpoint_sides, endpoints_str, lineage_str,
-    total_bytes, total_packets,
+    by_id, capture_span, child_chain_str, close_reason_str, endpoint_sides, endpoints_str,
+    lineage_str, total_bytes, total_packets,
 };
 use ratatui::layout::{Alignment, Constraint, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
@@ -84,6 +84,7 @@ pub fn draw(frame: &mut Frame, app: &mut App, snapshot: &AggregatorSnapshot, sta
     draw_tabs(frame, tabs, app);
     match app.tab {
         Tab::Streams => draw_streams(frame, body, app, snapshot),
+        Tab::Timeline => draw_timeline(frame, body, app, snapshot),
         Tab::Unknown => draw_unknown(frame, body, app, snapshot),
         Tab::Summary => draw_summary(frame, body, snapshot),
     }
@@ -138,11 +139,12 @@ fn draw_header(frame: &mut Frame, area: Rect, snapshot: &AggregatorSnapshot, sta
 fn draw_tabs(frame: &mut Frame, area: Rect, app: &App) {
     let [left, right] =
         Layout::horizontal([Constraint::Min(30), Constraint::Length(40)]).areas(area);
-    let titles = ["[1] Streams", "[2] Unknown", "[3] Summary"];
+    let titles = ["[1] Streams", "[2] Timeline", "[3] Unknown", "[4] Summary"];
     let index = match app.tab {
         Tab::Streams => 0,
-        Tab::Unknown => 1,
-        Tab::Summary => 2,
+        Tab::Timeline => 1,
+        Tab::Unknown => 2,
+        Tab::Summary => 3,
     };
     frame.render_widget(
         Tabs::new(titles.iter().map(|t| Line::from(*t)))
@@ -185,6 +187,9 @@ fn draw_footer(frame: &mut Frame, area: Rect, app: &App, status: &HubStatus) {
         let hints = match app.tab {
             Tab::Streams => {
                 " ↑↓ move · ←→ fold · Enter toggle · / filter · s sort · e/c un/fold all · J/K detail · Tab tab · ? help · q quit"
+            }
+            Tab::Timeline => {
+                " ←→ scrub · [ ] jump · Space play · ↑↓ lane · Enter open in Streams · / filter · Tab tab · q quit"
             }
             Tab::Unknown => " ↑↓ move · Enter drill-down · Tab tab · ? help · q quit",
             Tab::Summary => " Tab tab · ? help · q quit",
@@ -541,6 +546,185 @@ fn rollup_lines(protocol: &str, field: &str, rollup: &Rollup, lines: &mut Vec<Li
     }
 }
 
+/// The time-lane view: one lane per stream (hierarchy order, honoring
+/// the query), a lifetime bar per lane, and a playhead the user scrubs.
+/// Bars entirely after the playhead haven't been born yet (ghosted),
+/// bars it crosses are active (bright), bars before it are finished
+/// (dimmed) — temporal causality at a glance.
+fn draw_timeline(frame: &mut Frame, area: Rect, app: &mut App, snapshot: &AggregatorSnapshot) {
+    let rows = flatten(snapshot, app.sort, &app.collapsed, app.query.as_ref());
+    let span = capture_span(snapshot);
+    let (Some((span_start, span_end)), false) = (span, rows.is_empty()) else {
+        frame.render_widget(
+            Paragraph::new("waiting for packets…")
+                .style(Style::new().fg(DIM))
+                .block(
+                    Block::default()
+                        .borders(Borders::ALL)
+                        .border_style(Style::new().fg(DIM)),
+                ),
+            area,
+        );
+        return;
+    };
+    let span_secs = span_end
+        .duration_since(span_start)
+        .unwrap_or_default()
+        .as_secs_f64()
+        .max(0.001);
+    let playhead = span_start + std::time::Duration::from_secs_f64(span_secs * app.timeline_t);
+
+    let index = app.selected_index(&rows);
+    if let Some(row) = rows.get(index) {
+        app.selected = Some(row.stream.created_seq);
+    }
+
+    let [axis_area, lanes_area] =
+        Layout::vertical([Constraint::Length(1), Constraint::Min(3)]).areas(area);
+
+    // Column geometry: fixed label column, the rest is the time track.
+    let label_w: u16 = 44.min(area.width / 2);
+    let bar_w = lanes_area
+        .width
+        .saturating_sub(2 + label_w + 1) // borders + column spacing
+        .max(10) as usize;
+    let t_col = ((bar_w - 1) as f64 * app.timeline_t).round() as usize;
+
+    let active = rows
+        .iter()
+        .filter(|r| r.stream.first_seen <= playhead && r.stream.last_seen >= playhead)
+        .count();
+    let axis = Line::from(vec![
+        Span::styled(
+            format!(" {} ", time_of_day(span_start)),
+            Style::new().fg(DIM),
+        ),
+        Span::styled(
+            format!("◀────  ▶ {}  ────▶", time_of_day(playhead)),
+            Style::new().fg(ACCENT).add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(
+            format!("  {} ", time_of_day(span_end)),
+            Style::new().fg(DIM),
+        ),
+        Span::styled(
+            format!(
+                "   {} active at playhead{}",
+                active,
+                if app.timeline_playing {
+                    "   ▶ playing"
+                } else {
+                    ""
+                }
+            ),
+            Style::new().fg(Color::Yellow),
+        ),
+    ]);
+    frame.render_widget(Paragraph::new(axis), axis_area);
+
+    let table_rows: Vec<Row> = rows
+        .iter()
+        .map(|r| timeline_lane(r, span_start, span_secs, bar_w, t_col, playhead))
+        .collect();
+    let mut state = TableState::default().with_selected(Some(index));
+    let table = Table::new(
+        table_rows,
+        [Constraint::Length(label_w), Constraint::Fill(1)],
+    )
+    .row_highlight_style(Style::new().bg(Color::Rgb(40, 48, 60)))
+    .block(
+        Block::default()
+            .borders(Borders::ALL)
+            .border_style(Style::new().fg(DIM))
+            .title(Span::styled(
+                format!(" timeline ({} lanes) ", rows.len()),
+                Style::new().fg(ACCENT),
+            )),
+    );
+    frame.render_stateful_widget(table, lanes_area, &mut state);
+}
+
+fn timeline_lane<'a>(
+    r: &TreeRow<'a>,
+    span_start: std::time::SystemTime,
+    span_secs: f64,
+    bar_w: usize,
+    t_col: usize,
+    playhead: std::time::SystemTime,
+) -> Row<'a> {
+    let s = r.stream;
+    let mut label = format!(
+        "{}{} #{}",
+        " ".repeat(r.prefix.chars().count() / 3),
+        s.protocol,
+        s.created_seq
+    );
+    let endpoints = endpoints_str(s);
+    if !endpoints.is_empty() {
+        label.push_str("  ");
+        label.push_str(&endpoints);
+    }
+
+    let frac = |ts: std::time::SystemTime| {
+        (ts.duration_since(span_start)
+            .unwrap_or_default()
+            .as_secs_f64()
+            / span_secs)
+            .clamp(0.0, 1.0)
+    };
+    let x0 = (frac(s.first_seen) * (bar_w - 1) as f64).floor() as usize;
+    let x1 = ((frac(s.last_seen) * (bar_w - 1) as f64).ceil() as usize).max(x0);
+
+    // Lifetime phase relative to the playhead.
+    let bar_style = if s.first_seen > playhead {
+        Style::new().fg(Color::Rgb(70, 70, 70)) // unborn: ghost
+    } else if s.last_seen < playhead {
+        Style::new()
+            .fg(proto_color(s.protocol))
+            .add_modifier(Modifier::DIM)
+    } else {
+        Style::new()
+            .fg(proto_color(s.protocol))
+            .add_modifier(Modifier::BOLD)
+    };
+
+    fn push_run(spans: &mut Vec<Span>, from: usize, to: usize, ch: char, style: Style) {
+        if to > from {
+            spans.push(Span::styled(ch.to_string().repeat(to - from), style));
+        }
+    }
+    let mut spans: Vec<Span> = Vec::with_capacity(5);
+    let track = Style::new().fg(Color::Rgb(45, 45, 43));
+    // Segments in order: track, bar, track — then overlay the playhead.
+    let segs = [
+        (0, x0, '·', track),
+        (x0, x1 + 1, '█', bar_style),
+        (x1 + 1, bar_w, '·', track),
+    ];
+    for (from, to, ch, style) in segs {
+        let (from, to) = (from.min(bar_w), to.min(bar_w));
+        if t_col >= from && t_col < to {
+            push_run(&mut spans, from, t_col, ch, style);
+            let ph_ch = if ch == '█' { '┃' } else { '│' };
+            spans.push(Span::styled(
+                ph_ch.to_string(),
+                Style::new().fg(Color::White).add_modifier(Modifier::BOLD),
+            ));
+            push_run(&mut spans, t_col + 1, to, ch, style);
+        } else {
+            push_run(&mut spans, from, to, ch, style);
+        }
+    }
+
+    Row::new(vec![
+        Cell::from(Line::from(Span::styled(
+            label,
+            Style::new().fg(proto_color(s.protocol)),
+        ))),
+        Cell::from(Line::from(spans)),
+    ])
+}
+
 fn unknown_context(g: &UnknownGroup) -> String {
     match g.key.route {
         Some(route) => format!("{} → {route}", g.key.predecessor),
@@ -833,6 +1017,10 @@ fn draw_help(frame: &mut Frame) {
         ),
         ("J / K", "scroll the detail pane"),
         ("p", "pause/resume live snapshot updates"),
+        (
+            "←→ [ ] Space",
+            "timeline: scrub · coarse jump · play/replay",
+        ),
         ("g / G", "jump to top / bottom"),
         ("?", "this help"),
     ];

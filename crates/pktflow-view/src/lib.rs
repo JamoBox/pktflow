@@ -16,6 +16,6 @@ pub mod stream_view;
 pub use hub::SnapshotHub;
 pub use query::{QueryError, StreamQuery};
 pub use stream_view::{
-    by_id, child_chain_str, close_reason_str, endpoint_sides, endpoints_str, lineage_str,
-    total_bytes, total_packets,
+    by_id, capture_span, child_chain_str, close_reason_str, endpoint_sides, endpoints_str,
+    lineage_str, total_bytes, total_packets,
 };

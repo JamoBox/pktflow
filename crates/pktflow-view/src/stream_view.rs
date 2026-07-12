@@ -3,6 +3,7 @@
 //! per-stream totals each table column sums from.
 
 use std::collections::HashMap;
+use std::time::SystemTime;
 
 use pktflow_core::PacketDirection;
 use pktflow_flows::{AggregatorSnapshot, CloseReason, Stream, StreamId};
@@ -120,6 +121,15 @@ pub fn child_chain_str(child: &Stream, ids: &HashMap<StreamId, &Stream>) -> Stri
         };
     }
     parts.join(" ▸ ")
+}
+
+/// The capture's observed time extent: earliest `first_seen` to latest
+/// `last_seen` across all streams — the timeline views' x-axis. `None`
+/// while no streams exist yet.
+pub fn capture_span(snapshot: &AggregatorSnapshot) -> Option<(SystemTime, SystemTime)> {
+    let start = snapshot.streams.iter().map(|s| s.first_seen).min()?;
+    let end = snapshot.streams.iter().map(|s| s.last_seen).max()?;
+    Some((start, end))
 }
 
 /// Close reasons as display strings (hyphenated display convention; the

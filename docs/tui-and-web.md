@@ -21,6 +21,12 @@ A full-screen ratatui session with three tabs:
   as the `streams` view) beside a live drill-down pane: endpoints, lineage,
   timing, per-direction ratio bars, lifecycle state, opaque bytes, every
   rollup (numeric series render as sparklines), and the child chains.
+- **Timeline** — one lane per stream (hierarchy order, honoring the
+  query filter), a protocol-colored bar spanning each stream's lifetime,
+  and a playhead: `←→` scrub (`[`/`]` coarse), `Space` plays it across
+  the capture, `↑↓` picks a lane, `Enter` opens it in the Streams tab.
+  Lanes ahead of the playhead are ghosted (unborn), crossed lanes are
+  bright (active — counted in the header), passed lanes dim (finished).
 - **Unknown** — the 10.2 registry ranked by count; `Enter` opens a drill-down
   with near-miss confidence bars, retained-sample hex dumps, and the
   `--scaffold` command to copy.
@@ -49,7 +55,11 @@ air-gapped. The page is a dark single-screen app: stat tiles, a searchable/
 sortable stream tree with per-protocol color chips (the search bar speaks
 the full [query language](query-language.md), evaluated server-side, with
 a live match count, dimmed ancestor-context rows, and a `syntax ?`
-cheat-sheet), a drill-down panel
+cheat-sheet), a **Timeline tab** (per-stream lifetime lanes on a shared
+time axis with a draggable/playable scrubber, unborn/active/finished
+dimming, and click-through to the drill-down — it honors the current
+search, so you can scrub through only `under == vxlan` traffic), a
+drill-down panel
 (breadcrumb lineage, direction-split bar, rollups with hoverable series
 charts, child links, raw JSON), a protocol byte-distribution chart with
 stop-class chips, and the unknown-triage table with in-browser hex dumps.
