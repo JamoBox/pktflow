@@ -15,6 +15,7 @@ pub mod dnp3;
 pub mod dns;
 pub mod dot11;
 pub mod eapol;
+pub mod enip;
 pub mod ethernet;
 pub mod gre;
 pub mod hsrp;
@@ -85,6 +86,7 @@ pub fn default_engine() -> Engine {
         .plugin(dot11::Dot11)
         .plugin(modbus::Modbus)
         .plugin(dnp3::Dnp3)
+        .plugin(enip::Enip)
         .plugin(bacnet_ip::BacnetIp)
         .plugin(syslog::Syslog)
         .plugin(snmp::Snmp)
