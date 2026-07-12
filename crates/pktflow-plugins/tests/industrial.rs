@@ -4,7 +4,12 @@
 //! two-VNIs shared-qualifier shape. DNP3's station-pair identity, by
 //! contrast, is a full endpoint key (`source`/`destination`) — the same
 //! shape as TCP's own five-tuple — so a request/response exchange folds
-//! into one session with direction flipping, not two.
+//! into one session with direction flipping, not two. BACnet/IP's `app`
+//! shared-constant key (the same app-stream pattern `dns`/`syslog`/`snmp`
+//! use) folds a unicast request/ACK exchange into one stream via the
+//! parent UDP stream's own endpoint-sort symmetry, while a broadcast
+//! discovery message — with no reply on the same UDP 4-tuple — stays its
+//! own single-packet stream.
 
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
@@ -213,6 +218,111 @@ fn request_and_response_fold_into_one_station_pair_session() {
         Some(Rollup::Accumulate { values, count, .. }) => {
             assert_eq!(*count, 2);
             assert_eq!(values.as_slice(), [Value::U64(1), Value::U64(0x81)]);
+        }
+        other => panic!("wrong rollup: {other:?}"),
+    }
+}
+
+fn ipv4_udp_header(src: [u8; 4], dst: [u8; 4]) -> Vec<u8> {
+    let mut h = vec![
+        0x45, 0x00, 0x00, 0x3C, 0x1C, 0x46, 0x40, 0x00, 0x40, 17, 0, 0,
+    ];
+    h.extend_from_slice(&src);
+    h.extend_from_slice(&dst);
+    let ck = internet_checksum(&h);
+    h[10..12].copy_from_slice(&ck.to_be_bytes());
+    h
+}
+
+fn udp_datagram(src_port: u16, dst_port: u16, payload: &[u8]) -> Vec<u8> {
+    let mut d = Vec::new();
+    d.extend_from_slice(&src_port.to_be_bytes());
+    d.extend_from_slice(&dst_port.to_be_bytes());
+    d.extend_from_slice(&((8 + payload.len()) as u16).to_be_bytes());
+    d.extend_from_slice(&[0x00, 0x00]); // checksum disabled (RFC 768, legal on IPv4)
+    d.extend_from_slice(payload);
+    d
+}
+
+/// A BACnet/IP (Annex J) message: 4-byte BVLC header wrapping `npdu_and_after`.
+fn bacnet_ip_message(function: u8, npdu_and_after: &[u8]) -> Vec<u8> {
+    let length = (4 + npdu_and_after.len()) as u16;
+    let mut b = vec![0x81, function];
+    b.extend_from_slice(&length.to_be_bytes());
+    b.extend_from_slice(npdu_and_after);
+    b
+}
+
+fn bacnet_udp_frame(src: [u8; 4], dst: [u8; 4], sport: u16, dport: u16, msg: &[u8]) -> Vec<u8> {
+    let mut f = eth();
+    f.extend_from_slice(&ipv4_udp_header(src, dst));
+    f.extend_from_slice(&udp_datagram(sport, dport, msg));
+    f
+}
+
+/// An unrestricted Who-Is broadcast (Original-Broadcast-NPDU) with no
+/// reply on the same UDP 4-tuple stays its own single-packet app-stream —
+/// the discovery-traffic shape 11.13's module doc calls out as
+/// non-session-shaped.
+#[test]
+fn who_is_broadcast_forms_its_own_app_stream() {
+    let engine = Arc::new(default_engine());
+    let mut agg = Aggregator::new(&engine, AggregatorConfig::default());
+
+    let who_is = bacnet_ip_message(0x0B, &[0x01, 0x00, 0x10, 0x08]);
+    let frame = bacnet_udp_frame([10, 0, 0, 5], [10, 0, 0, 255], 47808, 47808, &who_is);
+    agg.ingest(&engine.dissect(&frame, meta(frame.len(), 0), ParseOpts::default()));
+
+    let bacnet_streams = agg.at_layer("bacnet_ip");
+    assert_eq!(bacnet_streams.len(), 1);
+    match bacnet_streams[0].rollups.get("service_choice") {
+        Some(Rollup::Accumulate { values, count, .. }) => {
+            assert_eq!(*count, 1);
+            assert_eq!(values.as_slice(), [Value::U64(8)]); // Who-Is
+        }
+        other => panic!("wrong rollup: {other:?}"),
+    }
+}
+
+/// A unicast ReadProperty request/ComplexACK response pair: the parent
+/// UDP stream folds both directions together (its own endpoint-sort port
+/// pair), and BACnet/IP's shared `app` key rides along, so this is one
+/// `bacnet_ip` stream, not two — the session-shaped traffic 11.13's
+/// module doc contrasts with broadcast discovery.
+#[test]
+fn read_property_request_and_ack_fold_into_one_app_stream() {
+    let engine = Arc::new(default_engine());
+    let mut agg = Aggregator::new(&engine, AggregatorConfig::default());
+
+    // Client -> server: Confirmed-Request, ReadProperty (service choice 12).
+    let request_npdu = [0x01, 0x04, 0x00, 0x05, 0x01, 0x0C];
+    let request = bacnet_ip_message(0x0A, &request_npdu);
+    let request_frame = bacnet_udp_frame([10, 0, 0, 5], [10, 0, 0, 1], 47810, 47808, &request);
+
+    // Server -> client: ComplexACK for the same service (service choice 12).
+    let ack_npdu = [0x01, 0x00, 0x30, 0x01, 0x0C];
+    let ack = bacnet_ip_message(0x0A, &ack_npdu);
+    let ack_frame = bacnet_udp_frame([10, 0, 0, 1], [10, 0, 0, 5], 47808, 47810, &ack);
+
+    agg.ingest(&engine.dissect(
+        &request_frame,
+        meta(request_frame.len(), 0),
+        ParseOpts::default(),
+    ));
+    agg.ingest(&engine.dissect(&ack_frame, meta(ack_frame.len(), 1), ParseOpts::default()));
+
+    let udp_stream = agg.at_layer("udp")[0];
+    let bacnet_streams = agg.at_layer("bacnet_ip");
+    assert_eq!(
+        bacnet_streams.len(),
+        1,
+        "one app-stream, both directions folded via the shared app key"
+    );
+    assert_eq!(bacnet_streams[0].parent, Some(udp_stream.id));
+    match bacnet_streams[0].rollups.get("service_choice") {
+        Some(Rollup::Accumulate { values, count, .. }) => {
+            assert_eq!(*count, 2);
+            assert_eq!(values.as_slice(), [Value::U64(12)]);
         }
         other => panic!("wrong rollup: {other:?}"),
     }

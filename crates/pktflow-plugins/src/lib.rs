@@ -6,6 +6,7 @@
 use pktflow_core::Engine;
 
 pub mod arp;
+pub mod bacnet_ip;
 pub mod bgp;
 pub mod cdp;
 pub mod dhcp;
@@ -82,6 +83,7 @@ pub fn default_engine() -> Engine {
         .plugin(dot11::Dot11)
         .plugin(modbus::Modbus)
         .plugin(dnp3::Dnp3)
+        .plugin(bacnet_ip::BacnetIp)
         .plugin(syslog::Syslog)
         .plugin(snmp::Snmp)
         .plugin(netflow9::Netflow9)

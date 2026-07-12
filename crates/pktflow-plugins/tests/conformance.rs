@@ -6,6 +6,7 @@ mod kit;
 use pktflow_core::{Canonicalize, FieldMap, KeyField, LayerRecord, StreamIdentity};
 use pktflow_core::{Hint, RouteId, Value};
 use pktflow_plugins::arp::Arp;
+use pktflow_plugins::bacnet_ip::BacnetIp;
 use pktflow_plugins::bgp::Bgp;
 use pktflow_plugins::cdp::Cdp;
 use pktflow_plugins::dhcp::Dhcp;
@@ -1842,6 +1843,65 @@ fn dnp3_conforms() {
                     ("length", Value::U64(8)),
                     ("control", Value::U64(0xC4)),
                     ("function_code", Value::U64(1)),
+                ],
+                expected_hint: Hint::Terminal,
+            },
+        ],
+        outer_ctx: Vec::new(),
+    });
+}
+
+/// A BACnet/IP (Annex J) message: 4-byte BVLC header (type `0x81`,
+/// `function`, big-endian total-length) wrapping `npdu_and_after` (NPDU +
+/// APDU, present only for `Original-Unicast-NPDU`/`Original-Broadcast-
+/// NPDU`/`Forwarded-NPDU`).
+fn bacnet_ip_frame(function: u8, npdu_and_after: &[u8]) -> Vec<u8> {
+    let length = (4 + npdu_and_after.len()) as u16;
+    let mut b = vec![0x81, function];
+    b.extend_from_slice(&length.to_be_bytes());
+    b.extend_from_slice(npdu_and_after);
+    b
+}
+
+#[test]
+fn bacnet_ip_conforms() {
+    // Unrestricted Who-Is broadcast (Original-Broadcast-NPDU, 0x0B):
+    // NPDU version 1, control 0x00 (no routing, local broadcast),
+    // Unconfirmed-Request APDU, service choice 8 (Who-Is).
+    let who_is = bacnet_ip_frame(0x0B, &[0x01, 0x00, 0x10, 0x08]);
+
+    // Unicast ReadProperty (Original-Unicast-NPDU, 0x0A) answered by a
+    // ComplexACK, both unsegmented, service choice 12 (ReadProperty),
+    // trailing bytes are the (undecoded) object-identifier/property-value
+    // parameters.
+    let mut complex_ack_npdu = vec![0x01, 0x00, 0x30, 0x01, 0x0C];
+    complex_ack_npdu.extend_from_slice(&[0x3E, 0x44, 0x00, 0x00, 0x00, 0x00, 0x3F]);
+    let read_property_ack = bacnet_ip_frame(0x0A, &complex_ack_npdu);
+
+    run_conformance(&ConformanceCase {
+        plugin: Box::new(BacnetIp),
+        good: vec![
+            GoodPacket {
+                expected_header_len: who_is.len(),
+                bytes: who_is,
+                expected_full_fields: vec![
+                    ("app", Value::from("bacnet")),
+                    ("bvlc_function", Value::U64(0x0B)),
+                    ("npdu_control", Value::U64(0x00)),
+                    ("apdu_type", Value::U64(1)),
+                    ("service_choice", Value::U64(8)),
+                ],
+                expected_hint: Hint::Terminal,
+            },
+            GoodPacket {
+                expected_header_len: read_property_ack.len(),
+                bytes: read_property_ack,
+                expected_full_fields: vec![
+                    ("app", Value::from("bacnet")),
+                    ("bvlc_function", Value::U64(0x0A)),
+                    ("npdu_control", Value::U64(0x00)),
+                    ("apdu_type", Value::U64(3)),
+                    ("service_choice", Value::U64(12)),
                 ],
                 expected_hint: Hint::Terminal,
             },
