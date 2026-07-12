@@ -5,7 +5,7 @@
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
-use pktflow_core::{LinkType, PacketMeta, ParseOpts, ProtocolName};
+use pktflow_core::{LinkType, PacketMeta, ParseOpts, ProtocolName, StopReason};
 use pktflow_flows::{Aggregator, AggregatorConfig, StreamId};
 use pktflow_plugins::default_engine;
 use pktflow_plugins::ipv4::internet_checksum;
@@ -81,6 +81,16 @@ fn geneve(vni: u32, protocol_type: u16) -> Vec<u8> {
     g.extend_from_slice(&vni.to_be_bytes()[1..4]);
     g.push(0);
     g
+}
+
+/// ESP header (RFC 4303 §2): SPI + Sequence Number, then `ciphertext` —
+/// bytes this plugin must never look inside, however plausible they look.
+fn esp(spi: u32, sequence: u32, ciphertext: &[u8]) -> Vec<u8> {
+    let mut e = Vec::new();
+    e.extend_from_slice(&spi.to_be_bytes());
+    e.extend_from_slice(&sequence.to_be_bytes());
+    e.extend_from_slice(ciphertext);
+    e
 }
 
 /// Walks the single root-to-leaf chain, returning protocols in order.
@@ -249,6 +259,78 @@ fn two_vnis_over_one_outer_udp_are_sibling_geneve_streams() {
     );
     assert!(geneves.iter().all(|g| g.parent == Some(outer_udp.id)));
     assert_ne!(geneves[0].key, geneves[1].key);
+}
+
+#[test]
+fn esp_fixture_stops_terminal_at_encryption_boundary_no_phantom_stream() {
+    // 11.5's real-encrypted-tunnel mirror of transport.rs's
+    // `encrypted_udp_no_phantom` (03.4/D12): the ciphertext trailing the
+    // ESP header opens with bytes that would parse as a plausible TCP
+    // SYN header (port 443, SYN flags) were anything foolish enough to
+    // hand them to the tcp plugin. `Hint::Terminal` must mean that never
+    // happens, no matter how header-shaped the ciphertext looks.
+    let engine = Arc::new(default_engine());
+    let mut agg = Aggregator::new(&engine, AggregatorConfig::default());
+
+    let ciphertext = [
+        0x87, 0x07, 0x01, 0xBB, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x50, 0x02, 0xFF,
+        0xFF, 0x00, 0x00, 0x00, 0x00,
+    ];
+    let mut frame = eth(MAC_B, MAC_A, 0x0800);
+    frame.extend_from_slice(&ipv4(50, [192, 168, 0, 1], [192, 168, 0, 2]));
+    frame.extend_from_slice(&esp(0x1000_0001, 1, &ciphertext));
+
+    let packet = engine.dissect(&frame, meta(frame.len(), 0), ParseOpts::default());
+    let protocols: Vec<ProtocolName> = packet.layers.iter().map(|l| l.protocol).collect();
+    assert_eq!(protocols, ["ethernet", "ipv4", "esp"], "stops at esp");
+    assert_eq!(packet.stop, StopReason::Terminal);
+
+    agg.ingest(&packet);
+    assert_eq!(agg.at_layer("esp").len(), 1);
+    assert_eq!(
+        agg.at_layer("tcp").len(),
+        0,
+        "no phantom TCP stream from ciphertext"
+    );
+    assert_eq!(agg.at_layer("esp")[0].opaque_bytes, ciphertext.len() as u64);
+}
+
+#[test]
+fn two_directions_of_one_esp_tunnel_are_sibling_streams_under_one_ip_conversation() {
+    // RFC 4303 §2.1: SPI is unidirectional, each direction of a security
+    // association picks its own SPI. This must fall out of keying on spi
+    // alone (shared-qualifier shape, no `b` field) — no ESP-specific
+    // aggregator code makes this happen (11.5's acceptance criterion).
+    let engine = Arc::new(default_engine());
+    let mut agg = Aggregator::new(&engine, AggregatorConfig::default());
+
+    let a_to_b = {
+        let mut f = eth(MAC_B, MAC_A, 0x0800);
+        f.extend_from_slice(&ipv4(50, [192, 168, 0, 1], [192, 168, 0, 2]));
+        f.extend_from_slice(&esp(0x1000_0001, 1, &[0xAA; 4]));
+        f
+    };
+    let b_to_a = {
+        let mut f = eth(MAC_A, MAC_B, 0x0800);
+        f.extend_from_slice(&ipv4(50, [192, 168, 0, 2], [192, 168, 0, 1]));
+        f.extend_from_slice(&esp(0x2000_0002, 1, &[0xBB; 4]));
+        f
+    };
+    agg.ingest(&engine.dissect(&a_to_b, meta(a_to_b.len(), 0), ParseOpts::default()));
+    agg.ingest(&engine.dissect(&b_to_a, meta(b_to_a.len(), 1), ParseOpts::default()));
+
+    let ip_conversations = agg.at_layer("ipv4");
+    assert_eq!(
+        ip_conversations.len(),
+        1,
+        "one folded IP conversation between the two hosts"
+    );
+    let esps = agg.at_layer("esp");
+    assert_eq!(esps.len(), 2, "each direction's SPI is its own esp stream");
+    assert!(esps
+        .iter()
+        .all(|e| e.parent == Some(ip_conversations[0].id)));
+    assert_ne!(esps[0].key, esps[1].key);
 }
 
 #[test]

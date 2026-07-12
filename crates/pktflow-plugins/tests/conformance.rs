@@ -16,6 +16,7 @@ use pktflow_plugins::dns::Dns;
 use pktflow_plugins::dot11::Dot11;
 use pktflow_plugins::eapol::Eapol;
 use pktflow_plugins::enip::Enip;
+use pktflow_plugins::esp::Esp;
 use pktflow_plugins::ethernet::Ethernet;
 use pktflow_plugins::geneve::Geneve;
 use pktflow_plugins::gre::Gre;
@@ -1072,6 +1073,27 @@ fn geneve_conforms() {
                 expected_hint: Hint::Route(RouteId::EtherType(0x0800)),
             },
         ],
+        outer_ctx: Vec::new(),
+    });
+}
+
+#[test]
+fn esp_conforms() {
+    run_conformance(&ConformanceCase {
+        plugin: Box::new(Esp),
+        good: vec![GoodPacket {
+            // RFC 4303 §2: SPI 0x1234_5678, sequence 42, then opaque
+            // ciphertext this plugin must never interpret.
+            bytes: vec![
+                0x12, 0x34, 0x56, 0x78, 0x00, 0x00, 0x00, 0x2A, 0xDE, 0xAD, 0xBE, 0xEF,
+            ],
+            expected_header_len: 8,
+            expected_full_fields: vec![
+                ("spi", Value::U64(0x1234_5678)),
+                ("sequence", Value::U64(42)),
+            ],
+            expected_hint: Hint::Terminal,
+        }],
         outer_ctx: Vec::new(),
     });
 }
