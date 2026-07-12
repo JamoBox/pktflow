@@ -19,6 +19,16 @@ use run::StopFlags;
 /// Executes a parsed command line. Views print to stdout; the FR-27
 /// summary always goes to stderr (pipe safety, 08.1).
 pub fn dispatch(cli: Cli, stop: &StopFlags) -> Result<(), CliError> {
+    use std::sync::OnceLock;
+    static ENGINE: OnceLock<std::sync::Arc<pktflow_core::Engine>> = OnceLock::new();
+    let engine = ENGINE.get_or_init(|| {
+        std::sync::Arc::new(pktflow_plugins::default_engine())
+    });
+    let engine_clone = engine.clone();
+    pktflow_view::fmt::register_route_resolver(move |route_id| {
+        engine_clone.plugin_for_route(route_id).map(|p| p.name().to_string())
+    });
+
     match cli.command {
         Command::Streams(args) => {
             // `--where` parses before any capture opens: a bad query is a

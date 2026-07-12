@@ -37,7 +37,7 @@
           "observations": 3,
           "overflow": false,
           "values": [
-            "2048"
+            "IPv4 (0x0800)"
           ]
         }
       },
@@ -77,7 +77,7 @@
           "observations": 3,
           "overflow": false,
           "values": [
-            "47"
+            "GRE (47)"
           ]
         }
       },
@@ -145,7 +145,7 @@
           "observations": 3,
           "overflow": false,
           "values": [
-            "6"
+            "TCP (6)"
           ]
         }
       },
