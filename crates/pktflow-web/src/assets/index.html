@@ -579,7 +579,10 @@ function renderHeader() {
   bar.style.display = m.error ? "block" : "none";
   if (m.error) bar.textContent = "pipeline error: " + m.error;
 }
-const lastTiles = new Map(); // previous values, to flash changed ones
+/* Tiles patch in place — live refetches land ~2/s and a rebuild every
+   tick reads as flicker. The bump flash is rate-limited per tile so a
+   busy capture pulses instead of strobing. */
+const lastBump = new Map();
 function renderTiles() {
   const sum = S.data.summary;
   const tiles = [
@@ -590,15 +593,29 @@ function renderTiles() {
     ["unknown groups", String(S.data.unknowns.length), ""],
   ];
   const host = $("#tiles");
-  host.replaceChildren();
-  for (const [k, v, s] of tiles) {
-    const t = el("div", "tile");
-    const changed = lastTiles.has(k) && lastTiles.get(k) !== v;
-    lastTiles.set(k, v);
-    t.append(el("div", "k", k), el("div", "v" + (changed ? " bump" : ""), v));
-    if (s) t.append(el("div", "s", s));
-    host.append(t);
+  if (host.childElementCount !== tiles.length) {
+    host.replaceChildren();
+    for (const [k] of tiles) {
+      const t = el("div", "tile");
+      t.append(el("div", "k", k), el("div", "v"), el("div", "s"));
+      host.append(t);
+    }
   }
+  const now = performance.now();
+  tiles.forEach(([k, v, s], i) => {
+    const t = host.children[i];
+    const vEl = t.children[1], sEl = t.children[2];
+    const changed = vEl.textContent !== "" && vEl.textContent !== v;
+    vEl.textContent = v;
+    sEl.textContent = s;
+    sEl.style.display = s ? "" : "none";
+    if (changed && now - (lastBump.get(k) || 0) > 1500) {
+      lastBump.set(k, now);
+      vEl.classList.remove("bump");
+      void vEl.offsetWidth; // restart the animation
+      vEl.classList.add("bump");
+    }
+  });
   $("#cStreams").textContent = S.data.streams.length ? `(${thousands(S.data.streams.length)})` : "";
   $("#cProtos").textContent = sum.per_protocol.length ? `(${sum.per_protocol.length})` : "";
   $("#cUnknown").textContent = S.data.unknowns.length ? `(${S.data.unknowns.length})` : "";
@@ -683,10 +700,12 @@ function renderTree() {
 }
 function toggle(id) {
   if (S.collapsed.has(id)) S.collapsed.delete(id); else S.collapsed.add(id);
+  dirty.timeline = true; // lanes follow the fold state
   renderTree();
 }
 function select(id) {
   S.sel = id;
+  dirty.timeline = true; // lane highlight follows the selection
   renderTree();
   renderDetail();
   const sel = $("#tree .row.sel");
@@ -708,7 +727,17 @@ function kvRow(k, v) {
 function renderDetail() {
   const host = $("#detail");
   const s = S.byId.get(S.sel);
-  if (!s) { host.replaceChildren(el("div", "empty", "select a stream")); return; }
+  if (!s) {
+    host.replaceChildren(el("div", "empty", "select a stream"));
+    delete host.dataset.id;
+    return;
+  }
+  // Live refetches re-render the same stream in place: keep the scroll
+  // position and the raw-JSON fold so the pane doesn't jump mid-read.
+  const sameStream = host.dataset.id === String(s.id);
+  const prevScroll = host.scrollTop;
+  const rawOpen = sameStream && !!(host.querySelector("details.raw") || {}).open;
+  host.dataset.id = s.id;
   host.replaceChildren();
 
   const crumbs = el("div", "crumbs");
@@ -785,6 +814,7 @@ function renderDetail() {
   }
 
   const raw = el("details", "raw");
+  raw.open = rawOpen;
   const summary = el("summary", null, "raw record (JSON)");
   const copy = el("button", "copybtn", "copy");
   copy.onclick = ev => {
@@ -798,6 +828,7 @@ function renderDetail() {
   raw.append(summary);
   raw.append(el("pre", null, JSON.stringify(s, null, 2)));
   host.append(raw);
+  host.scrollTop = sameStream ? prevScroll : 0;
 }
 
 function rollupNode(field, r) {
@@ -811,9 +842,9 @@ function rollupNode(field, r) {
     for (const v of r.values) chips.append(el("span", "c", String(v)));
     box.append(chips);
   } else if (r.kind === "sample") {
-    box.append(el("div", "chips")).append(
-      el("span", "c", `${r.first ?? "—"} → ${r.last ?? "—"}`)
-    );
+    const chips = el("div", "chips");
+    chips.append(el("span", "c", `${r.first ?? "—"} → ${r.last ?? "—"}`));
+    box.append(chips);
   } else if (r.kind === "series") {
     title.append(el("span", "rk", `${r.points.length} pts${r.truncated ? " · truncated" : ""}`));
     const numeric = r.points.map(p => Number(p.value));
@@ -899,6 +930,7 @@ function fmtClock(ms) {
 }
 function renderTimeline() {
   const host = $("#tlScroll");
+  const scroll = host.scrollTop;
   host.replaceChildren();
   const span = tlSpan();
   if (!span) {
@@ -921,6 +953,9 @@ function renderTimeline() {
   body.append(axis);
 
   const spanMs = span.end - span.start;
+  // Bars are born with their playhead state — adding it after insertion
+  // would replay the opacity transition on every live rebuild.
+  const T = span.start + spanMs * (+$("#tlScrub").value / 1000);
   for (const r of visibleRows().slice(0, MAX_TREE_ROWS)) {
     const s = r.s;
     const ctx = S.search.matches && !S.search.matches.has(s.id);
@@ -935,8 +970,8 @@ function renderTimeline() {
     row.append(label);
 
     const track = el("div", "tl-track");
-    const bar = el("div", "tl-bar");
     const first = +new Date(s.first_seen), last = +new Date(s.last_seen);
+    const bar = el("div", "tl-bar " + (first > T ? "unborn" : last < T ? "done" : "act"));
     bar.dataset.first = first;
     bar.dataset.last = last;
     bar.style.left = ((first - span.start) / spanMs * 100) + "%";
@@ -956,6 +991,7 @@ function renderTimeline() {
   ph.id = "tlPh";
   body.append(ph);
   host.append(body);
+  host.scrollTop = scroll;
   updatePlayhead();
 }
 function updatePlayhead() {
@@ -994,6 +1030,7 @@ $("#tlPlay").onclick = () => {
 /* ── protocols view ────────────────────────────────────── */
 function renderProtocols() {
   const host = $("#protocols");
+  const scroll = host.scrollTop;
   host.replaceChildren();
   const sum = S.data.summary;
 
@@ -1036,12 +1073,14 @@ function renderProtocols() {
     w.style.color = "var(--serious)";
     host.append(w);
   }
+  host.scrollTop = scroll;
 }
 
 /* ── unknown view ──────────────────────────────────────── */
 function unkContext(g) { return g.route ? `${g.predecessor} → ${g.route}` : g.predecessor; }
 function renderUnknown() {
   const list = $("#unkList");
+  const scroll = list.scrollTop;
   list.replaceChildren();
   const groups = S.data.unknowns;
   if (!groups.length) {
@@ -1063,10 +1102,14 @@ function renderUnknown() {
     row.onclick = () => { S.unkSel = i; renderUnknown(); };
     list.append(row);
   });
+  list.scrollTop = scroll;
   renderUnknownDetail(groups[S.unkSel], S.unkSel);
 }
 function renderUnknownDetail(g, index) {
   const host = $("#unkDetail");
+  const sameGroup = host.dataset.sel === String(index);
+  const prevScroll = host.scrollTop;
+  host.dataset.sel = index;
   host.replaceChildren();
   const head = el("div", "dhead");
   const t = el("span", "proto", unkContext(g));
@@ -1121,6 +1164,7 @@ function renderUnknownDetail(g, index) {
   hint.append(el("div", "codehint",
     `pktflow unknown -r <capture> '#${index + 1}' --scaffold <plugin-name>   # generate a starter plugin for this traffic`));
   host.append(hint);
+  host.scrollTop = sameGroup ? prevScroll : 0;
 }
 function hexDump(hex) {
   const box = el("div", "hexdump");
@@ -1234,16 +1278,25 @@ function esc(s) {
 }
 
 /* ── render root ───────────────────────────────────────── */
+/* Live refetches land ~2/s; rebuilding four hidden panes per tick is
+   wasted work and visible jank. Only the active tab renders — the rest
+   are marked dirty and catch up when activated. */
+const dirty = { streams: false, timeline: false, protocols: false, unknown: false };
 function renderAll() {
   if (!S.data) return;
   $("#boot").classList.add("off");
   renderHeader();
   renderTiles();
-  renderTree();
-  renderDetail();
-  renderTimeline();
-  renderProtocols();
-  renderUnknown();
+  dirty.streams = dirty.timeline = dirty.protocols = dirty.unknown = true;
+  renderActive();
+}
+function renderActive() {
+  if (!S.data || !dirty[S.tab]) return;
+  dirty[S.tab] = false;
+  if (S.tab === "streams") { renderTree(); renderDetail(); }
+  else if (S.tab === "timeline") renderTimeline();
+  else if (S.tab === "protocols") renderProtocols();
+  else if (S.tab === "unknown") renderUnknown();
 }
 
 /* ── events ────────────────────────────────────────────── */
@@ -1253,6 +1306,7 @@ function activateTab(name) {
   for (const sec of document.querySelectorAll("main > section")) {
     sec.classList.toggle("on", sec.id === "view-" + name);
   }
+  renderActive();
 }
 $("#tabs").addEventListener("click", ev => {
   const btn = ev.target.closest("button");
@@ -1285,8 +1339,8 @@ async function runSearch() {
   if (!q) {
     S.search = { matches: null, visible: null, error: null };
     updateQueryStatus();
-    renderTree();
-    renderTimeline();
+    dirty.streams = dirty.timeline = true;
+    renderActive();
     return;
   }
   try {
@@ -1302,8 +1356,8 @@ async function runSearch() {
     S.search = { matches: null, visible: null, error: "search request failed" };
   }
   updateQueryStatus();
-  renderTree();
-  renderTimeline();
+  dirty.streams = dirty.timeline = true;
+  renderActive();
 }
 function updateQueryStatus() {
   const st = $("#queryStatus");
@@ -1319,10 +1373,11 @@ function updateQueryStatus() {
     st.className = "qstatus";
   }
 }
-$("#sortSel").addEventListener("change", ev => { S.sort = ev.target.value; renderTree(); });
-$("#expandAll").onclick = () => { S.collapsed.clear(); renderTree(); };
+$("#sortSel").addEventListener("change", ev => { S.sort = ev.target.value; dirty.timeline = true; renderTree(); });
+$("#expandAll").onclick = () => { S.collapsed.clear(); dirty.timeline = true; renderTree(); };
 $("#collapseAll").onclick = () => {
   S.collapsed = new Set(S.data.streams.filter(s => s.children.length).map(s => s.id));
+  dirty.timeline = true;
   renderTree();
 };
 document.addEventListener("keydown", ev => {
