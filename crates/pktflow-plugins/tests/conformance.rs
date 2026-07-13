@@ -38,6 +38,7 @@ use pktflow_plugins::ospf::Ospf;
 use pktflow_plugins::pvst_plus::PvstPlus;
 use pktflow_plugins::radiotap::Radiotap;
 use pktflow_plugins::snmp::Snmp;
+use pktflow_plugins::ssdp::Ssdp;
 use pktflow_plugins::stp::Stp;
 use pktflow_plugins::syslog::Syslog;
 use pktflow_plugins::tcp::Tcp;
@@ -2052,6 +2053,77 @@ fn syslog_conforms() {
                     ("version", Value::U64(0)),
                     ("hostname", Value::from("mymachine")),
                     ("app_name", Value::from("su")),
+                ],
+                expected_hint: Hint::Terminal,
+            },
+        ],
+        outer_ctx: Vec::new(),
+    });
+}
+
+#[test]
+fn ssdp_conforms() {
+    // Hand-built against the UPnP Device Architecture v2.0 §1.2 examples
+    // (NOTIFY shape; ssdp.rs's own module doc has the full citation — there
+    // is no ratified IETF RFC for SSDP). Both good samples are `ssdp:alive`
+    // announcements (NOTIFY is the only message type that legally carries
+    // both of ssdp's rollup fields, `nts` and `location`, at once — the
+    // kit's rule 3 requires every rollup field on every good sample; the
+    // M-SEARCH-request and search-response shapes, where `nts` is absent
+    // by protocol design, are covered instead by ssdp.rs's own fixtures
+    // and application.rs's app-stream test).
+    let alive_root_device = b"NOTIFY * HTTP/1.1\r\n\
+HOST: 239.255.255.250:1900\r\n\
+CACHE-CONTROL: max-age=1800\r\n\
+LOCATION: http://192.168.1.20:8080/description.xml\r\n\
+NT: upnp:rootdevice\r\n\
+NTS: ssdp:alive\r\n\
+USN: uuid:4d696e69-1dd2-11b2-8349-e31881a5f45a::upnp:rootdevice\r\n\
+\r\n"
+        .to_vec();
+
+    let alive_content_directory = b"NOTIFY * HTTP/1.1\r\n\
+HOST: 239.255.255.250:1900\r\n\
+CACHE-CONTROL: max-age=1800\r\n\
+LOCATION: http://192.168.1.20:8080/description.xml\r\n\
+NT: urn:schemas-upnp-org:service:ContentDirectory:1\r\n\
+NTS: ssdp:alive\r\n\
+USN: uuid:4d696e69-1dd2-11b2-8349-e31881a5f45a::urn:schemas-upnp-org:service:ContentDirectory:1\r\n\
+\r\n"
+        .to_vec();
+
+    run_conformance(&ConformanceCase {
+        plugin: Box::new(Ssdp),
+        good: vec![
+            GoodPacket {
+                expected_header_len: alive_root_device.len(),
+                bytes: alive_root_device,
+                expected_full_fields: vec![
+                    ("app", Value::from("ssdp")),
+                    ("method", Value::from("NOTIFY")),
+                    ("nts", Value::from("ssdp:alive")),
+                    ("location", Value::from("http://192.168.1.20:8080/description.xml")),
+                    (
+                        "usn",
+                        Value::from("uuid:4d696e69-1dd2-11b2-8349-e31881a5f45a::upnp:rootdevice"),
+                    ),
+                ],
+                expected_hint: Hint::Terminal,
+            },
+            GoodPacket {
+                expected_header_len: alive_content_directory.len(),
+                bytes: alive_content_directory,
+                expected_full_fields: vec![
+                    ("app", Value::from("ssdp")),
+                    ("method", Value::from("NOTIFY")),
+                    ("nts", Value::from("ssdp:alive")),
+                    ("location", Value::from("http://192.168.1.20:8080/description.xml")),
+                    (
+                        "usn",
+                        Value::from(
+                            "uuid:4d696e69-1dd2-11b2-8349-e31881a5f45a::urn:schemas-upnp-org:service:ContentDirectory:1",
+                        ),
+                    ),
                 ],
                 expected_hint: Hint::Terminal,
             },

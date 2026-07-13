@@ -277,6 +277,91 @@ fn mdns_response_reports_cache_flush_bit() {
     );
 }
 
+fn ssdp_frame(src: [u8; 4], dst: [u8; 4], sport: u16, dport: u16, msg: &[u8]) -> Vec<u8> {
+    let mut f = eth();
+    f.extend_from_slice(&ipv4_udp(src, dst, sport, dport, msg));
+    f
+}
+
+#[test]
+fn ssdp_app_stream_accumulates_nts_and_samples_location() {
+    // A device's ssdp:alive announcement followed by its ssdp:byebye
+    // withdrawal (UPnP DA v2.0 §1.2.1/§1.2.3), both multicast from the
+    // same source — one app-stream, `nts` accumulating both distinct
+    // values, `location` sampling first/last (byebye carries none, so
+    // `last` stays the alive announcement's URL).
+    let engine = Arc::new(default_engine());
+    let mut agg = Aggregator::new(&engine, AggregatorConfig::default());
+
+    let alive = b"NOTIFY * HTTP/1.1\r\n\
+HOST: 239.255.255.250:1900\r\n\
+LOCATION: http://192.168.1.20:8080/description.xml\r\n\
+NT: upnp:rootdevice\r\n\
+NTS: ssdp:alive\r\n\
+USN: uuid:4d696e69::upnp:rootdevice\r\n\
+\r\n";
+    let byebye = b"NOTIFY * HTTP/1.1\r\n\
+HOST: 239.255.255.250:1900\r\n\
+NT: upnp:rootdevice\r\n\
+NTS: ssdp:byebye\r\n\
+USN: uuid:4d696e69::upnp:rootdevice\r\n\
+\r\n";
+
+    for (i, msg) in [alive.as_slice(), byebye.as_slice()].iter().enumerate() {
+        let frame = ssdp_frame([10, 0, 0, 20], [239, 255, 255, 250], 1900, 1900, msg);
+        agg.ingest(&engine.dissect(&frame, meta(frame.len(), i as u64), ParseOpts::default()));
+    }
+
+    let udp_stream = agg.at_layer("udp")[0];
+    let ssdp_streams = agg.at_layer("ssdp");
+    assert_eq!(ssdp_streams.len(), 1, "one app-stream per transport stream");
+    assert_eq!(ssdp_streams[0].parent, Some(udp_stream.id));
+
+    match ssdp_streams[0].rollups.get("nts") {
+        Some(Rollup::Accumulate { values, count, .. }) => {
+            assert_eq!(*count, 2);
+            assert_eq!(
+                values.as_slice(),
+                [Value::from("ssdp:alive"), Value::from("ssdp:byebye")]
+            );
+        }
+        other => panic!("wrong rollup: {other:?}"),
+    }
+    match ssdp_streams[0].rollups.get("location") {
+        Some(Rollup::Sample { first, last }) => {
+            let url = Some(Value::from("http://192.168.1.20:8080/description.xml"));
+            assert_eq!(first, &url);
+            assert_eq!(last, &url);
+        }
+        other => panic!("wrong rollup: {other:?}"),
+    }
+}
+
+#[test]
+fn ssdp_m_search_and_response_are_declined_as_ssdp_by_a_get_request() {
+    // Claim-honesty check (06.6's port-claim note, applied here): a
+    // non-SSDP payload on port 1900 must decline as `ssdp`, not silently
+    // misparse as one.
+    let engine = Arc::new(default_engine());
+    let bogus = b"GET / HTTP/1.1\r\nHost: example.com\r\n\r\n";
+    let frame = ssdp_frame([10, 0, 0, 1], [10, 0, 0, 2], 1900, 1900, bogus);
+    let packet = engine.dissect(&frame, meta(frame.len(), 0), ParseOpts::default());
+    let protocols: Vec<_> = packet.layers.iter().map(|l| l.protocol).collect();
+    assert_eq!(protocols, ["ethernet", "ipv4", "udp"]);
+    assert_eq!(packet.stop, StopReason::PluginError);
+}
+
+proptest! {
+    /// Same parser-bomb discipline as syslog/SNMP: arbitrary bytes behind
+    /// the claimed port must never panic the header-block/line scanner.
+    #[test]
+    fn ssdp_parse_never_panics(payload in proptest::collection::vec(any::<u8>(), 0..300)) {
+        let engine = Arc::new(default_engine());
+        let frame = ssdp_frame([10, 0, 0, 1], [10, 0, 0, 2], 1900, 1900, &payload);
+        let _ = engine.dissect(&frame, meta(frame.len(), 0), ParseOpts::default());
+    }
+}
+
 /// BOOTP + magic cookie + options (53 = msg_type, then END).
 fn dhcp_msg(op: u8, xid: u32, msg_type: u8) -> Vec<u8> {
     let mut m = vec![op, 1, 6, 0];
