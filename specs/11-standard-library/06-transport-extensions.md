@@ -55,10 +55,10 @@ transport or crypto, purely the invariant-level framing D12 permits).
 | MPTCP options | RFC 8684 | Rides inside TCP's own `options` field (06.4) — a refinement of the existing `tcp` plugin's `Full`-tier extraction, not a new claimed route |
 
 ## Acceptance criteria
-- [ ] `sctp` fixture walks a full association lifecycle (INIT/INIT-ACK/COOKIE-ECHO/
+- [x] `sctp` fixture walks a full association lifecycle (INIT/INIT-ACK/COOKIE-ECHO/
       COOKIE-ACK/DATA/SHUTDOWN sequence) hitting every named state, mirroring 06.4's TCP
       lifecycle criterion exactly.
-- [ ] `sctp` multi-chunk-bundle fixture: only the first chunk's type/fields are asserted;
+- [x] `sctp` multi-chunk-bundle fixture: only the first chunk's type/fields are asserted;
       no attempt to walk a second bundled chunk (explicit non-goal, tested not just stated).
 - [ ] `quic` fixtures: Initial, 0-RTT, Handshake, Retry Long-header packets parse
       `dcid`/`scid`/`packet_type` exactly; a Short-header packet stops `Terminal` with no

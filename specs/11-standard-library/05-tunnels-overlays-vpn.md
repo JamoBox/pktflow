@@ -106,17 +106,17 @@ Geneve:   eth ▸ ipv4 ▸ udp ▸ geneve ▸ ipv4 ▸ ...          (EtherType r
 | NSH | RFC 8300 | Service function chaining header |
 
 ## Acceptance criteria
-- [ ] `esp`/`ah` fixtures: AH correctly routes to its inner transport layer; ESP stops
+- [x] `esp`/`ah` fixtures: AH correctly routes to its inner transport layer; ESP stops
       `Terminal` at the encryption boundary with no fabricated inner stream (D12/PRD §4.B.4
       "no phantom streams" applied to a real encrypted-tunnel case, not just encrypted UDP).
-- [ ] `wireguard` fixtures cover all four message types on both the default port (static
+- [x] `wireguard` fixtures cover all four message types on both the default port (static
       claim) and a non-default port (probe-based fallback-pool admission) — both must reach
       the same plugin and produce the same parsed fields.
-- [ ] `l2tpv3` data-path fixture nests a full inner Ethernet stack under the `session_id`
+- [x] `l2tpv3` data-path fixture nests a full inner Ethernet stack under the `session_id`
       stream; control-path fixture stops `Terminal` without misinterpreting AVPs as data.
 - [ ] `pppoe ▸ ppp ▸ ipv4` fixture proves the translation-hint mechanism end-to-end with
       the **unmodified** 06.3 `ipv4` plugin (no `claims()` diff in that file) — the specific
       claim this domain makes about zero-touch reuse.
-- [ ] `geneve` fixture mirrors 06.5's VXLAN two-VNIs-one-outer-stream test.
+- [x] `geneve` fixture mirrors 06.5's VXLAN two-VNIs-one-outer-stream test.
 - [ ] All five hierarchies above asserted node-by-node, same rigor as 06.5's acceptance
       criteria.
