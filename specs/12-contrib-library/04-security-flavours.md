@@ -41,6 +41,9 @@ turning "unknown UDP noise" / "unknown EtherType" into named, stream-forming tra
 | kpasswd | RFC 3244 | `UdpPort(464)`/`TcpPort(464)`; Kerberos password-change, companion to 11.7's `kerberos` |
 | Tor | *No standard* — Tor project spec (`tor-spec.txt`) | TLS-wrapped with deliberately unremarkable externals; heuristic identification only, and an honesty write-up is most of the work |
 | OCSP | RFC 6960 | Rides HTTP — a refinement of 11.8's `http` (content-type dispatch), nothing routable of its own |
+| DNS-over-QUIC | RFC 9250 | `UdpPort(853)` — a QUIC claim refinement (app label); needs 11.6's `quic` built first, D12 ceiling = QUIC invariants |
+| NTS (NTP security) | RFC 8915 | NTS-KE on `TcpPort(4460)` is TLS (D12 = `tls` fields); NTS extension fields on NTP itself are a 06.6 `ntp` refinement |
+| WPA3/OWE SAE frames | IEEE 802.11-2020 (SAE) | An 11.2 `dot11`-adjacent refinement (auth-frame body), listed here because the analytic frame is authentication, not wireless |
 
 ## Acceptance criteria
 - [ ] `dtls` fixtures: a ClientHello (with SNI + ALPN) / HelloVerifyRequest / ServerHello

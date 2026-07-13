@@ -39,6 +39,9 @@ line are gated by the same feature, so every feature subset builds a consistent 
 | `enterprise` | 12.11 |
 | `voip` | 12.12 |
 | `industrial` | 12.13 |
+| `fabric` | 12.14 |
+| `observability` | 12.15 |
+| `gaming` | 12.16 |
 
 `default = ["full"]`; `full` enables every domain. Consumers wanting a slice depend with
 `default-features = false` plus the domains they need. `--no-default-features` alone must

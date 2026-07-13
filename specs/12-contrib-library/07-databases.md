@@ -61,6 +61,9 @@ protocol docs; *no standards body*, the project documentation is canonical).
 | ZooKeeper | *Project doc* — Apache ZooKeeper jute protocol | `TcpPort(2181)`; coordination traffic, four-letter admin words |
 | Couchbase | *Project doc* — memcached binary protocol derivative | `TcpPort(11210)`; taxonomy-adjacent to 11.14's Tier-2 Memcached, kept distinct deliberately |
 | InfluxDB line protocol | *Project doc* | UDP writes only (the HTTP API is 11.8's territory) |
+| MySQL X Protocol | *Project doc* (Oracle) — protobuf-based | `TcpPort(33060)`; the document-store sibling of `mysql` above, a different wire format entirely |
+| SQL Server Browser | *No open standard* — Microsoft [MS-SQLR] | `UdpPort(1434)`; instance discovery — tiny, high-recognition datagrams (and the Slammer port, forensically evergreen) |
+| CockroachDB / TiDB | *Project docs* | Speak the PostgreSQL v3 / MySQL wire protocols respectively — served by `pgsql`/`mysql` above once their ports (26257, 4000) are considered; a claim-extension decision, not new parsers |
 
 ## Acceptance criteria
 - [ ] `mysql` fixture: server greeting + login + COM_QUERY + COM_QUIT sequence parses

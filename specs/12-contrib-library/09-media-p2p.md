@@ -54,6 +54,10 @@ body*).
 | SRT | *Not yet an RFC* — Haivision's published spec (draft-sharabayko-srt) | Live-video contribution transport, UDP |
 | Icecast/SHOUTcast source | *Project docs* | HTTP-shaped on arbitrary ports; mostly an 11.8 `http` refinement |
 | RTMPS / RTMPT | Adobe | TLS-/HTTP-tunneled RTMP — D12/11.8 territory respectively; named so the taxonomy shows the variants were placed, not forgotten |
+| Chromecast (CASTv2) | *Semi-documented* — Chromium source is the reference | `TcpPort(8009)`, TLS-wrapped protobuf — D12 ceiling = `tls` fields; the port is contested space (see 12.10's `nvme_tcp` note) |
+| AirPlay | *No open standard* (Apple; community-documented) | mDNS-advertised (11.12) + RTSP-derived control — mostly lands when 11.10's Tier-2 RTSP promotes |
+| Syncthing local discovery | *Project doc* (syncthing.net) | `UdpPort(21027)`, magic `0x2EA7D90B` — the sync traffic itself is TLS on 22000 (D12) |
+| BitTorrent LSD | BEP-14 | HTTP-shaped announcements on UDP multicast `UdpPort(6771)` — completes this file's swarm-discovery story alongside the DHT |
 
 ## Acceptance criteria
 - [ ] `rtmp` fixture: C0C1/S0S1S2 handshake then `connect` + `createStream` + `play`

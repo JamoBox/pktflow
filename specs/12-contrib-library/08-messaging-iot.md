@@ -71,6 +71,9 @@ bodies.
 | OMA LwM2M | OMA-TS-LightweightM2M | Rides CoAP — a `uri_path`-aware refinement of `coap`, not a new claim |
 | Matter | CSA Matter specification | `UdpPort(5540)`; almost fully encrypted — D12 ceiling ≈ message-header flags only |
 | SMPP | SMPP v3.4/v5.0 (SMS Forum) | `TcpPort(2775)`; SMS gateway traffic — telco-adjacent but broker-shaped |
+| Apache Pulsar | *Project doc* — Pulsar binary protocol | `TcpPort(6650)`; length-prefixed protobuf commands |
+| NSQ | *Project doc* (nsq.io) | `TcpPort(4150)`; `  V2` magic + size-prefixed frames |
+| RabbitMQ Stream | *Project doc* | `TcpPort(5552)`; the third distinct wire protocol from one broker (after AMQP 0-9-1/1.0) — the taxonomy note writes itself |
 
 ## Acceptance criteria
 - [ ] `coap` fixture: CON GET → ACK 2.05 exchange parses exactly including `uri_path`

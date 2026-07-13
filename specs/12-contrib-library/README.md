@@ -31,10 +31,13 @@ task unchanged).
 - [ ] [12.7 Databases & datastores](07-databases.md) — MySQL, PostgreSQL, TDS (MS SQL Server), MongoDB
 - [ ] [12.8 Messaging & IoT](08-messaging-iot.md) — CoAP, XMPP, IRC, NATS, STOMP
 - [ ] [12.9 Media, streaming & P2P](09-media-p2p.md) — RTMP, BitTorrent peer wire, BitTorrent DHT
-- [ ] [12.10 Storage & SAN](10-storage-san.md) — iSCSI, NBD
+- [ ] [12.10 Storage & SAN](10-storage-san.md) — iSCSI, NBD, NVMe/TCP
 - [ ] [12.11 Enterprise services & printing](11-enterprise-printing.md) — IPP, LPD, Git pack protocol
 - [ ] [12.12 VoIP & telephony flavours](12-voip-flavours.md) — MGCP, IAX2
 - [ ] [12.13 Industrial & building automation flavours](13-industrial-flavours.md) — PROFINET (DCP/RT), EtherCAT, IEC 61850 GOOSE, KNXnet/IP
+- [ ] [12.14 Data-centre fabric & RPC](14-dc-fabric-rpc.md) — RoCEv2, SunRPC/portmapper, PROXY protocol, GRETAP
+- [ ] [12.15 Observability & telemetry pipelines](15-observability.md) — StatsD, Graphite, Zabbix
+- [ ] [12.16 Gaming & consumer realtime](16-gaming-consumer.md) — Source A2S, Minecraft
 
 ## Conventions (all plugins in this task)
 

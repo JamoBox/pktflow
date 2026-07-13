@@ -35,7 +35,7 @@ merged behavior change is reflected back into its spec in the same PR. The summa
 | 09 | [Validation](09-validation/README.md) | Plugin test kit, fixtures, e2e stream tests, benchmarks | all |
 | 10 | [Developer diagnostics](10-diagnostics/README.md) | `pktflow unknown`: grouped unclassified traffic, near-miss scores, export/scaffold | 03, 04, 05, 08 |
 | 11 | [Standard plugin library](11-standard-library/README.md) | Batteries-included protocol coverage: link/wireless/routing/tunnels/transport/security/web/file/voice/telemetry/discovery/OT/DC-messaging/telco, tiered (D13) | 02–06 |
-| 12 | [Contrib plugin library](12-contrib-library/README.md) | Optional `pktflow-contrib` crate (opt-in, feature-gated): long-tail coverage — encapsulations/remote-access/databases/messaging/media/storage/enterprise/VoIP/industrial/security/legacy-LAN, tiered (D13), stdlib-disjoint (D16) | 02–06 |
+| 12 | [Contrib plugin library](12-contrib-library/README.md) | Optional `pktflow-contrib` crate (opt-in, feature-gated): long-tail coverage — encapsulations/remote-access/databases/messaging/media/storage/enterprise/VoIP/industrial/security/legacy-LAN/DC-fabric/observability/gaming, tiered (D13), stdlib-disjoint (D16) | 02–06 |
 
 ## Dependency graph
 

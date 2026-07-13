@@ -52,6 +52,8 @@ territory respectively (D12 for the latter) — this claim is the cleartext daem
 | CUPS browsing | *Project doc* (OpenPrinting CUPS) | `UdpPort(631)` — the UDP sibling of `ipp`'s TCP claim |
 | WHOIS | RFC 3912 | `TcpPort(43)`; trivially simple, high fixture value |
 | Finger | RFC 1288 | `TcpPort(79)`; legacy but beloved of CTF captures |
+| AJP13 | *Project doc* — Apache Tomcat AJPv13 | `TcpPort(8009)` — the reason that port is contested space (12.9/12.10 notes); `0x1234`/`AB` magics per direction |
+| FastCGI | *Project doc* — Open Market FastCGI spec 1.0 | Conventional `TcpPort(9000)` collides with ClickHouse's convention (12.7) — a claim-space honesty write-up comes with promotion |
 | rsync daemon | *(placed in 11.9's Tier 2 — listed here only as a cross-reference, per the D16 disjointness rule)* | |
 
 ## Acceptance criteria
