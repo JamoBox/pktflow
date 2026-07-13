@@ -18,6 +18,7 @@ use pktflow_plugins::eapol::Eapol;
 use pktflow_plugins::enip::Enip;
 use pktflow_plugins::ethernet::Ethernet;
 use pktflow_plugins::gre::Gre;
+use pktflow_plugins::gtp_u::GtpU;
 use pktflow_plugins::hsrp::Hsrp;
 use pktflow_plugins::icmpv4::Icmpv4;
 use pktflow_plugins::icmpv6::Icmpv6;
@@ -1025,6 +1026,54 @@ fn vxlan_conforms() {
             expected_full_fields: vec![("vni", Value::U64(5001)), ("flags", Value::U64(8))],
             expected_hint: Hint::ByProtocol("ethernet"),
         }],
+        outer_ctx: Vec::new(),
+    });
+}
+
+#[test]
+fn gtp_u_conforms() {
+    run_conformance(&ConformanceCase {
+        plugin: Box::new(GtpU),
+        good: vec![
+            // TS 29.281 mandatory-only header: G-PDU, no E/S/PN.
+            GoodPacket {
+                bytes: vec![
+                    0x30, 0xFF, // version 1, PT=1; message type 255 (G-PDU)
+                    0x00, 0x04, // length
+                    0xAA, 0xBB, 0xCC, 0xDD, // TEID
+                    0x45, 0x00, 0x00, 0x14, // inner payload stand-in
+                ],
+                expected_header_len: 8,
+                expected_full_fields: vec![
+                    ("teid", Value::U64(0xAABB_CCDD)),
+                    ("message_type", Value::U64(255)),
+                    ("flags", Value::U64(0x30)),
+                    ("length", Value::U64(4)),
+                ],
+                expected_hint: Hint::Unknown,
+            },
+            // Echo Request with S flag set: sequence number present and
+            // meaningful, no extension headers (next_ext_type = 0).
+            GoodPacket {
+                bytes: vec![
+                    0x32, 0x01, // version 1, PT=1, S=1; message type 1 (Echo Request)
+                    0x00, 0x04, // length
+                    0x00, 0x00, 0x00, 0x00, // TEID (0 before assignment)
+                    0x12, 0x34, // sequence number
+                    0x00, // N-PDU number (not meaningful, PN unset)
+                    0x00, // next extension header type: none
+                ],
+                expected_header_len: 12,
+                expected_full_fields: vec![
+                    ("teid", Value::U64(0)),
+                    ("message_type", Value::U64(1)),
+                    ("flags", Value::U64(0x32)),
+                    ("length", Value::U64(4)),
+                    ("sequence_number", Value::U64(0x1234)),
+                ],
+                expected_hint: Hint::Terminal,
+            },
+        ],
         outer_ctx: Vec::new(),
     });
 }
