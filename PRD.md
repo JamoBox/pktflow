@@ -294,6 +294,18 @@ nest conversations.
   protocols are parsed to their handshake/metadata boundary only, then decline (D12,
   consistent with D7's metadata-only stance).
 
+### Contrib plugin library (optional extension)
+- **FR-32** Beyond the standard library, an optional **contrib plugin library** in a
+  separate crate (`pktflow-contrib`), compiled into a consumer only when explicitly enabled
+  and feature-gated per protocol domain — the long tail of real-world coverage: capture
+  encapsulations, remote access/desktop, databases, messaging/IoT, media/P2P, storage/SAN,
+  enterprise services, VoIP flavours, industrial fieldbuses, security envelopes, and legacy
+  LAN suites, with flavours from every layer of the stack. Identical `LayerPlugin` contract
+  and quality bar as the standard library (D12–D15 apply unchanged), tiered the same way
+  (D13), with a placement rule deciding stdlib-vs-contrib and a guarantee that contrib
+  never collides with a standard-library route or name (D16). A default build's behavior is
+  byte-for-byte unaffected by the crate's existence.
+
 ### CLI
 - **FR-22** Read packets from a capture file **or** live-capture from a named interface.
 - **FR-23** List available interfaces.

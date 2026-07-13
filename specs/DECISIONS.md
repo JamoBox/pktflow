@@ -170,3 +170,30 @@ Reading a negotiated port out of one stream's payload and registering a route fo
 aggregator to accept a runtime route registration keyed off a *live stream's* parsed field,
 which doesn't exist yet. Explicitly out of scope for this task; a candidate for its own
 future decision and spec, not a silent gap in the protocols that hit it.
+
+## D16 — Contrib library boundary (task 12)
+Protocol coverage beyond the standard library lives in a separate, opt-in crate
+(`pktflow-contrib`, task 12) under the identical `LayerPlugin` contract. Four rules, all
+cross-cutting between tasks 11 and 12:
+
+- **Placement.** The standard library (task 11) holds protocols that are near-universal or
+  of high analytic value across the target network types (D13's Tier-1 bar) *plus* its
+  named Tier-2 inventory. Contrib holds everything else worth shipping: vendor ecosystems,
+  vertical/deployment-specific protocols, legacy suites, and the long-tail application
+  layer. The two inventories are **disjoint by construction**: a protocol named anywhere in
+  task 11 (either tier) is task 11's, promoted there, never re-specified in contrib — and
+  vice versa. D12 (encryption ceiling), D13 (tiering), D14 (citations), and D15
+  (negotiated ports) apply to task 12 unchanged.
+- **Opt-in compilation.** Nothing in a default build depends on `pktflow-contrib`; a
+  consumer enables it explicitly (cargo feature), and the crate itself is feature-gated per
+  protocol domain. `default_engine()`'s registered set is never changed by contrib's
+  existence.
+- **Claim precedence.** A contrib plugin never claims a `RouteId` or plugin name the
+  standard library claims — including routes in 06/11 specs not yet implemented. Contested
+  wants go through probe-based fallback admission or are documented as a limitation. The
+  built subset is enforced mechanically (a combined-engine build test over the registry's
+  03.2 validation); the spec-only subset is enforced in review. Cross-crate `ByProtocol`
+  references by *name* are allowed in both directions — a dangling name stops as
+  `UnclaimedRoute` (D9), which is honest today and self-healing when the named plugin lands.
+- **One registration list per crate.** PRD §8's "new file + one registration line" metric
+  applies per crate; contrib adds a second list, not a second mechanism.

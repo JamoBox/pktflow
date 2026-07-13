@@ -14,7 +14,7 @@ merged behavior change is reflected back into its spec in the same PR. The summa
   sub-task checklist, and the task-level definition of done.
 - Each numbered file inside is a **sub-task spec**: goal, specification, acceptance criteria.
   A task is done only when every sub-task's acceptance criteria pass.
-- Cross-cutting design choices live in [DECISIONS.md](DECISIONS.md) (D1–D10). Specs cite them
+- Cross-cutting design choices live in [DECISIONS.md](DECISIONS.md) (D1–D16). Specs cite them
   as `D#` and the PRD as `FR-#` / `§#`.
 - Rust snippets in specs are **shape sketches**, not literal code — names and signatures are
   normative, bodies are not.
@@ -35,6 +35,7 @@ merged behavior change is reflected back into its spec in the same PR. The summa
 | 09 | [Validation](09-validation/README.md) | Plugin test kit, fixtures, e2e stream tests, benchmarks | all |
 | 10 | [Developer diagnostics](10-diagnostics/README.md) | `pktflow unknown`: grouped unclassified traffic, near-miss scores, export/scaffold | 03, 04, 05, 08 |
 | 11 | [Standard plugin library](11-standard-library/README.md) | Batteries-included protocol coverage: link/wireless/routing/tunnels/transport/security/web/file/voice/telemetry/discovery/OT/DC-messaging/telco, tiered (D13) | 02–06 |
+| 12 | [Contrib plugin library](12-contrib-library/README.md) | Optional `pktflow-contrib` crate (opt-in, feature-gated): long-tail coverage — encapsulations/remote-access/databases/messaging/media/storage/enterprise/VoIP/industrial/security/legacy-LAN, tiered (D13), stdlib-disjoint (D16) | 02–06 |
 
 ## Dependency graph
 
@@ -42,7 +43,7 @@ merged behavior change is reflected back into its spec in the same PR. The summa
 00 ──► 01 ──► 02 ──► 03 ──► 04 ──┐
               │                  ├──► 05 ──► 06 ──► 08 ──► 09
               └──────────────────┘          ▲   │
-00 ─────────────────────────► 07 ───────────┘   └──► 11
+00 ─────────────────────────► 07 ───────────┘   └──► 11, 12
               03,04,05,08 ──────────────────► 10
 ```
 
@@ -50,6 +51,9 @@ Recommended build order: 00 → 01 → 02 → 03 → 04 → 05 → 06 → 07 →
 to 03–05 and 09's test kit (09.1) started alongside 06. Task 10 is a leaf (like 09) started
 once 08 exists. Task 11 is a leaf on 06: its domain sub-tasks are independent of each other
 and independent of 07–10, so they can be built in any order (or in parallel) once 06 lands.
+Task 12 is the same shape one step out — a leaf on 06 whose domain sub-tasks are mutually
+independent once its crate sub-task (12.1) exists; where a 12.x entry composes with an 11.x
+plugin it says so and degrades honestly (D9) until that plugin lands.
 
 ## Definition of done (project)
 
