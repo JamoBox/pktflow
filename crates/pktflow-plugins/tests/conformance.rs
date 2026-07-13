@@ -44,6 +44,7 @@ use pktflow_plugins::ntp::Ntp;
 use pktflow_plugins::ospf::Ospf;
 use pktflow_plugins::pvst_plus::PvstPlus;
 use pktflow_plugins::radiotap::Radiotap;
+use pktflow_plugins::radius::Radius;
 use pktflow_plugins::sctp::Sctp;
 use pktflow_plugins::snmp::Snmp;
 use pktflow_plugins::ssdp::Ssdp;
@@ -2579,6 +2580,67 @@ fn syslog_conforms() {
                     ("version", Value::U64(0)),
                     ("hostname", Value::from("mymachine")),
                     ("app_name", Value::from("su")),
+                ],
+                expected_hint: Hint::Terminal,
+            },
+        ],
+        outer_ctx: Vec::new(),
+    });
+}
+
+#[test]
+fn radius_conforms() {
+    // Hand-built and byte-verified against RFC 2865 §3/§4 (header, AVP
+    // framing, Access-Request/Accept) and RFC 2866 §3/§4 (Accounting-
+    // Request), not captured from a live NAS — see radius.rs's own fixture
+    // builders for a byte-by-byte breakdown of the same structure.
+
+    // Access-Request: identifier 1, User-Name "bob", Calling-Station-Id
+    // "00-11-22-33-44-55".
+    let mut access_request_attrs = vec![1, 5, b'b', b'o', b'b'];
+    access_request_attrs.extend_from_slice(&[
+        31, 19, b'0', b'0', b'-', b'1', b'1', b'-', b'2', b'2', b'-', b'3', b'3', b'-', b'4', b'4',
+        b'-', b'5', b'5',
+    ]);
+    let mut access_request = vec![1, 1];
+    access_request.extend_from_slice(&((20 + access_request_attrs.len()) as u16).to_be_bytes());
+    access_request.extend_from_slice(&[0xAA; 16]);
+    access_request.extend_from_slice(&access_request_attrs);
+
+    // Accounting-Request: identifier 7, User-Name "bob", Acct-Status-Type
+    // = Start (1).
+    let mut accounting_request_attrs = vec![1, 5, b'b', b'o', b'b'];
+    accounting_request_attrs.extend_from_slice(&[40, 6, 0, 0, 0, 1]);
+    let mut accounting_request = vec![4, 7];
+    accounting_request
+        .extend_from_slice(&((20 + accounting_request_attrs.len()) as u16).to_be_bytes());
+    accounting_request.extend_from_slice(&[0xCC; 16]);
+    accounting_request.extend_from_slice(&accounting_request_attrs);
+
+    run_conformance(&ConformanceCase {
+        plugin: Box::new(Radius),
+        good: vec![
+            GoodPacket {
+                expected_header_len: access_request.len(),
+                bytes: access_request,
+                expected_full_fields: vec![
+                    ("app", Value::from("radius")),
+                    ("code", Value::U64(1)),
+                    ("identifier", Value::U64(1)),
+                    ("user_name", Value::from("bob")),
+                    ("calling_station_id", Value::from("00-11-22-33-44-55")),
+                ],
+                expected_hint: Hint::Terminal,
+            },
+            GoodPacket {
+                expected_header_len: accounting_request.len(),
+                bytes: accounting_request,
+                expected_full_fields: vec![
+                    ("app", Value::from("radius")),
+                    ("code", Value::U64(4)),
+                    ("identifier", Value::U64(7)),
+                    ("user_name", Value::from("bob")),
+                    ("acct_status_type", Value::U64(1)),
                 ],
                 expected_hint: Hint::Terminal,
             },

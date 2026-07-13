@@ -44,6 +44,7 @@ pub mod ntp;
 pub mod ospf;
 pub mod pvst_plus;
 pub mod radiotap;
+pub mod radius;
 pub mod sctp;
 pub mod snmp;
 pub mod ssdp;
@@ -109,6 +110,7 @@ pub fn default_engine() -> Engine {
         .plugin(bacnet_ip::BacnetIp)
         .plugin(syslog::Syslog)
         .plugin(snmp::Snmp)
+        .plugin(radius::Radius)
         .plugin(ssdp::Ssdp)
         .plugin(netflow9::Netflow9)
         .plugin(ipfix::Ipfix)

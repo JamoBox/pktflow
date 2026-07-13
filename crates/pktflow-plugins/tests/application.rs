@@ -846,6 +846,159 @@ proptest! {
     }
 }
 
+fn radius_frame(src: [u8; 4], dst: [u8; 4], sport: u16, dport: u16, msg: &[u8]) -> Vec<u8> {
+    let mut f = eth();
+    f.extend_from_slice(&ipv4_udp(src, dst, sport, dport, msg));
+    f
+}
+
+fn radius_attr(attr_type: u8, value: &[u8]) -> Vec<u8> {
+    let mut out = vec![attr_type, (value.len() + 2) as u8];
+    out.extend_from_slice(value);
+    out
+}
+
+/// Access-Request (RFC 2865 §4.1): identifier 1, `User-Name` "bob" —
+/// same shape as `radius.rs`'s and `conformance.rs`'s fixtures.
+fn radius_access_request() -> Vec<u8> {
+    let attrs = radius_attr(1, b"bob");
+    let mut out = vec![1, 1];
+    out.extend_from_slice(&((20 + attrs.len()) as u16).to_be_bytes());
+    out.extend_from_slice(&[0xAA; 16]);
+    out.extend_from_slice(&attrs);
+    out
+}
+
+/// Access-Accept answering the request above, carrying `NAS-IP-Address`.
+fn radius_access_accept() -> Vec<u8> {
+    let attrs = radius_attr(4, &[10, 0, 0, 1]);
+    let mut out = vec![2, 1];
+    out.extend_from_slice(&((20 + attrs.len()) as u16).to_be_bytes());
+    out.extend_from_slice(&[0xBB; 16]);
+    out.extend_from_slice(&attrs);
+    out
+}
+
+#[test]
+fn radius_access_request_parses_exactly() {
+    let engine = Arc::new(default_engine());
+    let msg = radius_access_request();
+    let frame = radius_frame([10, 0, 0, 5], [10, 0, 0, 1], 45000, 1812, &msg);
+    let packet = engine.dissect(&frame, meta(frame.len(), 0), ParseOpts::default());
+
+    let protocols: Vec<_> = packet.layers.iter().map(|l| l.protocol).collect();
+    assert_eq!(protocols, ["ethernet", "ipv4", "udp", "radius"]);
+    assert_eq!(packet.stop, StopReason::Complete);
+
+    let layer = &packet.layers[3];
+    assert_eq!(layer.fields.get("code"), Some(&Value::U64(1)));
+    assert_eq!(layer.fields.get("identifier"), Some(&Value::U64(1)));
+    assert_eq!(layer.fields.get("user_name"), Some(&Value::from("bob")));
+}
+
+/// Also reachable via the accounting port (1812 is auth, 1813 is
+/// accounting, RFC 2866 §1's current IANA assignment).
+#[test]
+fn radius_reaches_dissector_on_accounting_port_1813() {
+    let engine = Arc::new(default_engine());
+    let attrs = radius_attr(40, &1u32.to_be_bytes());
+    let mut msg = vec![4, 7];
+    msg.extend_from_slice(&((20 + attrs.len()) as u16).to_be_bytes());
+    msg.extend_from_slice(&[0xCC; 16]);
+    msg.extend_from_slice(&attrs);
+
+    let frame = radius_frame([10, 0, 0, 5], [10, 0, 0, 1], 45000, 1813, &msg);
+    let packet = engine.dissect(&frame, meta(frame.len(), 0), ParseOpts::default());
+    let protocols: Vec<_> = packet.layers.iter().map(|l| l.protocol).collect();
+    assert_eq!(protocols, ["ethernet", "ipv4", "udp", "radius"]);
+    let layer = &packet.layers[3];
+    assert_eq!(layer.fields.get("code"), Some(&Value::U64(4)));
+    assert_eq!(layer.fields.get("acct_status_type"), Some(&Value::U64(1)));
+}
+
+/// Malformed RADIUS on the claimed port declines cleanly (03.4 row 3): a
+/// Length field below the RFC 2865 §3 minimum, one claiming more bytes
+/// than the message holds, and an attribute whose Length is `< 2`.
+#[test]
+fn radius_malformed_input_declines_safely() {
+    let engine = Arc::new(default_engine());
+    let mut auth_only = vec![1, 1, 0, 19];
+    auth_only.extend_from_slice(&[0xAA; 15]); // Length 19 < min 20, one byte short too
+    let mut length_below_min = vec![1, 1, 0, 19];
+    length_below_min.extend_from_slice(&[0xAA; 16]);
+    let mut length_exceeds_buffer = vec![1, 1, 0, 100];
+    length_exceeds_buffer.extend_from_slice(&[0xAA; 16]);
+    let mut bad_attr_len = vec![1, 1, 0, 22];
+    bad_attr_len.extend_from_slice(&[0xAA; 16]);
+    bad_attr_len.extend_from_slice(&[1, 1]); // attr length 1, invalid (< 2)
+
+    let bad_inputs: [&[u8]; 4] = [
+        &auth_only,
+        &length_below_min,
+        &length_exceeds_buffer,
+        &bad_attr_len,
+    ];
+    for msg in bad_inputs {
+        let frame = radius_frame([10, 0, 0, 5], [10, 0, 0, 1], 45000, 1812, msg);
+        let packet = engine.dissect(&frame, meta(frame.len(), 0), ParseOpts::default());
+        let protocols: Vec<_> = packet.layers.iter().map(|l| l.protocol).collect();
+        assert_eq!(protocols, ["ethernet", "ipv4", "udp"]);
+        assert_eq!(packet.stop, StopReason::PluginError);
+    }
+}
+
+/// App-stream pattern (06.6): one `radius` child per UDP stream, with
+/// `code` accumulated and `user_name` sampled across messages.
+#[test]
+fn app_stream_pattern_one_radius_child_with_rollups() {
+    let engine = Arc::new(default_engine());
+    let mut agg = Aggregator::new(&engine, AggregatorConfig::default());
+
+    let messages = [radius_access_request(), radius_access_accept()];
+    for (i, msg) in messages.iter().enumerate() {
+        let frame = radius_frame([10, 0, 0, 5], [10, 0, 0, 1], 45000, 1812, msg);
+        agg.ingest(&engine.dissect(&frame, meta(frame.len(), i as u64), ParseOpts::default()));
+    }
+
+    let udp_stream = agg.at_layer("udp")[0];
+    let radius_streams = agg.at_layer("radius");
+    assert_eq!(
+        radius_streams.len(),
+        1,
+        "one app-stream per transport stream"
+    );
+    assert_eq!(radius_streams[0].parent, Some(udp_stream.id));
+
+    match radius_streams[0].rollups.get("code") {
+        Some(Rollup::Accumulate { values, count, .. }) => {
+            assert_eq!(*count, 2);
+            assert_eq!(values.as_slice(), [Value::U64(1), Value::U64(2)]);
+        }
+        other => panic!("wrong rollup: {other:?}"),
+    }
+    match radius_streams[0].rollups.get("user_name") {
+        Some(Rollup::Sample { first, last }) => {
+            // access_accept carries no user_name AVP; an absent field is a
+            // no-op (05.4), so `last` still reflects the first observation.
+            assert_eq!(first, &Some(Value::from("bob")));
+            assert_eq!(last, &Some(Value::from("bob")));
+        }
+        other => panic!("wrong rollup: {other:?}"),
+    }
+}
+
+proptest! {
+    /// The dissector must decline or succeed on arbitrary bytes behind a
+    /// claimed port — never panic (parser-bomb discipline, same standard
+    /// as `decode_name_never_panics_or_hangs`).
+    #[test]
+    fn radius_parse_never_panics(payload in proptest::collection::vec(any::<u8>(), 0..300)) {
+        let engine = Arc::new(default_engine());
+        let frame = radius_frame([10, 0, 0, 5], [10, 0, 0, 1], 45000, 1812, &payload);
+        let _ = engine.dissect(&frame, meta(frame.len(), 0), ParseOpts::default());
+    }
+}
+
 fn netflow9_frame(src: [u8; 4], dst: [u8; 4], sport: u16, msg: &[u8]) -> Vec<u8> {
     let mut f = eth();
     f.extend_from_slice(&ipv4_udp(src, dst, sport, 2055, msg));
