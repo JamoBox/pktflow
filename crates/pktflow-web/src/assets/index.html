@@ -89,6 +89,35 @@ header .spacer { flex: 1; }
   color: var(--ink); background: var(--surface); border-color: var(--border);
 }
 .tabs .count { font-weight: 400; color: var(--muted); margin-left: 6px; font-size: 12px; }
+header .global-filter-indicator {
+  display: none; align-items: center; gap: 8px;
+  background: rgba(201, 133, 0, 0.15); border: 1px solid var(--warning);
+  color: var(--warning); border-radius: 6px; padding: 4px 10px;
+  font-size: 12.5px;
+}
+header .global-playhead-indicator {
+  display: flex; align-items: center; gap: 6px; margin-left: 14px;
+}
+header #globalPlayheadTime {
+  font-family: var(--mono); font-size: 12.5px; color: var(--accent); font-weight: 600;
+}
+header .global-filter-indicator input[type=text] {
+  background: var(--surface); border: 1px solid var(--border);
+  color: var(--ink); border-radius: 4px; padding: 2px 4px;
+  font-family: var(--mono); font-size: 11px; text-align: center;
+  width: 92px; transition: border-color .15s; outline: none;
+}
+header .global-filter-indicator input[type=text]:focus {
+  border-color: var(--accent);
+}
+header .global-filter-indicator .clear-btn {
+  background: var(--surface-2); border: 1px solid var(--border); border-radius: 4px;
+  color: var(--ink-2); font-family: inherit; font-size: 11px; padding: 2px 6px;
+  cursor: pointer; transition: color .12s, border-color .12s;
+}
+header .global-filter-indicator .clear-btn:hover {
+  color: var(--ink); border-color: rgba(255, 255, 255, .25);
+}
 
 main {
   flex: 1; min-height: 0; margin: 0 18px 16px;
@@ -115,6 +144,12 @@ main > section.on { display: flex; }
 }
 .searchwrap .clear:hover { color: var(--ink); }
 .searchwrap.filled .clear { display: block; }
+.toolbar input[type=text] {
+  background: var(--surface-2); color: var(--ink-2); border: 1px solid var(--border);
+  border-radius: 6px; padding: 4px 6px; font-family: var(--mono); font-size: 11px;
+  text-align: center; width: 100px; transition: border-color .15s;
+}
+.toolbar input[type=text]:focus { outline: 1px solid var(--accent); border-color: var(--accent); }
 .toolbar select, .toolbar .btn {
   background: var(--surface-2); color: var(--ink-2); border: 1px solid var(--border);
   border-radius: 6px; padding: 6px 10px; font: inherit; cursor: pointer;
@@ -122,6 +157,15 @@ main > section.on { display: flex; }
 }
 .toolbar .btn:hover, .toolbar select:hover { color: var(--ink); border-color: rgba(255,255,255,.25); }
 .toolbar .hint { color: var(--muted); font-size: 12px; margin-left: auto; }
+.range-controls {
+  display: inline-flex; align-items: center; gap: 8px;
+  overflow: hidden; max-width: 0; opacity: 0;
+  transition: max-width .2s ease-in-out, opacity .2s ease-in-out;
+  white-space: nowrap;
+}
+.range-controls.show {
+  max-width: 480px; opacity: 1; margin-left: 10px;
+}
 
 .split { flex: 1; min-height: 0; display: flex; }
 .tree-pane { flex: 3; min-width: 0; overflow: auto; padding: 6px 0; }
@@ -134,11 +178,11 @@ main > section.on { display: flex; }
 }
 .row:hover { background: var(--surface-2); }
 .row.sel { background: var(--surface-3); border-left-color: var(--accent); }
-.row .caret {
+.caret {
   width: 16px; flex: none; text-align: center; color: var(--muted);
   font-size: 10px; user-select: none;
 }
-.row .caret.toggle:hover { color: var(--ink); }
+.caret.toggle:hover { color: var(--ink); }
 .chip { display: inline-flex; align-items: center; gap: 5px; font-weight: 650; font-family: var(--mono); font-size: 13px; }
 .chip .dot { width: 8px; height: 8px; border-radius: 2px; flex: none; }
 .row .sid { color: var(--muted); font-family: var(--mono); font-size: 12px; }
@@ -167,28 +211,83 @@ main > section.on { display: flex; }
 .tl-body { position: relative; min-width: 640px; }
 .tl-axis {
   position: sticky; top: 0; z-index: 3; display: grid;
-  grid-template-columns: 340px 1fr; align-items: center;
+  grid-template-columns: 420px 1fr; align-items: center;
   background: var(--surface); border-bottom: 1px solid var(--border);
   height: 26px; font-family: var(--mono); font-size: 11px; color: var(--muted);
 }
-.tl-axis .ticks { position: relative; height: 100%; }
+.tl-axis .ticks {
+  position: relative; height: 100%;
+  cursor: crosshair; transition: background .15s;
+}
+.tl-axis .ticks:hover {
+  background: rgba(255, 255, 255, 0.04);
+}
 .tl-axis .tick { position: absolute; top: 5px; transform: translateX(-50%); white-space: nowrap; }
 .tl-axis .tick:first-child { transform: none; }
 .tl-axis .tick:last-child { transform: translateX(-100%); }
 .tl-row {
-  display: grid; grid-template-columns: 340px 1fr; align-items: center;
+  display: grid; grid-template-columns: 420px 1fr; align-items: center;
   height: 24px; cursor: pointer; border-left: 2px solid transparent;
+  transition: opacity .15s;
 }
 .tl-row:hover { background: var(--surface-2); }
 .tl-row.sel { background: var(--surface-3); border-left-color: var(--accent); }
 .tl-row.ctx { opacity: .5; }
+.filtering .tl-row.unborn, .filtering .tl-row.done {
+  opacity: 0.35;
+}
+.filtering .tl-row.act {
+  opacity: 1;
+}
+.filtering .tl-row.unborn:hover, .filtering .tl-row.done:hover {
+  opacity: 0.7;
+}
+.filtering .tl-row.sel.unborn, .filtering .tl-row.sel.done {
+  opacity: 0.8;
+}
 .tl-label {
+  display: flex; align-items: center; gap: 7px;
   font-family: var(--mono); font-size: 12px; white-space: nowrap;
   overflow: hidden; text-overflow: ellipsis; padding: 0 10px;
 }
+.tl-label .view-session-btn {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 20px; height: 20px; border-radius: 4px;
+  color: var(--muted); cursor: pointer; transition: color .15s, background .15s, opacity .15s;
+  user-select: none; margin-left: auto; flex: none;
+}
+.tl-label .view-session-btn:hover {
+  color: var(--accent);
+  background: var(--surface-3);
+}
+.tl-row .view-session-btn {
+  opacity: 0.3;
+}
+.tl-row:hover .view-session-btn {
+  opacity: 1;
+}
+#tlFilterMode {
+  margin-left: 14px; padding: 5px 8px; font-size: 12.5px; border-radius: 6px;
+  background: var(--surface-2); color: var(--ink-2); border: 1px solid var(--border);
+  font-family: inherit; cursor: pointer; outline: none; transition: border-color .12s, color .12s;
+}
+#tlFilterMode:hover {
+  color: var(--ink); border-color: rgba(255, 255, 255, .25);
+}
+#tlFilterMode:focus {
+  border-color: var(--accent);
+}
 .tl-label .chip { font-size: 12px; }
 .tl-label .sid { color: var(--muted); margin-left: 4px; }
-.tl-label .eps { color: var(--ink-2); margin-left: 8px; }
+.tl-label .eps {
+  color: var(--ink-2);
+  margin-left: 8px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+  flex: 1 1 auto;
+}
 .tl-track { position: relative; height: 100%; border-left: 1px solid var(--grid); }
 .tl-bar {
   position: absolute; top: 6px; height: 12px; border-radius: 3px;
@@ -202,6 +301,26 @@ main > section.on { display: flex; }
   background: #fff; opacity: .85; pointer-events: none;
   box-shadow: 0 0 8px rgba(255,255,255,.4);
 }
+.tl-range-overlay {
+  position: absolute; top: 0; bottom: 0;
+  background: linear-gradient(to bottom, rgba(57, 135, 229, 0.24), rgba(57, 135, 229, 0.08));
+  pointer-events: none; z-index: 1;
+  display: none;
+  border-left: 2px solid var(--accent);
+  border-right: 2px solid var(--accent);
+  box-shadow: 0 0 12px rgba(57, 135, 229, 0.35);
+}
+.tl-range-overlay .range-lbl {
+  position: absolute; top: 2px;
+  background: var(--accent); color: #fff;
+  border: 1px solid var(--accent); border-radius: 4px;
+  padding: 2px 5px; font-family: var(--mono); font-size: 10px;
+  white-space: nowrap; pointer-events: none;
+  z-index: 4;
+  box-shadow: 0 2px 6px rgba(0,0,0,0.3);
+}
+.tl-range-overlay .start-lbl { left: 4px; }
+.tl-range-overlay .end-lbl { right: 4px; }
 #tlTime { font-family: var(--mono); font-size: 13px; color: var(--ink); min-width: 110px; }
 #tlActive { font-family: var(--mono); font-size: 12px; color: var(--warning); }
 #tlScrub { flex: 1; accent-color: var(--accent); min-width: 160px; }
@@ -361,6 +480,21 @@ details.raw pre { font-family: var(--mono); font-size: 11.5px; background: var(-
   </div>
   <span class="badge" id="modeBadge">…</span>
   <span id="source"></span>
+  <div id="globalPlayheadIndicator" class="global-playhead-indicator">
+    <span style="color: var(--muted); font-size: 12.5px;">Playhead:</span>
+    <span id="globalPlayheadTime">—</span>
+    <span id="globalPlayheadActive" style="color: var(--muted); font-size: 12px; margin-left: 4px;"></span>
+  </div>
+  <div id="globalFilterIndicator" class="global-filter-indicator">
+    <span class="lbl"></span>
+    <span class="range-inputs" id="globalRangeControls" style="display: none; align-items: center; gap: 6px;">
+      <input type="text" id="globalRangeStartInput" title="Edit start time (HH:MM:SS.mmm)">
+      <span style="font-size:11px;color:var(--muted);">→</span>
+      <input type="text" id="globalRangeEndInput" title="Edit end time (HH:MM:SS.mmm)">
+      <span id="globalRangeDurText" style="font-family: var(--mono); font-size: 11px; color: var(--warning); margin-left: 2px;"></span>
+    </span>
+    <button class="clear-btn" id="globalFilterClearBtn" title="Clear time filter">✕ clear</button>
+  </div>
   <div class="spacer"></div>
   <button class="hbtn" id="openCap" hidden title="load a capture file — or drop one anywhere on the page">⏏ open capture</button>
   <input type="file" id="fileInput" accept=".pcap,.pcapng,.cap" hidden>
@@ -416,6 +550,22 @@ details.raw pre { font-family: var(--mono); font-size: 11.5px; background: var(-
       <input type="range" id="tlScrub" min="0" max="1000" value="1000">
       <span id="tlTime"></span>
       <span id="tlActive"></span>
+      <select id="tlFilterMode">
+        <option value="none">Filter other tabs: Off</option>
+        <option value="point">Filter: at Playhead</option>
+        <option value="window">Filter: Playhead Window</option>
+      </select>
+      <span class="range-controls" id="tlRangeControls">
+        <input type="hidden" id="tlFilterStart" value="0">
+        <input type="hidden" id="tlFilterEnd" value="1000">
+        <input type="text" id="tlRangeStartInput" title="Edit start time (HH:MM:SS.mmm)">
+        <span style="font-size:11px;color:var(--muted);">→</span>
+        <input type="text" id="tlRangeEndInput" title="Edit end time (HH:MM:SS.mmm)">
+        <span id="tlRangeDurText" style="font-family: var(--mono); font-size: 11px; color: var(--warning); margin-left: 6px;"></span>
+        <span style="font-size:11px;color:var(--muted);margin-left:8px;">(double-click ruler to reset)</span>
+      </span>
+      <button class="btn" id="tlExpandAll">expand all</button>
+      <button class="btn" id="tlCollapseAll">collapse all</button>
       <span class="hint">drag or ←→ to scrub · space plays · matches the search on the Streams tab · click a lane to drill in</span>
     </div>
     <div class="tl-scroll" id="tlScroll"></div>
@@ -464,6 +614,7 @@ const S = {
   gen: -1,
   source: null,         // current capture name — a change resets view state
   uploads: false,       // server accepts POST /api/upload
+  timeFilter: { mode: "none", enabled: false, start: 0, end: 0 },
 };
 const MAX_TREE_ROWS = 2000;
 const $ = s => document.querySelector(s);
@@ -535,8 +686,15 @@ function resetForNewSource() {
   S.sel = null;
   S.collapsed = new Set();
   S.unkSel = 0;
+  S.timeFilter = { mode: "none", enabled: false, start: 0, end: 0 };
   stopPlay();
   $("#tlScrub").value = 1000;
+  const filterMode = $("#tlFilterMode");
+  if (filterMode) filterMode.value = "none";
+  const filterStart = $("#tlFilterStart");
+  if (filterStart) filterStart.value = "0";
+  const filterEnd = $("#tlFilterEnd");
+  if (filterEnd) filterEnd.value = "1000";
 }
 async function refetch() {
   try {
@@ -545,6 +703,7 @@ async function refetch() {
     if (S.source !== null && doc.meta.source !== S.source) resetForNewSource();
     S.source = doc.meta.source;
     S.data = doc;
+    updateTimeSpan();
     S.byId = new Map(doc.streams.map(s => [s.id, s]));
     S.kids = new Map();
     for (const s of doc.streams) {
@@ -616,9 +775,7 @@ function renderTiles() {
       vEl.classList.add("bump");
     }
   });
-  $("#cStreams").textContent = S.data.streams.length ? `(${thousands(S.data.streams.length)})` : "";
-  $("#cProtos").textContent = sum.per_protocol.length ? `(${sum.per_protocol.length})` : "";
-  $("#cUnknown").textContent = S.data.unknowns.length ? `(${S.data.unknowns.length})` : "";
+  updateTabCounts();
 }
 
 /* ── stream tree ───────────────────────────────────────── */
@@ -637,12 +794,13 @@ function sortSiblings(list) {
 
 /* Visible rows under query/collapse — the same rules as the TUI: the
    server-evaluated query yields matches plus ancestors, auto-expanded. */
-function visibleRows() {
+function visibleRows(ignoreTimeFilter = false) {
   const keep = S.search.visible; // Set<id> | null (null = unfiltered)
   const rows = [];
   const roots = sortSiblings(S.data.roots.map(id => S.byId.get(id)).filter(Boolean));
   const walk = (s, depth) => {
     if (keep && !keep.has(s.id)) return;
+    if (!ignoreTimeFilter && !isStreamInTimeWindow(s)) return;
     const children = sortSiblings((S.kids.get(s.id) || []).filter(c => !keep || keep.has(c.id)));
     const expanded = keep ? true : !S.collapsed.has(s.id);
     rows.push({ s, depth, hasKids: children.length > 0, expanded });
@@ -669,7 +827,10 @@ function renderTree() {
     host.append(el("div", "empty", "no streams match the query"));
     return;
   }
-  if (S.sel === null || !S.byId.has(S.sel)) S.sel = rows[0].s.id;
+  if (S.sel === null || !rows.some(r => r.s.id === S.sel)) {
+    S.sel = rows[0].s.id;
+    renderDetail();
+  }
 
   for (const r of rows.slice(0, MAX_TREE_ROWS)) {
     const { s } = r;
@@ -701,14 +862,15 @@ function renderTree() {
 function toggle(id) {
   if (S.collapsed.has(id)) S.collapsed.delete(id); else S.collapsed.add(id);
   dirty.timeline = true; // lanes follow the fold state
-  renderTree();
+  dirty.streams = true;
+  renderActive();
 }
 function select(id) {
   S.sel = id;
   dirty.timeline = true; // lane highlight follows the selection
-  renderTree();
-  renderDetail();
-  const sel = $("#tree .row.sel");
+  dirty.streams = true;
+  renderActive();
+  const sel = S.tab === "streams" ? $("#tree .row.sel") : $("#tlScroll .tl-row.sel");
   if (sel) sel.scrollIntoView({ block: "nearest" });
 }
 
@@ -909,12 +1071,210 @@ function seriesChart(points, values) {
   return wrap;
 }
 
+/* ── time slice filter helpers ─────────────────────────── */
+function isStreamInTimeWindow(s) {
+  if (!S.timeFilter || S.timeFilter.mode === "none") return true;
+  const start = +new Date(s.first_seen);
+  const end = +new Date(s.last_seen);
+  return Math.max(start, S.timeFilter.start) <= Math.min(end, S.timeFilter.end);
+}
+function isUnknownInTimeWindow(g) {
+  if (!S.timeFilter || S.timeFilter.mode === "none") return true;
+  const start = +new Date(g.first_seen);
+  const end = +new Date(g.last_seen);
+  return Math.max(start, S.timeFilter.start) <= Math.min(end, S.timeFilter.end);
+}
+function updateTimeSpan() {
+  if (!S.data) return;
+  const span = tlSpan();
+  if (span) {
+    TL.start = span.start;
+    TL.end = span.end;
+
+    if (S.timeFilter && S.timeFilter.windowStart && S.timeFilter.windowEnd) {
+      const totalSpan = TL.end - TL.start;
+      if (totalSpan > 0) {
+        const startPct = Math.max(0, Math.min(1, (S.timeFilter.windowStart - TL.start) / totalSpan));
+        const endPct = Math.max(0, Math.min(1, (S.timeFilter.windowEnd - TL.start) / totalSpan));
+        const filterStart = $("#tlFilterStart");
+        if (filterStart) filterStart.value = Math.round(startPct * 1000);
+        const filterEnd = $("#tlFilterEnd");
+        if (filterEnd) filterEnd.value = Math.round(endPct * 1000);
+      }
+    }
+  }
+}
+function parseClockInput(val) {
+  const m = val.trim().match(/^(\d{1,2}):(\d{1,2}):(\d{1,2})(?:\.(\d{1,3}))?$/);
+  if (!m) return null;
+  const h = parseInt(m[1], 10);
+  const min = parseInt(m[2], 10);
+  const s = parseInt(m[3], 10);
+  const ms = m[4] ? parseInt(m[4].padEnd(3, '0').slice(0, 3), 10) : 0;
+  
+  if (h > 23 || min > 59 || s > 59) return null;
+  
+  const d = new Date(TL.start);
+  d.setUTCHours(h, min, s, ms);
+  return +d;
+}
+function updateTimeFilter() {
+  const modeSelect = $("#tlFilterMode");
+  const mode = modeSelect ? modeSelect.value : "none";
+  const enabled = mode !== "none";
+
+  const rangeControls = $("#tlRangeControls");
+  if (rangeControls) {
+    if (mode === "window") rangeControls.classList.add("show");
+    else rangeControls.classList.remove("show");
+  }
+
+  const scrollEl = $("#tlScroll");
+  if (scrollEl) {
+    if (enabled) scrollEl.classList.add("filtering");
+    else scrollEl.classList.remove("filtering");
+  }
+
+  const startPct = +$("#tlFilterStart").value / 1000;
+  const endPct = +$("#tlFilterEnd").value / 1000;
+  const minPct = Math.min(startPct, endPct);
+  const maxPct = Math.max(startPct, endPct);
+
+  const startMs = TL.start + (TL.end - TL.start) * minPct;
+  const endMs = TL.start + (TL.end - TL.start) * maxPct;
+
+  const scrub = $("#tlScrub");
+  let f = scrub ? +scrub.value / 1000 : 0;
+  let T = TL.start + (TL.end - TL.start) * f;
+
+  let filterStart = startMs;
+  let filterEnd = endMs;
+
+  if (mode === "point") {
+    filterStart = T;
+    filterEnd = T;
+  }
+
+  S.timeFilter = {
+    mode,
+    enabled,
+    start: filterStart,
+    end: filterEnd,
+    minPct,
+    maxPct,
+    windowStart: startMs,
+    windowEnd: endMs
+  };
+
+  // Clamp playhead inside the filter range
+  updatePlayhead(true);
+
+  // Re-read playhead fraction and time in case it was clamped
+  const fClamped = scrub ? +scrub.value / 1000 : 0;
+  const TClamped = TL.start + (TL.end - TL.start) * fClamped;
+  if (mode === "point") {
+    S.timeFilter.start = TClamped;
+    S.timeFilter.end = TClamped;
+  }
+
+  const startText = fmtClock(startMs);
+  const endText = fmtClock(endMs);
+
+  const overlay = $("#tlRangeOverlay");
+  if (overlay) {
+    if (mode === "window" || mode === "point") {
+      overlay.style.display = "block";
+      overlay.style.left = `calc(420px + (100% - 420px) * ${minPct})`;
+      overlay.style.width = `calc((100% - 420px) * ${maxPct - minPct})`;
+      
+      const startLbl = overlay.querySelector(".start-lbl");
+      const endLbl = overlay.querySelector(".end-lbl");
+      if (startLbl) startLbl.textContent = startText;
+      if (endLbl) endLbl.textContent = endText;
+    } else {
+      overlay.style.display = "none";
+    }
+  }
+
+  if (mode === "window") {
+    const startInput = $("#tlRangeStartInput");
+    if (startInput && document.activeElement !== startInput) startInput.value = startText;
+    const endInput = $("#tlRangeEndInput");
+    if (endInput && document.activeElement !== endInput) endInput.value = endText;
+
+    const gStartInput = $("#globalRangeStartInput");
+    if (gStartInput && document.activeElement !== gStartInput) gStartInput.value = startText;
+    const gEndInput = $("#globalRangeEndInput");
+    if (gEndInput && document.activeElement !== gEndInput) gEndInput.value = endText;
+
+    const durSec = ((endMs - startMs) / 1000).toFixed(2);
+    const rangeDurText = $("#tlRangeDurText");
+    if (rangeDurText) rangeDurText.textContent = `(${durSec}s)`;
+    const gRangeDurText = $("#globalRangeDurText");
+    if (gRangeDurText) gRangeDurText.textContent = `(${durSec}s)`;
+  } else {
+    const rangeDurText = $("#tlRangeDurText");
+    if (rangeDurText) rangeDurText.textContent = "";
+    const gRangeDurText = $("#globalRangeDurText");
+    if (gRangeDurText) gRangeDurText.textContent = "";
+  }
+
+  const ind = $("#globalFilterIndicator");
+  if (ind) {
+    if (enabled) {
+      ind.style.display = "inline-flex";
+      const lbl = ind.querySelector(".lbl");
+      const gControls = $("#globalRangeControls");
+      if (lbl) {
+        if (mode === "point") {
+          lbl.textContent = "Filter active: at Playhead";
+          if (gControls) gControls.style.display = "none";
+        } else if (mode === "window") {
+          lbl.textContent = "Filter active: Window";
+          if (gControls) gControls.style.display = "inline-flex";
+        }
+      }
+    } else {
+      ind.style.display = "none";
+    }
+  }
+
+  dirty.streams = true;
+  dirty.protocols = true;
+  dirty.unknown = true;
+
+  updateTabCounts();
+  renderActive();
+}
+function updateTabCounts() {
+  if (!S.data) return;
+  const sum = S.data.summary;
+  const filteredStreams = S.data.streams.filter(isStreamInTimeWindow).length;
+  const totalStreams = S.data.streams.length;
+  
+  const filteredProtos = S.data.streams.filter(isStreamInTimeWindow).reduce((acc, s) => acc.add(s.protocol), new Set()).size;
+  const totalProtos = sum.per_protocol.length;
+  
+  const filteredUnknowns = S.data.unknowns.filter(isUnknownInTimeWindow).length;
+  const totalUnknowns = S.data.unknowns.length;
+  
+  if (S.timeFilter && S.timeFilter.enabled) {
+    $("#cStreams").textContent = `(${thousands(filteredStreams)}/${thousands(totalStreams)})`;
+    $("#cProtos").textContent = `(${filteredProtos}/${totalProtos})`;
+    $("#cUnknown").textContent = `(${thousands(filteredUnknowns)}/${thousands(totalUnknowns)})`;
+  } else {
+    $("#cStreams").textContent = totalStreams ? `(${thousands(totalStreams)})` : "";
+    $("#cProtos").textContent = totalProtos ? `(${totalProtos})` : "";
+    $("#cUnknown").textContent = totalUnknowns ? `(${thousands(totalUnknowns)})` : "";
+  }
+}
+
 /* ── timeline view ─────────────────────────────────────── */
 /* One lane per visible stream (hierarchy order, query-aware): a bar
    spanning the stream's lifetime on a shared time axis, plus a playhead.
    Bars after the playhead are unborn (ghosted), bars it crosses are
    active (bright + glow), bars before it are finished (dimmed). */
-const TL = { start: 0, end: 1, playTimer: null };
+const TL = { start: 0, end: 1, playTimer: null, dragStart: 0, isDragging: false, dragRect: null };
 function tlSpan() {
   let start = Infinity, end = -Infinity;
   for (const s of S.data.streams) {
@@ -949,6 +1309,30 @@ function renderTimeline() {
     t.style.left = (i * 25) + "%";
     ticks.append(t);
   }
+  ticks.title = "Click to position playhead · Drag to select time range · Double-click to reset";
+  axis.append(ticks);
+  ticks.addEventListener("mousedown", ev => {
+    if (ev.button !== 0) return;
+    const rect = ticks.getBoundingClientRect();
+    TL.dragRect = rect;
+    const x = ev.clientX - rect.left;
+    const pct = Math.max(0, Math.min(1, x / rect.width));
+    
+    TL.dragStart = pct;
+    TL.isDragging = true;
+    
+    $("#tlScrub").value = Math.round(pct * 1000);
+    updatePlayhead();
+    
+    ev.preventDefault();
+  });
+  ticks.addEventListener("dblclick", ev => {
+    const modeSelect = $("#tlFilterMode");
+    if (modeSelect) modeSelect.value = "none";
+    $("#tlFilterStart").value = 0;
+    $("#tlFilterEnd").value = 1000;
+    updateTimeFilter();
+  });
   axis.append(ticks);
   body.append(axis);
 
@@ -956,22 +1340,34 @@ function renderTimeline() {
   // Bars are born with their playhead state — adding it after insertion
   // would replay the opacity transition on every live rebuild.
   const T = span.start + spanMs * (+$("#tlScrub").value / 1000);
-  for (const r of visibleRows().slice(0, MAX_TREE_ROWS)) {
+  for (const r of visibleRows(true).slice(0, MAX_TREE_ROWS)) {
     const s = r.s;
     const ctx = S.search.matches && !S.search.matches.has(s.id);
-    const row = el("div", "tl-row" + (s.id === S.sel ? " sel" : "") + (ctx ? " ctx" : ""));
+    const first = +new Date(s.first_seen), last = +new Date(s.last_seen);
+    const cls = first > T ? "unborn" : last < T ? "done" : "act";
+
+    const row = el("div", "tl-row " + cls + (s.id === S.sel ? " sel" : "") + (ctx ? " ctx" : ""));
     row.dataset.id = s.id;
 
     const label = el("div", "tl-label");
     label.style.paddingLeft = 10 + r.depth * 14 + "px";
-    label.append(protoChip(s.protocol), el("span", "sid", "#" + s.id));
+    const caret = el("span", "caret" + (r.hasKids ? " toggle" : ""), r.hasKids ? (r.expanded ? "▼" : "▶") : "·");
+    if (r.hasKids) caret.onclick = ev => { ev.stopPropagation(); toggle(s.id); };
+    label.append(caret, protoChip(s.protocol), el("span", "sid", "#" + s.id));
     const eps = endpointsStr(s);
     if (eps) label.append(el("span", "eps", eps));
+    const eyeball = el("span", "view-session-btn", "👁");
+    eyeball.title = "View in session detail";
+    eyeball.onclick = ev => {
+      ev.stopPropagation();
+      select(s.id);
+      activateTab("streams");
+    };
+    label.append(eyeball);
     row.append(label);
 
     const track = el("div", "tl-track");
-    const first = +new Date(s.first_seen), last = +new Date(s.last_seen);
-    const bar = el("div", "tl-bar " + (first > T ? "unborn" : last < T ? "done" : "act"));
+    const bar = el("div", "tl-bar " + cls);
     bar.dataset.first = first;
     bar.dataset.last = last;
     bar.style.left = ((first - span.start) / spanMs * 100) + "%";
@@ -983,9 +1379,20 @@ function renderTimeline() {
     track.append(bar);
     row.append(track);
 
-    row.onclick = () => { select(s.id); activateTab("streams"); };
+    row.onclick = ev => {
+      if (ev.target.closest('.caret') || ev.target.closest('.view-session-btn')) return;
+      select(s.id);
+      if (r.hasKids) toggle(s.id);
+    };
     body.append(row);
   }
+
+  const overlay = el("div", "tl-range-overlay");
+  overlay.id = "tlRangeOverlay";
+  const startLbl = el("span", "range-lbl start-lbl");
+  const endLbl = el("span", "range-lbl end-lbl");
+  overlay.append(startLbl, endLbl);
+  body.append(overlay);
 
   const ph = el("div", "tl-ph");
   ph.id = "tlPh";
@@ -994,23 +1401,70 @@ function renderTimeline() {
   host.scrollTop = scroll;
   updatePlayhead();
 }
-function updatePlayhead() {
-  const ph = $("#tlPh");
-  if (!ph) return;
-  const f = +$("#tlScrub").value / 1000;
-  const T = TL.start + (TL.end - TL.start) * f;
-  ph.style.left = `calc(340px + (100% - 340px) * ${f})`;
-  $("#tlTime").textContent = fmtClock(T);
-  let active = 0;
-  for (const bar of document.querySelectorAll("#tlScroll .tl-bar")) {
-    const first = +bar.dataset.first, last = +bar.dataset.last;
-    const cls = first > T ? "unborn" : last < T ? "done" : "act";
-    if (cls === "act") active++;
-    bar.className = "tl-bar " + cls;
+function updatePlayhead(skipFilterUpdate = false) {
+  const scrub = $("#tlScrub");
+  let f = scrub ? +scrub.value / 1000 : 1.0;
+
+  if (S.timeFilter && S.timeFilter.mode === "window") {
+    const minPct = S.timeFilter.minPct;
+    const maxPct = S.timeFilter.maxPct;
+    if (f < minPct || f > maxPct) {
+      f = minPct;
+      if (scrub) scrub.value = Math.round(minPct * 1000);
+    }
   }
-  $("#tlActive").textContent = `${active} active at playhead`;
+
+  const T = TL.start + (TL.end - TL.start) * f;
+
+  // 1. Sync global header playhead indicator
+  const gPlayheadTime = $("#globalPlayheadTime");
+  if (gPlayheadTime) gPlayheadTime.textContent = fmtClock(T);
+
+  let active = 0;
+  if (S.data) {
+    for (const s of S.data.streams) {
+      const first = +new Date(s.first_seen);
+      const last = +new Date(s.last_seen);
+      if (first <= T && last >= T) active++;
+    }
+  }
+  const gPlayheadActive = $("#globalPlayheadActive");
+  if (gPlayheadActive) gPlayheadActive.textContent = `(${active} active)`;
+
+  // 2. Sync timeline-tab elements (if currently in DOM)
+  const ph = $("#tlPh");
+  if (ph) {
+    ph.style.left = `calc(420px + (100% - 420px) * ${f})`;
+    const tlTime = $("#tlTime");
+    if (tlTime) tlTime.textContent = fmtClock(T);
+
+    for (const bar of document.querySelectorAll("#tlScroll .tl-bar")) {
+      const first = +bar.dataset.first, last = +bar.dataset.last;
+      const cls = first > T ? "unborn" : last < T ? "done" : "act";
+      bar.className = "tl-bar " + cls;
+      
+      const row = bar.closest(".tl-row");
+      if (row) {
+        row.classList.remove("unborn", "done", "act");
+        row.classList.add(cls);
+      }
+    }
+    const tlActive = $("#tlActive");
+    if (tlActive) tlActive.textContent = `${active} active at playhead`;
+  }
+
+  if (!skipFilterUpdate) updateTimeFilter();
 }
 $("#tlScrub").addEventListener("input", () => { stopPlay(); updatePlayhead(); });
+$("#tlFilterMode").addEventListener("change", updateTimeFilter);
+const globalClear = $("#globalFilterClearBtn");
+if (globalClear) {
+  globalClear.onclick = () => {
+    const modeSelect = $("#tlFilterMode");
+    if (modeSelect) modeSelect.value = "none";
+    updateTimeFilter();
+  };
+}
 function stopPlay() {
   if (TL.playTimer) { clearInterval(TL.playTimer); TL.playTimer = null; }
   $("#tlPlay").textContent = "▶ play";
@@ -1018,12 +1472,32 @@ function stopPlay() {
 $("#tlPlay").onclick = () => {
   if (TL.playTimer) { stopPlay(); return; }
   const scrub = $("#tlScrub");
-  if (+scrub.value >= 1000) scrub.value = 0; // replay from the start
+
+  const isWindow = S.timeFilter && S.timeFilter.mode === "window";
+  let minVal = isWindow ? Math.round(S.timeFilter.minPct * 1000) : 0;
+  let maxVal = isWindow ? Math.round(S.timeFilter.maxPct * 1000) : 1000;
+
+  if (+scrub.value >= maxVal || +scrub.value < minVal) {
+    scrub.value = minVal;
+  }
+
   $("#tlPlay").textContent = "⏸ pause";
   TL.playTimer = setInterval(() => {
-    scrub.value = Math.min(1000, +scrub.value + 5);
+    const isW = S.timeFilter && S.timeFilter.mode === "window";
+    minVal = isW ? Math.round(S.timeFilter.minPct * 1000) : 0;
+    maxVal = isW ? Math.round(S.timeFilter.maxPct * 1000) : 1000;
+
+    let nextVal = +scrub.value + 5;
+    if (nextVal >= maxVal) {
+      if (S.timeFilter && S.timeFilter.enabled) {
+        nextVal = minVal;
+      } else {
+        nextVal = 1000;
+        stopPlay();
+      }
+    }
+    scrub.value = nextVal;
     updatePlayhead();
-    if (+scrub.value >= 1000) stopPlay();
   }, 50);
 };
 
@@ -1051,7 +1525,19 @@ function renderProtocols() {
   }
   host.append(chips);
 
-  const rows = [...sum.per_protocol].sort((a, b) => b.bytes - a.bytes);
+  const activeStreams = S.data.streams.filter(isStreamInTimeWindow);
+  const protoMap = new Map();
+  for (const s of activeStreams) {
+    let p = protoMap.get(s.protocol);
+    if (!p) {
+      p = { protocol: s.protocol, bytes: 0, ever: 0, live: 0 };
+      protoMap.set(s.protocol, p);
+    }
+    p.ever++;
+    if (!s.closed) p.live++;
+    p.bytes += tBytes(s);
+  }
+  const rows = [...protoMap.values()].sort((a, b) => b.bytes - a.bytes);
   const max = Math.max(1, ...rows.map(r => r.bytes));
   const head = el("div", "prow phead");
   head.append(el("span", null, "protocol"), el("span", "n", "streams ever / live"), el("span", null, "bytes (live streams)"), el("span"));
@@ -1082,13 +1568,13 @@ function renderUnknown() {
   const list = $("#unkList");
   const scroll = list.scrollTop;
   list.replaceChildren();
-  const groups = S.data.unknowns;
+  const groups = S.data.unknowns.filter(isUnknownInTimeWindow);
   if (!groups.length) {
     list.append(el("div", "empty", "no unknown protocols observed — every byte claimed 🎉"));
     $("#unkDetail").replaceChildren(el("div", "empty", ""));
     return;
   }
-  S.unkSel = Math.min(S.unkSel, groups.length - 1);
+  S.unkSel = Math.max(0, Math.min(S.unkSel, groups.length - 1));
   groups.forEach((g, i) => {
     const row = el("div", "unk-row" + (i === S.unkSel ? " sel" : ""));
     row.append(
@@ -1233,6 +1719,91 @@ $("#fileInput").addEventListener("change", ev => {
   if (f) uploadCapture(f);
   ev.target.value = ""; // re-selecting the same file fires change again
 });
+const handleRangeInputChange = (isGlobal = false) => {
+  const startInput = isGlobal ? $("#globalRangeStartInput") : $("#tlRangeStartInput");
+  const endInput = isGlobal ? $("#globalRangeEndInput") : $("#tlRangeEndInput");
+  if (!startInput || !endInput) return;
+
+  const startVal = parseClockInput(startInput.value);
+  const endVal = parseClockInput(endInput.value);
+
+  const curStart = S.timeFilter ? S.timeFilter.start : TL.start;
+  const curEnd = S.timeFilter ? S.timeFilter.end : TL.end;
+
+  const newStart = startVal !== null ? Math.max(TL.start, Math.min(TL.end, startVal)) : curStart;
+  const newEnd = endVal !== null ? Math.max(TL.start, Math.min(TL.end, endVal)) : curEnd;
+
+  const startPct = (newStart - TL.start) / (TL.end - TL.start);
+  const endPct = (newEnd - TL.start) / (TL.end - TL.start);
+
+  $("#tlFilterStart").value = Math.round(Math.min(startPct, endPct) * 1000);
+  $("#tlFilterEnd").value = Math.round(Math.max(startPct, endPct) * 1000);
+
+  const modeSelect = $("#tlFilterMode");
+  if (modeSelect && modeSelect.value !== "window") {
+    modeSelect.value = "window";
+  }
+
+  updateTimeFilter();
+};
+
+let tlUpdatePending = false;
+let tlLatestStartPct = 0;
+let tlLatestEndPct = 0;
+
+document.addEventListener("mousemove", ev => {
+  if (!TL.isDragging || !TL.dragRect) return;
+  const rect = TL.dragRect;
+  const x = ev.clientX - rect.left;
+  const pct = Math.max(0, Math.min(1, x / rect.width));
+
+  const startPct = TL.dragStart;
+  const endPct = pct;
+
+  const diffPx = Math.abs(x - (startPct * rect.width));
+  if (diffPx > 5) {
+    const modeSelect = $("#tlFilterMode");
+    if (modeSelect && modeSelect.value !== "window") {
+      modeSelect.value = "window";
+    }
+  }
+
+  tlLatestStartPct = startPct;
+  tlLatestEndPct = endPct;
+  if (!tlUpdatePending) {
+    tlUpdatePending = true;
+    requestAnimationFrame(() => {
+      tlUpdatePending = false;
+      const filterStart = $("#tlFilterStart");
+      const filterEnd = $("#tlFilterEnd");
+      if (filterStart) filterStart.value = Math.round(Math.min(tlLatestStartPct, tlLatestEndPct) * 1000);
+      if (filterEnd) filterEnd.value = Math.round(Math.max(tlLatestStartPct, tlLatestEndPct) * 1000);
+      updateTimeFilter();
+    });
+  }
+});
+document.addEventListener("mouseup", () => {
+  if (TL.isDragging) {
+    TL.isDragging = false;
+    TL.dragRect = null;
+  }
+});
+
+$("#tlRangeStartInput").addEventListener("change", () => handleRangeInputChange(false));
+$("#tlRangeStartInput").addEventListener("keydown", ev => { if (ev.key === "Enter") handleRangeInputChange(false); });
+$("#tlRangeEndInput").addEventListener("change", () => handleRangeInputChange(false));
+$("#tlRangeEndInput").addEventListener("keydown", ev => { if (ev.key === "Enter") handleRangeInputChange(false); });
+
+const gStart = $("#globalRangeStartInput");
+if (gStart) {
+  gStart.addEventListener("change", () => handleRangeInputChange(true));
+  gStart.addEventListener("keydown", ev => { if (ev.key === "Enter") handleRangeInputChange(true); });
+}
+const gEnd = $("#globalRangeEndInput");
+if (gEnd) {
+  gEnd.addEventListener("change", () => handleRangeInputChange(true));
+  gEnd.addEventListener("keydown", ev => { if (ev.key === "Enter") handleRangeInputChange(true); });
+}
 /* drag-and-drop anywhere on the page; depth counter because dragenter/
    dragleave fire per element crossed */
 let dragDepth = 0;
@@ -1287,6 +1858,7 @@ function renderAll() {
   $("#boot").classList.add("off");
   renderHeader();
   renderTiles();
+  updatePlayhead();
   dirty.streams = dirty.timeline = dirty.protocols = dirty.unknown = true;
   renderActive();
 }
@@ -1374,12 +1946,22 @@ function updateQueryStatus() {
   }
 }
 $("#sortSel").addEventListener("change", ev => { S.sort = ev.target.value; dirty.timeline = true; renderTree(); });
-$("#expandAll").onclick = () => { S.collapsed.clear(); dirty.timeline = true; renderTree(); };
-$("#collapseAll").onclick = () => {
+const expandAll = () => {
+  S.collapsed.clear();
+  dirty.timeline = true;
+  dirty.streams = true;
+  renderActive();
+};
+const collapseAll = () => {
   S.collapsed = new Set(S.data.streams.filter(s => s.children.length).map(s => s.id));
   dirty.timeline = true;
-  renderTree();
+  dirty.streams = true;
+  renderActive();
 };
+$("#expandAll").onclick = expandAll;
+$("#collapseAll").onclick = collapseAll;
+$("#tlExpandAll").onclick = expandAll;
+$("#tlCollapseAll").onclick = collapseAll;
 document.addEventListener("keydown", ev => {
   const typing = document.activeElement === $("#filter");
   if (ev.key === "/" && !typing) {
