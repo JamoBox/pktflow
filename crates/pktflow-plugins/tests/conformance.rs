@@ -28,6 +28,7 @@ use pktflow_plugins::igmp::Igmp;
 use pktflow_plugins::ipfix::Ipfix;
 use pktflow_plugins::ipv4::{internet_checksum, Ipv4};
 use pktflow_plugins::ipv6::Ipv6;
+use pktflow_plugins::l2tpv3::L2tpv3;
 use pktflow_plugins::lacp::Lacp;
 use pktflow_plugins::llc::Llc;
 use pktflow_plugins::lldp::Lldp;
@@ -1247,6 +1248,71 @@ fn wireguard_conforms() {
             },
         ],
         outer_ctx: Vec::new(),
+    });
+}
+
+fn udp_predecessor_layer() -> LayerRecord {
+    LayerRecord {
+        protocol: "udp",
+        offset: 34,
+        header_len: 8,
+        fields: FieldMap::new(),
+    }
+}
+
+fn ipv4_predecessor_layer() -> LayerRecord {
+    LayerRecord {
+        protocol: "ipv4",
+        offset: 14,
+        header_len: 20,
+        fields: FieldMap::new(),
+    }
+}
+
+#[test]
+fn l2tpv3_over_udp_data_conforms() {
+    // RFC 3931 §3.2.2: T=0, Ver=3, reserved word, Session ID 0x1234_5678,
+    // no cookie (11.5's documented v1 default), then pseudowire payload.
+    let bytes = vec![
+        0x00, 0x03, 0x00, 0x00, // T=0, Ver=3, reserved=0
+        0x12, 0x34, 0x56, 0x78, // Session ID
+        0xDE, 0xAD, 0xBE, 0xEF, // pseudowire payload (opaque to this plugin)
+    ];
+    run_conformance(&ConformanceCase {
+        plugin: Box::new(L2tpv3),
+        good: vec![GoodPacket {
+            bytes,
+            expected_header_len: 8,
+            expected_full_fields: vec![
+                ("session_id", Value::U64(0x1234_5678)),
+                ("t_bit", Value::Bool(false)),
+            ],
+            expected_hint: Hint::ByProtocol("ethernet"),
+        }],
+        outer_ctx: vec![udp_predecessor_layer()],
+    });
+}
+
+#[test]
+fn l2tpv3_over_ip_data_conforms() {
+    // RFC 3931 §4.1.1: direct IP encapsulation carries data messages only
+    // and has no T/Ver word at all — Session ID is the entire header.
+    let bytes = vec![
+        0x00, 0x00, 0x00, 0x2A, // Session ID = 42
+        0xAA, 0xBB, // pseudowire payload
+    ];
+    run_conformance(&ConformanceCase {
+        plugin: Box::new(L2tpv3),
+        good: vec![GoodPacket {
+            bytes,
+            expected_header_len: 4,
+            expected_full_fields: vec![
+                ("session_id", Value::U64(42)),
+                ("t_bit", Value::Bool(false)),
+            ],
+            expected_hint: Hint::ByProtocol("ethernet"),
+        }],
+        outer_ctx: vec![ipv4_predecessor_layer()],
     });
 }
 

@@ -112,7 +112,7 @@ Geneve:   eth ▸ ipv4 ▸ udp ▸ geneve ▸ ipv4 ▸ ...          (EtherType r
 - [x] `wireguard` fixtures cover all four message types on both the default port (static
       claim) and a non-default port (probe-based fallback-pool admission) — both must reach
       the same plugin and produce the same parsed fields.
-- [ ] `l2tpv3` data-path fixture nests a full inner Ethernet stack under the `session_id`
+- [x] `l2tpv3` data-path fixture nests a full inner Ethernet stack under the `session_id`
       stream; control-path fixture stops `Terminal` without misinterpreting AVPs as data.
 - [ ] `pppoe ▸ ppp ▸ ipv4` fixture proves the translation-hint mechanism end-to-end with
       the **unmodified** 06.3 `ipv4` plugin (no `claims()` diff in that file) — the specific

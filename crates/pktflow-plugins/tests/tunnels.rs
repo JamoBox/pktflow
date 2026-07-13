@@ -83,6 +83,33 @@ fn geneve(vni: u32, protocol_type: u16) -> Vec<u8> {
     g
 }
 
+/// L2TPv3 UDP-encapsulated data message (RFC 3931 §3.2.2): T=0, Ver=3,
+/// Session ID, no cookie (11.5's documented v1 default).
+fn l2tpv3_udp_data(session_id: u32) -> Vec<u8> {
+    let mut b = vec![0x00, 0x03, 0x00, 0x00];
+    b.extend_from_slice(&session_id.to_be_bytes());
+    b
+}
+
+/// L2TPv3 UDP-encapsulated control message (RFC 3931 §3.2.1): T=1, L=1,
+/// S=1, Ver=3, Length, Control Connection ID, Ns, Nr, then an AVP region
+/// this plugin never walks (Tier 2, 11.5's documented limitation).
+fn l2tpv3_udp_control(ccid: u32, avps: &[u8]) -> Vec<u8> {
+    let length = (12 + avps.len()) as u16;
+    let mut b = vec![0xC8, 0x03]; // T|L|S, Ver=3
+    b.extend_from_slice(&length.to_be_bytes());
+    b.extend_from_slice(&ccid.to_be_bytes());
+    b.extend_from_slice(&[0, 1, 0, 2]); // Ns, Nr
+    b.extend_from_slice(avps);
+    b
+}
+
+/// L2TPv3 direct-IP data message (RFC 3931 §4.1.1): no T/Ver word at
+/// all — Session ID is the entire fixed header.
+fn l2tpv3_ip_data(session_id: u32) -> Vec<u8> {
+    session_id.to_be_bytes().to_vec()
+}
+
 /// ESP header (RFC 4303 §2): SPI + Sequence Number, then `ciphertext` —
 /// bytes this plugin must never look inside, however plausible they look.
 fn esp(spi: u32, sequence: u32, ciphertext: &[u8]) -> Vec<u8> {
@@ -430,6 +457,140 @@ fn ah_truncated_icv_declines_safely_no_phantom_stream() {
 
     agg.ingest(&packet);
     assert_eq!(agg.at_layer("ah").len(), 0);
+}
+
+#[test]
+fn l2tpv3_udp_data_fixture_hierarchy_node_by_node() {
+    // eth ▸ ipv4 ▸ udp ▸ l2tpv3 ▸ ethernet ▸ ipv4 ▸ tcp (11.5's normative
+    // hierarchy): the pseudowire's full inner stack, same rigor as
+    // 06.5's VXLAN fixture.
+    let engine = Arc::new(default_engine());
+    let mut agg = Aggregator::new(&engine, AggregatorConfig::default());
+
+    let inner = {
+        let mut i = eth(MAC_D, MAC_C, 0x0800);
+        i.extend_from_slice(&ipv4(6, [172, 17, 0, 2], [172, 17, 0, 3]));
+        i.extend_from_slice(&tcp(34567, 443));
+        i
+    };
+    let mut frame = eth(MAC_B, MAC_A, 0x0800);
+    frame.extend_from_slice(&ipv4(17, [192, 168, 0, 1], [192, 168, 0, 2]));
+    frame.extend_from_slice(&udp(41000, 1701, (8 + inner.len()) as u16));
+    frame.extend_from_slice(&l2tpv3_udp_data(9001));
+    frame.extend_from_slice(&inner);
+
+    agg.ingest(&engine.dissect(&frame, meta(frame.len(), 0), ParseOpts::default()));
+    // `chain()` walks strict single-child parent links, so this sequence
+    // alone proves the node-by-node nesting (FR-8, D10 parent scoping):
+    // the inner Ethernet ▸ ipv4 ▸ tcp stack hangs off `l2tpv3`, not
+    // directly off the outer `udp` stream.
+    assert_eq!(
+        chain(&agg),
+        ["ethernet", "ipv4", "udp", "l2tpv3", "ethernet", "ipv4", "tcp"]
+    );
+    assert_eq!(
+        agg.at_layer("ethernet").len(),
+        2,
+        "outer MAC pair + inner MAC pair"
+    );
+}
+
+#[test]
+fn two_session_ids_over_one_outer_udp_are_sibling_l2tpv3_streams() {
+    // Mirrors vxlan/geneve's two-VNIs-one-outer-stream test (11.5
+    // acceptance criteria): same outer UDP stream, two session ids -> two
+    // sibling streams (shared-qualifier key shape, 06.5/11.5).
+    let engine = Arc::new(default_engine());
+    let mut agg = Aggregator::new(&engine, AggregatorConfig::default());
+
+    for (ms, session_id) in [(0u64, 100u32), (1, 200)] {
+        let inner = eth(MAC_D, MAC_C, 0x9999); // unclaimed inner ethertype
+        let mut frame = eth(MAC_B, MAC_A, 0x0800);
+        frame.extend_from_slice(&ipv4(17, [192, 168, 0, 1], [192, 168, 0, 2]));
+        frame.extend_from_slice(&udp(41000, 1701, (8 + inner.len()) as u16));
+        frame.extend_from_slice(&l2tpv3_udp_data(session_id));
+        frame.extend_from_slice(&inner);
+        agg.ingest(&engine.dissect(&frame, meta(frame.len(), ms), ParseOpts::default()));
+    }
+
+    let outer_udp = agg.at_layer("udp")[0];
+    let streams = agg.at_layer("l2tpv3");
+    assert_eq!(
+        streams.len(),
+        2,
+        "one stream per session id (shared-qualifier key)"
+    );
+    assert!(streams.iter().all(|s| s.parent == Some(outer_udp.id)));
+    assert_ne!(streams[0].key, streams[1].key);
+}
+
+#[test]
+fn l2tpv3_control_path_stops_terminal_without_misinterpreting_avps_as_data() {
+    // 11.5's acceptance criterion: a control message's AVP region (Tier
+    // 2, not decoded) must never be misread as pseudowire data, and a
+    // control message (no `session_id`) forms no l2tpv3 stream.
+    let engine = Arc::new(default_engine());
+    let mut agg = Aggregator::new(&engine, AggregatorConfig::default());
+
+    // An AVP-shaped tail this plugin must never walk or route through.
+    let avps = [0x00, 0x08, 0x00, 0x01, 0x00, 0x00];
+    let control = l2tpv3_udp_control(7, &avps);
+    let mut frame = eth(MAC_B, MAC_A, 0x0800);
+    frame.extend_from_slice(&ipv4(17, [192, 168, 0, 1], [192, 168, 0, 2]));
+    frame.extend_from_slice(&udp(41000, 1701, control.len() as u16));
+    frame.extend_from_slice(&control);
+
+    let packet = engine.dissect(&frame, meta(frame.len(), 0), ParseOpts::default());
+    let protocols: Vec<ProtocolName> = packet.layers.iter().map(|l| l.protocol).collect();
+    assert_eq!(
+        protocols,
+        ["ethernet", "ipv4", "udp", "l2tpv3"],
+        "stops at l2tpv3, no phantom ethernet layer from the AVP bytes"
+    );
+    assert_eq!(packet.stop, StopReason::Terminal);
+
+    agg.ingest(&packet);
+    assert_eq!(
+        agg.at_layer("l2tpv3").len(),
+        0,
+        "a control message carries no session_id: no stream can key on it"
+    );
+    assert_eq!(
+        agg.at_layer("ethernet").len(),
+        1,
+        "only the outer MAC pair forms; no phantom inner ethernet from the AVP bytes"
+    );
+    assert_eq!(
+        agg.at_layer("udp")[0].opaque_bytes,
+        avps.len() as u64,
+        "the AVP tail lands as opaque payload on udp, the innermost real stream"
+    );
+}
+
+#[test]
+fn l2tpv3_direct_ip_data_fixture_hierarchy_node_by_node() {
+    // RFC 3931 §4.1.1: the direct-IP claim (IpProtocol 115, no UDP
+    // header) carries data messages only — eth ▸ ipv4 ▸ l2tpv3 ▸ ethernet
+    // ▸ ipv4 ▸ tcp, same full-inner-stack shape as the UDP path.
+    let engine = Arc::new(default_engine());
+    let mut agg = Aggregator::new(&engine, AggregatorConfig::default());
+
+    let inner = {
+        let mut i = eth(MAC_D, MAC_C, 0x0800);
+        i.extend_from_slice(&ipv4(6, [172, 17, 0, 2], [172, 17, 0, 3]));
+        i.extend_from_slice(&tcp(34567, 443));
+        i
+    };
+    let mut frame = eth(MAC_B, MAC_A, 0x0800);
+    frame.extend_from_slice(&ipv4(115, [192, 168, 0, 1], [192, 168, 0, 2]));
+    frame.extend_from_slice(&l2tpv3_ip_data(4242));
+    frame.extend_from_slice(&inner);
+
+    agg.ingest(&engine.dissect(&frame, meta(frame.len(), 0), ParseOpts::default()));
+    assert_eq!(
+        chain(&agg),
+        ["ethernet", "ipv4", "l2tpv3", "ethernet", "ipv4", "tcp"]
+    );
 }
 
 #[test]

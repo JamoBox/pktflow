@@ -28,6 +28,7 @@ pub mod igmp;
 pub mod ipfix;
 pub mod ipv4;
 pub mod ipv6;
+pub mod l2tpv3;
 pub mod lacp;
 pub mod llc;
 pub mod lldp;
@@ -79,6 +80,7 @@ pub fn default_engine() -> Engine {
         .plugin(esp::Esp)
         .plugin(ah::Ah)
         .plugin(wireguard::Wireguard)
+        .plugin(l2tpv3::L2tpv3)
         .plugin(dns::Dns)
         .plugin(mdns::Mdns)
         .plugin(dhcp::Dhcp)
