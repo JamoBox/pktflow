@@ -90,7 +90,7 @@ this task's other TLV-based protocols are.
       "encrypted-looking" packet on port 22 declines with `ParseError` rather than
       misreading ciphertext as a message type (the port-claim-honesty criterion, ported from
       06.6's DNS case).
-- [ ] `radius` fixture covers a full Access-Request/Access-Accept exchange plus one
+- [x] `radius` fixture covers a full Access-Request/Access-Accept exchange plus one
       Accounting-Request; app-stream child forms under the UDP stream.
 - [ ] `kerberos` fixture: AS-REQ/AS-REP/TGS-REQ/TGS-REP each parse `msg_type` exactly from
       real captures; DER long-form length (>127 bytes) tested alongside short-form.
