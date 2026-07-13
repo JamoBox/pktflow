@@ -39,12 +39,24 @@ syntax over UDP; structurally a cousin of 11.8's `http` (same "header block ends
 | Rollups | `Accumulate` on `nts`; `Sample` on `location` (a real home-network device-inventory signal — the URL names the specific device) |
 
 **llmnr** (RFC 4795) — same DNS message format again; reuses `dns`'s parsing routine
-identically to `mdns` above.
+identically to `mdns` above. RFC 4795 §2.1.1 keeps the 16-bit flags word at the exact bit
+offsets RFC 1035 defines but repurposes two of them: the position DNS gives `AA` (bit 10,
+mask `0x0400`) becomes the **`C` (conflict)** bit, and the position DNS gives `RD` (bit 8,
+mask `0x0100`) becomes the **`T` (tentative)** bit — the same "reuse the wire position, change
+the semantics" move `mdns` makes on the class field's top bit (§5.4/§10.2), applied here to
+the flags word instead. Per §2.1.1/§4.1/§7.1: `C` set on a response means the responder has
+detected the queried name is not unique on the link (a sender already treating the query as
+answered should still keep watching for a late `C`-set response, since conflict detection is
+best-effort); `T` set on a response means the responder is authoritative for the name but has
+not yet finished verifying its own uniqueness (RFC 4795 says such a response is normally
+discarded by the receiver, except when it's itself a uniqueness probe, in which case `T` set
+signals a conflict). Both are read-only surfaced bits — this plugin does not implement sender
+conflict-resolution behavior (§4.1), only exposes what's on the wire.
 
 | Item | Spec |
 |---|---|
 | Claims | `UdpPort(5355)` |
-| Fields | Same shape as `dns`/`mdns`: `qname`, `qtype`, `id`, `opcode`, `rcode`, `answers` |
+| Fields | Same shape as `dns`/`mdns`: `Keys`: `app` · `Structural`: `id`, `is_response`, `opcode`, `rcode`, `qname`, `qtype`, plus LLMNR-specific `Structural`: `conflict` (the `C` bit, RFC 4795 §7.1), `tentative` (the `T` bit, RFC 4795 §7.1) · `Full`: `answers` |
 | Hint | `Terminal` |
 | Identity | key `[{app, None}]` (shared, constant `Str("llmnr")`) |
 | Rollups | `Accumulate` on `qname` |

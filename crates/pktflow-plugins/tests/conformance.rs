@@ -32,6 +32,7 @@ use pktflow_plugins::l2tpv3::L2tpv3;
 use pktflow_plugins::lacp::Lacp;
 use pktflow_plugins::llc::Llc;
 use pktflow_plugins::lldp::Lldp;
+use pktflow_plugins::llmnr::Llmnr;
 use pktflow_plugins::mdns::Mdns;
 use pktflow_plugins::mld::Mld;
 use pktflow_plugins::modbus::Modbus;
@@ -1488,6 +1489,49 @@ fn mdns_conforms() {
                 ("qtype", Value::U64(1)),
                 ("is_multicast_query", Value::Bool(true)),
                 ("answers", Value::List(vec![])),
+            ],
+            expected_hint: Hint::Terminal,
+        }],
+        outer_ctx: Vec::new(),
+    });
+}
+
+/// RFC 4795 §7.1 response for `host-a` (A, IN) with the `C` (conflict) bit
+/// set on the flags word — the one LLMNR reuses from DNS's `AA` position
+/// `mdns`'s own fixture never exercises (mdns reuses the class field's top
+/// bit instead, not the flags word). Echoes the question (as `dns`'s own
+/// compressed-response fixture does) so `qname`/`qtype` are populated too.
+fn llmnr_response_bytes() -> Vec<u8> {
+    let mut m = vec![0x00, 0x00, 0x84, 0x00, 0, 1, 0, 1, 0, 0, 0, 0];
+    m.extend_from_slice(&[6]);
+    m.extend_from_slice(b"host-a");
+    m.push(0);
+    m.extend_from_slice(&[0, 1, 0, 1]); // qtype A, qclass IN
+    m.extend_from_slice(&[0xC0, 0x0C]); // answer name: pointer to question
+    m.extend_from_slice(&[0, 1, 0, 1]); // type A, class IN
+    m.extend_from_slice(&[0, 0, 0, 120]); // ttl
+    m.extend_from_slice(&[0, 4, 192, 0, 2, 5]); // rdlength + A record
+    m
+}
+
+#[test]
+fn llmnr_conforms() {
+    run_conformance(&ConformanceCase {
+        plugin: Box::new(Llmnr),
+        good: vec![GoodPacket {
+            expected_header_len: llmnr_response_bytes().len(),
+            bytes: llmnr_response_bytes(),
+            expected_full_fields: vec![
+                ("app", Value::from("llmnr")),
+                ("id", Value::U64(0)),
+                ("is_response", Value::Bool(true)),
+                ("opcode", Value::U64(0)),
+                ("rcode", Value::U64(0)),
+                ("conflict", Value::Bool(true)),
+                ("tentative", Value::Bool(false)),
+                ("qname", Value::from("host-a")),
+                ("qtype", Value::U64(1)),
+                ("answers", Value::List(vec![Value::from("192.0.2.5")])),
             ],
             expected_hint: Hint::Terminal,
         }],

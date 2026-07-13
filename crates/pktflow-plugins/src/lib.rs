@@ -32,6 +32,7 @@ pub mod l2tpv3;
 pub mod lacp;
 pub mod llc;
 pub mod lldp;
+pub mod llmnr;
 pub mod mdns;
 pub mod mld;
 pub mod modbus;
@@ -87,6 +88,7 @@ pub fn default_engine() -> Engine {
         .plugin(l2tpv3::L2tpv3)
         .plugin(dns::Dns)
         .plugin(mdns::Mdns)
+        .plugin(llmnr::Llmnr)
         .plugin(dhcp::Dhcp)
         .plugin(dhcpv6::Dhcpv6)
         .plugin(ntp::Ntp)

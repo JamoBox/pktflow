@@ -365,6 +365,100 @@ proptest! {
     }
 }
 
+/// RFC 4795 standard query for `<name>` (A record). `flags` sets the raw
+/// flags word so tests can flip the `C`/`T` bits LLMNR repurposes from
+/// DNS's `AA`/`RD` positions (§2.1.1).
+fn llmnr_query(id: u16, name_labels: &[&str], flags: u16) -> Vec<u8> {
+    let mut m = Vec::new();
+    m.extend_from_slice(&id.to_be_bytes());
+    m.extend_from_slice(&flags.to_be_bytes());
+    m.extend_from_slice(&[0, 1, 0, 0, 0, 0, 0, 0]);
+    for label in name_labels {
+        m.push(label.len() as u8);
+        m.extend_from_slice(label.as_bytes());
+    }
+    m.push(0);
+    m.extend_from_slice(&[0, 1, 0, 1]); // type A, class IN
+    m
+}
+
+#[test]
+fn llmnr_app_stream_is_distinct_from_dns_and_mdns_and_accumulates_qnames() {
+    let engine = Arc::new(default_engine());
+    let mut agg = Aggregator::new(&engine, AggregatorConfig::default());
+
+    for (i, labels) in [&["host-a"][..], &["host-b"][..], &["host-a"][..]]
+        .iter()
+        .enumerate()
+    {
+        let msg = llmnr_query(0x0000, labels, 0x0000);
+        let mut frame = eth();
+        frame.extend_from_slice(&ipv4_udp([10, 0, 0, 5], [224, 0, 0, 252], 5355, 5355, &msg));
+        agg.ingest(&engine.dissect(&frame, meta(frame.len(), i as u64), ParseOpts::default()));
+    }
+
+    let llmnr_streams = agg.at_layer("llmnr");
+    assert_eq!(
+        llmnr_streams.len(),
+        1,
+        "one app-stream per transport stream"
+    );
+    assert!(
+        agg.at_layer("dns").is_empty(),
+        "llmnr must not fold into dns's app-stream constant"
+    );
+    assert!(
+        agg.at_layer("mdns").is_empty(),
+        "llmnr must not fold into mdns's app-stream constant"
+    );
+
+    match llmnr_streams[0].rollups.get("qname") {
+        Some(Rollup::Accumulate { values, count, .. }) => {
+            assert_eq!(*count, 3);
+            assert_eq!(
+                values.as_slice(),
+                [Value::from("host-a"), Value::from("host-b")]
+            );
+        }
+        other => panic!("wrong rollup: {other:?}"),
+    }
+}
+
+#[test]
+fn llmnr_response_reports_conflict_and_tentative_bits() {
+    let engine = Arc::new(default_engine());
+
+    // QR|C: responder has detected the queried name is not unique on this
+    // link (RFC 4795 §7.1).
+    let mut response = llmnr_query(0x0000, &["host-a"], 0x8400);
+    response[7] = 1; // ancount = 1
+    response.extend_from_slice(&[0xC0, 0x0C]); // name: pointer to question
+    response.extend_from_slice(&[0, 1, 0, 1]); // type A, class IN
+    response.extend_from_slice(&[0, 0, 0, 120]); // ttl
+    response.extend_from_slice(&[0, 4, 192, 0, 2, 5]); // rdlength + A record
+    let mut frame = eth();
+    frame.extend_from_slice(&ipv4_udp(
+        [10, 0, 0, 5],
+        [224, 0, 0, 252],
+        5355,
+        5355,
+        &response,
+    ));
+    let packet = engine.dissect(&frame, meta(frame.len(), 0), ParseOpts::default());
+    let protocols: Vec<_> = packet.layers.iter().map(|l| l.protocol).collect();
+    assert_eq!(protocols, ["ethernet", "ipv4", "udp", "llmnr"]);
+    let llmnr_layer = &packet.layers[3];
+    assert_eq!(llmnr_layer.fields.get("conflict"), Some(&Value::Bool(true)));
+    assert_eq!(
+        llmnr_layer.fields.get("tentative"),
+        Some(&Value::Bool(false))
+    );
+    assert_eq!(
+        llmnr_layer.fields.get("answers"),
+        Some(&Value::List(vec![Value::from("192.0.2.5")]))
+    );
+}
+
 /// BOOTP + magic cookie + options (53 = msg_type, then END).
 fn dhcp_msg(op: u8, xid: u32, msg_type: u8) -> Vec<u8> {
     let mut m = vec![op, 1, 6, 0];
