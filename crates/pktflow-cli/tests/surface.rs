@@ -96,7 +96,7 @@ fn frame(sport: u16) -> Vec<u8> {
     f.extend_from_slice(&[10, 0, 0, 5]);
     f.extend_from_slice(&[10, 0, 0, 1]);
     f.extend_from_slice(&sport.to_be_bytes());
-    f.extend_from_slice(&51820u16.to_be_bytes()); // unclaimed port
+    f.extend_from_slice(&55555u16.to_be_bytes()); // unclaimed port
     f.extend_from_slice(&(8 + payload_len).to_be_bytes());
     f.extend_from_slice(&[0, 0]); // checksum
     f.extend_from_slice(&[0xDE, 0xAD, 0xBE, 0xEF]);
@@ -210,7 +210,7 @@ fn packets_json_is_ndjson() {
     assert_eq!(lines.len(), 3, "one line per packet");
     for line in lines {
         let doc: serde_json::Value = serde_json::from_str(line).expect("each line parses");
-        assert_eq!(doc["stop_class"], "unknown_payload"); // port 51820 unclaimed
+        assert_eq!(doc["stop_class"], "unknown_payload"); // port 55555 unclaimed
         assert_eq!(
             doc["layers"],
             serde_json::json!(["ethernet", "ipv4", "udp"])

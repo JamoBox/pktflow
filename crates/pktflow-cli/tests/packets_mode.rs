@@ -33,7 +33,7 @@ fn mixed_stop_reasons_fixture() -> pktflow_testkit::CaptureBuilder {
             PacketBuilder::at_secs(601)
                 .eth(support::MAC_A, support::MAC_B)
                 .ipv4("10.0.0.5", "10.0.0.9")
-                .udp(40000, 51820)
+                .udp(40000, 55555)
                 .payload(8),
         )
         // Truncated TCP header (only 8 of 20 bytes): a malformed stop.

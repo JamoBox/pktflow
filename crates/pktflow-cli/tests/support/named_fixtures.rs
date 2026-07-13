@@ -65,7 +65,7 @@ pub fn bidi_tcp_session() -> CaptureBuilder {
         )
 }
 
-/// A WireGuard-shaped UDP flow to an unclaimed port: proves the gate
+/// An encrypted-looking UDP flow to an unclaimed port: proves the gate
 /// (03.4) — no plugin phantom-claims the encrypted payload.
 pub fn encrypted_udp_no_phantom() -> CaptureBuilder {
     CaptureBuilder::new()
@@ -73,14 +73,14 @@ pub fn encrypted_udp_no_phantom() -> CaptureBuilder {
             PacketBuilder::at_secs(600)
                 .eth(MAC_A, MAC_B)
                 .ipv4("10.0.0.5", "10.0.0.9")
-                .udp(51820, 51820)
+                .udp(55555, 55555)
                 .payload(148),
         )
         .packet(
             PacketBuilder::at_secs(601)
                 .eth(MAC_B, MAC_A)
                 .ipv4("10.0.0.9", "10.0.0.5")
-                .udp(51820, 51820)
+                .udp(55555, 55555)
                 .payload(92),
         )
 }
@@ -328,12 +328,12 @@ pub fn mixed_stop_reasons() -> CaptureBuilder {
                 .udp(34567, 53)
                 .dns_query(0x2222, "example.net"),
         )
-        // UnknownPayload: nothing claims port 51820.
+        // UnknownPayload: nothing claims port 55555.
         .packet(
             PacketBuilder::at_secs(1201)
                 .eth(MAC_A, MAC_B)
                 .ipv4("10.0.0.5", "10.0.0.9")
-                .udp(51820, 51820)
+                .udp(55555, 55555)
                 .payload(16),
         )
         // Malformed: fewer than 14 bytes, truncated before a full eth header.
