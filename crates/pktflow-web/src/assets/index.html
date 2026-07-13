@@ -134,11 +134,11 @@ main > section.on { display: flex; }
 }
 .row:hover { background: var(--surface-2); }
 .row.sel { background: var(--surface-3); border-left-color: var(--accent); }
-.row .caret {
+.caret {
   width: 16px; flex: none; text-align: center; color: var(--muted);
   font-size: 10px; user-select: none;
 }
-.row .caret.toggle:hover { color: var(--ink); }
+.caret.toggle:hover { color: var(--ink); }
 .chip { display: inline-flex; align-items: center; gap: 5px; font-weight: 650; font-family: var(--mono); font-size: 13px; }
 .chip .dot { width: 8px; height: 8px; border-radius: 2px; flex: none; }
 .row .sid { color: var(--muted); font-family: var(--mono); font-size: 12px; }
@@ -167,7 +167,7 @@ main > section.on { display: flex; }
 .tl-body { position: relative; min-width: 640px; }
 .tl-axis {
   position: sticky; top: 0; z-index: 3; display: grid;
-  grid-template-columns: 340px 1fr; align-items: center;
+  grid-template-columns: 420px 1fr; align-items: center;
   background: var(--surface); border-bottom: 1px solid var(--border);
   height: 26px; font-family: var(--mono); font-size: 11px; color: var(--muted);
 }
@@ -176,19 +176,44 @@ main > section.on { display: flex; }
 .tl-axis .tick:first-child { transform: none; }
 .tl-axis .tick:last-child { transform: translateX(-100%); }
 .tl-row {
-  display: grid; grid-template-columns: 340px 1fr; align-items: center;
+  display: grid; grid-template-columns: 420px 1fr; align-items: center;
   height: 24px; cursor: pointer; border-left: 2px solid transparent;
 }
 .tl-row:hover { background: var(--surface-2); }
 .tl-row.sel { background: var(--surface-3); border-left-color: var(--accent); }
 .tl-row.ctx { opacity: .5; }
 .tl-label {
+  display: flex; align-items: center; gap: 7px;
   font-family: var(--mono); font-size: 12px; white-space: nowrap;
   overflow: hidden; text-overflow: ellipsis; padding: 0 10px;
 }
+.tl-label .view-session-btn {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 20px; height: 20px; border-radius: 4px;
+  color: var(--muted); cursor: pointer; transition: color .15s, background .15s, opacity .15s;
+  user-select: none; margin-left: auto; flex: none;
+}
+.tl-label .view-session-btn:hover {
+  color: var(--accent);
+  background: var(--surface-3);
+}
+.tl-row .view-session-btn {
+  opacity: 0.3;
+}
+.tl-row:hover .view-session-btn {
+  opacity: 1;
+}
 .tl-label .chip { font-size: 12px; }
 .tl-label .sid { color: var(--muted); margin-left: 4px; }
-.tl-label .eps { color: var(--ink-2); margin-left: 8px; }
+.tl-label .eps {
+  color: var(--ink-2);
+  margin-left: 8px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+  flex: 1 1 auto;
+}
 .tl-track { position: relative; height: 100%; border-left: 1px solid var(--grid); }
 .tl-bar {
   position: absolute; top: 6px; height: 12px; border-radius: 3px;
@@ -416,6 +441,8 @@ details.raw pre { font-family: var(--mono); font-size: 11.5px; background: var(-
       <input type="range" id="tlScrub" min="0" max="1000" value="1000">
       <span id="tlTime"></span>
       <span id="tlActive"></span>
+      <button class="btn" id="tlExpandAll">expand all</button>
+      <button class="btn" id="tlCollapseAll">collapse all</button>
       <span class="hint">drag or ←→ to scrub · space plays · matches the search on the Streams tab · click a lane to drill in</span>
     </div>
     <div class="tl-scroll" id="tlScroll"></div>
@@ -701,14 +728,15 @@ function renderTree() {
 function toggle(id) {
   if (S.collapsed.has(id)) S.collapsed.delete(id); else S.collapsed.add(id);
   dirty.timeline = true; // lanes follow the fold state
-  renderTree();
+  dirty.streams = true;
+  renderActive();
 }
 function select(id) {
   S.sel = id;
   dirty.timeline = true; // lane highlight follows the selection
-  renderTree();
-  renderDetail();
-  const sel = $("#tree .row.sel");
+  dirty.streams = true;
+  renderActive();
+  const sel = S.tab === "streams" ? $("#tree .row.sel") : $("#tlScroll .tl-row.sel");
   if (sel) sel.scrollIntoView({ block: "nearest" });
 }
 
@@ -964,9 +992,19 @@ function renderTimeline() {
 
     const label = el("div", "tl-label");
     label.style.paddingLeft = 10 + r.depth * 14 + "px";
-    label.append(protoChip(s.protocol), el("span", "sid", "#" + s.id));
+    const caret = el("span", "caret" + (r.hasKids ? " toggle" : ""), r.hasKids ? (r.expanded ? "▼" : "▶") : "·");
+    if (r.hasKids) caret.onclick = ev => { ev.stopPropagation(); toggle(s.id); };
+    label.append(caret, protoChip(s.protocol), el("span", "sid", "#" + s.id));
     const eps = endpointsStr(s);
     if (eps) label.append(el("span", "eps", eps));
+    const eyeball = el("span", "view-session-btn", "👁");
+    eyeball.title = "View in session detail";
+    eyeball.onclick = ev => {
+      ev.stopPropagation();
+      select(s.id);
+      activateTab("streams");
+    };
+    label.append(eyeball);
     row.append(label);
 
     const track = el("div", "tl-track");
@@ -983,7 +1021,11 @@ function renderTimeline() {
     track.append(bar);
     row.append(track);
 
-    row.onclick = () => { select(s.id); activateTab("streams"); };
+    row.onclick = ev => {
+      if (ev.target.closest('.caret') || ev.target.closest('.view-session-btn')) return;
+      select(s.id);
+      if (r.hasKids) toggle(s.id);
+    };
     body.append(row);
   }
 
@@ -999,7 +1041,7 @@ function updatePlayhead() {
   if (!ph) return;
   const f = +$("#tlScrub").value / 1000;
   const T = TL.start + (TL.end - TL.start) * f;
-  ph.style.left = `calc(340px + (100% - 340px) * ${f})`;
+  ph.style.left = `calc(420px + (100% - 420px) * ${f})`;
   $("#tlTime").textContent = fmtClock(T);
   let active = 0;
   for (const bar of document.querySelectorAll("#tlScroll .tl-bar")) {
@@ -1374,12 +1416,22 @@ function updateQueryStatus() {
   }
 }
 $("#sortSel").addEventListener("change", ev => { S.sort = ev.target.value; dirty.timeline = true; renderTree(); });
-$("#expandAll").onclick = () => { S.collapsed.clear(); dirty.timeline = true; renderTree(); };
-$("#collapseAll").onclick = () => {
+const expandAll = () => {
+  S.collapsed.clear();
+  dirty.timeline = true;
+  dirty.streams = true;
+  renderActive();
+};
+const collapseAll = () => {
   S.collapsed = new Set(S.data.streams.filter(s => s.children.length).map(s => s.id));
   dirty.timeline = true;
-  renderTree();
+  dirty.streams = true;
+  renderActive();
 };
+$("#expandAll").onclick = expandAll;
+$("#collapseAll").onclick = collapseAll;
+$("#tlExpandAll").onclick = expandAll;
+$("#tlCollapseAll").onclick = collapseAll;
 document.addEventListener("keydown", ev => {
   const typing = document.activeElement === $("#filter");
   if (ev.key === "/" && !typing) {
