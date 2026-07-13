@@ -93,6 +93,17 @@ fn esp(spi: u32, sequence: u32, ciphertext: &[u8]) -> Vec<u8> {
     e
 }
 
+/// AH header (RFC 4302 §2): Next Header, Payload Len (word count of the
+/// whole header minus 2), Reserved, SPI, Sequence Number, then an ICV of
+/// whatever length `payload_len` implies (§2.2).
+fn ah(next_header: u8, spi: u32, sequence: u32, icv: &[u8]) -> Vec<u8> {
+    let mut a = vec![next_header, (icv.len() / 4 + 1) as u8, 0, 0];
+    a.extend_from_slice(&spi.to_be_bytes());
+    a.extend_from_slice(&sequence.to_be_bytes());
+    a.extend_from_slice(icv);
+    a
+}
+
 /// Walks the single root-to-leaf chain, returning protocols in order.
 fn chain(agg: &Aggregator) -> Vec<ProtocolName> {
     let roots: Vec<StreamId> = agg.roots().map(|r| r.id).collect();
@@ -331,6 +342,94 @@ fn two_directions_of_one_esp_tunnel_are_sibling_streams_under_one_ip_conversatio
         .iter()
         .all(|e| e.parent == Some(ip_conversations[0].id)));
     assert_ne!(esps[0].key, esps[1].key);
+}
+
+#[test]
+fn ah_fixture_hierarchy_node_by_node() {
+    // eth ▸ ipv4 ▸ ah ▸ tcp (11.5's normative hierarchy): unlike ESP, AH
+    // is transparent to what it protects (RFC 4302 §2 has no encryption
+    // boundary), so it routes onward via its own next_header field.
+    let engine = Arc::new(default_engine());
+    let mut agg = Aggregator::new(&engine, AggregatorConfig::default());
+
+    let mut frame = eth(MAC_B, MAC_A, 0x0800);
+    frame.extend_from_slice(&ipv4(51, [192, 168, 0, 1], [192, 168, 0, 2]));
+    frame.extend_from_slice(&ah(6, 0x1000_0001, 1, &[0xAA; 12]));
+    frame.extend_from_slice(&tcp(34567, 443));
+
+    agg.ingest(&engine.dissect(&frame, meta(frame.len(), 0), ParseOpts::default()));
+    assert_eq!(chain(&agg), ["ethernet", "ipv4", "ah", "tcp"]);
+
+    // Node-by-node: the TCP session is parented to the ah stream, not
+    // directly to the outer IP conversation (FR-8, D10 parent scoping).
+    let ah_stream = agg.at_layer("ah")[0];
+    let session = agg.at_layer("tcp")[0];
+    assert_eq!(session.parent, Some(ah_stream.id));
+}
+
+#[test]
+fn two_directions_of_one_ah_association_are_sibling_streams_under_one_ip_conversation() {
+    // RFC 4302 §2.1: SPI is unidirectional, mirroring ESP's
+    // `two_directions_of_one_esp_tunnel...` test above — same
+    // shared-qualifier keying, same aggregator code path, different
+    // plugin.
+    let engine = Arc::new(default_engine());
+    let mut agg = Aggregator::new(&engine, AggregatorConfig::default());
+
+    let mut a_to_b = eth(MAC_B, MAC_A, 0x0800);
+    a_to_b.extend_from_slice(&ipv4(51, [192, 168, 0, 1], [192, 168, 0, 2]));
+    a_to_b.extend_from_slice(&ah(6, 0x1000_0001, 1, &[0xAA; 12]));
+    a_to_b.extend_from_slice(&tcp(34567, 443));
+
+    let mut b_to_a = eth(MAC_A, MAC_B, 0x0800);
+    b_to_a.extend_from_slice(&ipv4(51, [192, 168, 0, 2], [192, 168, 0, 1]));
+    b_to_a.extend_from_slice(&ah(6, 0x2000_0002, 1, &[0xBB; 12]));
+    b_to_a.extend_from_slice(&tcp(443, 34567));
+
+    agg.ingest(&engine.dissect(&a_to_b, meta(a_to_b.len(), 0), ParseOpts::default()));
+    agg.ingest(&engine.dissect(&b_to_a, meta(b_to_a.len(), 1), ParseOpts::default()));
+
+    let ip_conversations = agg.at_layer("ipv4");
+    assert_eq!(
+        ip_conversations.len(),
+        1,
+        "one folded IP conversation between the two hosts"
+    );
+    let ahs = agg.at_layer("ah");
+    assert_eq!(ahs.len(), 2, "each direction's SPI is its own ah stream");
+    assert!(ahs.iter().all(|a| a.parent == Some(ip_conversations[0].id)));
+    assert_ne!(ahs[0].key, ahs[1].key);
+}
+
+#[test]
+fn ah_truncated_icv_declines_safely_no_phantom_stream() {
+    // 03.4/04.3: protocol-claimed traffic one byte short of the ICV length
+    // its own `payload_len` field declares stops `Truncated`, not a
+    // guessed short success — a `ByteReader::take` bounds failure, so it
+    // reports as `StopReason::Truncated` rather than `PluginError` (the
+    // latter is reserved for a plugin that parsed successfully but lied
+    // about `header_len`, router.rs's rule-3 check).
+    let engine = Arc::new(default_engine());
+    let mut agg = Aggregator::new(&engine, AggregatorConfig::default());
+
+    let full = ah(6, 0x1000_0001, 1, &[0xAA; 12]);
+    let mut frame = eth(MAC_B, MAC_A, 0x0800);
+    frame.extend_from_slice(&ipv4(51, [192, 168, 0, 1], [192, 168, 0, 2]));
+    frame.extend_from_slice(&full[..full.len() - 1]); // one byte short of the declared ICV
+
+    let packet = engine.dissect(&frame, meta(frame.len(), 0), ParseOpts::default());
+    let protocols: Vec<ProtocolName> = packet.layers.iter().map(|l| l.protocol).collect();
+    assert_eq!(protocols, ["ethernet", "ipv4"], "ah declines, no phantom");
+    assert_eq!(
+        packet.stop,
+        StopReason::Truncated {
+            needed: 12,
+            have: 11
+        }
+    );
+
+    agg.ingest(&packet);
+    assert_eq!(agg.at_layer("ah").len(), 0);
 }
 
 #[test]

@@ -106,7 +106,7 @@ Geneve:   eth ▸ ipv4 ▸ udp ▸ geneve ▸ ipv4 ▸ ...          (EtherType r
 | NSH | RFC 8300 | Service function chaining header |
 
 ## Acceptance criteria
-- [ ] `esp`/`ah` fixtures: AH correctly routes to its inner transport layer; ESP stops
+- [x] `esp`/`ah` fixtures: AH correctly routes to its inner transport layer; ESP stops
       `Terminal` at the encryption boundary with no fabricated inner stream (D12/PRD §4.B.4
       "no phantom streams" applied to a real encrypted-tunnel case, not just encrypted UDP).
 - [ ] `wireguard` fixtures cover all four message types on both the default port (static

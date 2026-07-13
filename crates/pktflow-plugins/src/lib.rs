@@ -5,6 +5,7 @@
 
 use pktflow_core::Engine;
 
+pub mod ah;
 pub mod arp;
 pub mod bacnet_ip;
 pub mod bgp;
@@ -75,6 +76,7 @@ pub fn default_engine() -> Engine {
         .plugin(vxlan::Vxlan)
         .plugin(geneve::Geneve)
         .plugin(esp::Esp)
+        .plugin(ah::Ah)
         .plugin(dns::Dns)
         .plugin(mdns::Mdns)
         .plugin(dhcp::Dhcp)

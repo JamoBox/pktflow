@@ -5,6 +5,7 @@ mod kit;
 
 use pktflow_core::{Canonicalize, FieldMap, KeyField, LayerRecord, StreamIdentity};
 use pktflow_core::{Hint, RouteId, Value};
+use pktflow_plugins::ah::Ah;
 use pktflow_plugins::arp::Arp;
 use pktflow_plugins::bacnet_ip::BacnetIp;
 use pktflow_plugins::bgp::Bgp;
@@ -1094,6 +1095,56 @@ fn esp_conforms() {
             ],
             expected_hint: Hint::Terminal,
         }],
+        outer_ctx: Vec::new(),
+    });
+}
+
+#[test]
+fn ah_conforms() {
+    run_conformance(&ConformanceCase {
+        plugin: Box::new(Ah),
+        good: vec![
+            // RFC 4302 §2: Next Header=TCP(6), Payload Len=4 (12-byte ICV,
+            // the HMAC-SHA1-96 default per §5), SPI 0x1234_5678, sequence
+            // 42, then the ICV — every byte cleartext.
+            GoodPacket {
+                bytes: vec![
+                    0x06, 0x04, 0x00, 0x00, 0x12, 0x34, 0x56, 0x78, 0x00, 0x00, 0x00, 0x2A, 0xAA,
+                    0xBB, 0xCC, 0xDD, 0xEE, 0xFF, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66,
+                ],
+                expected_header_len: 24,
+                expected_full_fields: vec![
+                    ("spi", Value::U64(0x1234_5678)),
+                    ("next_header", Value::U64(6)),
+                    ("payload_len", Value::U64(4)),
+                    ("sequence", Value::U64(42)),
+                    (
+                        "icv",
+                        Value::from(
+                            &[
+                                0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF, 0x11, 0x22, 0x33, 0x44, 0x55,
+                                0x66,
+                            ][..],
+                        ),
+                    ),
+                ],
+                expected_hint: Hint::Route(RouteId::IpProtocol(6)),
+            },
+            // Next Header=UDP(17), Payload Len=1 (zero-length ICV): the
+            // minimum syntactically valid header, no ICV bytes at all.
+            GoodPacket {
+                bytes: vec![0x11, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0, 0, 0, 1],
+                expected_header_len: 12,
+                expected_full_fields: vec![
+                    ("spi", Value::U64(1)),
+                    ("next_header", Value::U64(17)),
+                    ("payload_len", Value::U64(1)),
+                    ("sequence", Value::U64(1)),
+                    ("icv", Value::from(&b""[..])),
+                ],
+                expected_hint: Hint::Route(RouteId::IpProtocol(17)),
+            },
+        ],
         outer_ctx: Vec::new(),
     });
 }
