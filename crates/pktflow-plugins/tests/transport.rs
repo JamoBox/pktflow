@@ -2,7 +2,10 @@
 //! close-eligibility, candidate-port routing, direction folding, and the
 //! 03.4 `encrypted_udp_no_phantom` fixture at full stream level. Also the
 //! SCTP association lifecycle walk (11.6), the same full-engine shape as
-//! TCP's but through SCTP's INIT/INIT-ACK/COOKIE-ECHO/COOKIE-ACK handshake.
+//! TCP's but through SCTP's INIT/INIT-ACK/COOKIE-ECHO/COOKIE-ACK handshake,
+//! and QUIC's (11.6) documented connection-migration behavior: a changed
+//! DCID mid-capture forms a new sibling stream under the same parent UDP
+//! stream rather than folding into the pre-migration one (RFC 9000 §5.1.1).
 
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
@@ -122,6 +125,34 @@ fn sctp_frame(a_to_b: bool, chunk_type: u8, value: &[u8]) -> Vec<u8> {
     f
 }
 
+/// RFC 8999 §5.2 / RFC 9000 §17.2: a Long Header Initial packet, header
+/// form + fixed bit + type bits + version + length-prefixed DCID/SCID.
+fn quic_long_header(type_bits: u8, version: u32, dcid: &[u8], scid: &[u8]) -> Vec<u8> {
+    let mut p = Vec::new();
+    p.push(0x80 | 0x40 | (type_bits << 4) | 0x0F);
+    p.extend_from_slice(&version.to_be_bytes());
+    p.push(dcid.len() as u8);
+    p.extend_from_slice(dcid);
+    p.push(scid.len() as u8);
+    p.extend_from_slice(scid);
+    p.extend_from_slice(&[0xEE; 32]); // header-protected region: never parsed (D12)
+    p
+}
+
+/// eth + ipv4 + udp(443) + one QUIC Long Header Initial packet.
+fn quic_frame(a_to_b: bool, dcid: &[u8], scid: &[u8]) -> Vec<u8> {
+    let payload = quic_long_header(0x00, 1, dcid, scid);
+    let mut f = eth(0x0800);
+    if a_to_b {
+        f.extend_from_slice(&ipv4_header(17, [10, 0, 0, 1], [10, 0, 0, 2]));
+        f.extend_from_slice(&udp_datagram(50000, 443, &payload));
+    } else {
+        f.extend_from_slice(&ipv4_header(17, [10, 0, 0, 2], [10, 0, 0, 1]));
+        f.extend_from_slice(&udp_datagram(443, 50000, &payload));
+    }
+    f
+}
+
 fn aggregate(frames: &[Vec<u8>]) -> (Arc<pktflow_core::Engine>, Aggregator) {
     let engine = Arc::new(pktflow_plugins::default_engine());
     let mut agg = Aggregator::new(&engine, AggregatorConfig::default());
@@ -230,6 +261,61 @@ fn sctp_midstream_and_abort_fixtures() {
     let session = agg.at_layer("sctp")[0];
     assert_eq!(session.state, Some("aborted"));
     assert!(session.close_eligible);
+}
+
+/// RFC 9000 §5.1.1: a QUIC connection may migrate to a new connection id
+/// mid-session. This plugin has no access to the encrypted
+/// `NEW_CONNECTION_ID` frames announcing that, so — the documented,
+/// tested (not just stated) consequence — a post-migration DCID starts a
+/// new sibling `quic` stream rather than folding into the pre-migration
+/// one, both hanging off the same parent `udp` stream.
+#[test]
+fn quic_dcid_migration_forms_a_sibling_stream_under_the_same_udp_parent() {
+    let dcid_a = [0xAA; 8];
+    let dcid_b = [0xBB; 8];
+    let scid = [0x11; 8];
+    let (_, agg) = aggregate(&[
+        quic_frame(true, &dcid_a, &scid),
+        quic_frame(true, &dcid_b, &scid),
+    ]);
+
+    let udp_streams = agg.at_layer("udp");
+    assert_eq!(udp_streams.len(), 1, "one UDP stream for the whole capture");
+    let udp_parent = udp_streams[0].id;
+
+    let quic_streams = agg.at_layer("quic");
+    assert_eq!(
+        quic_streams.len(),
+        2,
+        "each DCID forms its own quic stream, not one folded stream"
+    );
+    assert_ne!(quic_streams[0].key, quic_streams[1].key);
+    for s in &quic_streams {
+        assert_eq!(s.parent, Some(udp_parent));
+    }
+}
+
+/// A QUIC Short Header packet carries no invariant-guaranteed DCID (RFC
+/// 8999 §5.3), so it can't build a flow key at all — it dissects (still
+/// reaches `Hint::Terminal` cleanly) but forms no `quic` stream, the same
+/// "no key, no stream, packet still counts into parents" shape 05.1
+/// documents for `KeyError::MissingField`.
+#[test]
+fn quic_short_header_forms_no_stream_but_still_counts_into_the_parent() {
+    let mut short = vec![0x40 | 0x0F]; // header_form=0 (short), fixed_bit=1
+    short.extend_from_slice(&[0xCC; 16]);
+    let mut f = eth(0x0800);
+    f.extend_from_slice(&ipv4_header(17, [10, 0, 0, 1], [10, 0, 0, 2]));
+    f.extend_from_slice(&udp_datagram(50000, 443, &short));
+
+    let (_, agg) = aggregate(&[f]);
+    assert!(agg.at_layer("quic").is_empty());
+    let udp_streams = agg.at_layer("udp");
+    assert_eq!(udp_streams.len(), 1);
+    assert_eq!(
+        udp_streams[0].stats.iter().map(|s| s.packets).sum::<u64>(),
+        1
+    );
 }
 
 /// Claims port 53 on both transports — the shape the real DNS plugin

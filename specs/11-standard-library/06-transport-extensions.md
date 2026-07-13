@@ -42,9 +42,9 @@ transport or crypto, purely the invariant-level framing D12 permits).
 | Item | Spec |
 |---|---|
 | Claims | `UdpPort(443)` — shared, contested space with HTTP/3-over-QUIC negotiation and arbitrary-port deployments; **claim-honesty note** matching `wireguard` (11.5): the static claim covers the common case, `probe()` covers the rest |
-| Fields | `Structural`: `header_form` (Long/Short), `fixed_bit` · **Long header only**, `Full`: `version` (U64), `dcid` (Bytes, variable length, 0–20), `scid` (Bytes, variable length), `packet_type` (Initial/0-RTT/Handshake/Retry, derived from the type bits + `version`) |
+| Fields | `Keys`: `dcid` (Bytes, variable length, 0–20; **Long header only** — promoted ahead of `Structural` from this domain's original draft specifically because it is the identity key, matching every other flow-key field in this codebase — `esp`'s SPI, `gre`'s key, `vxlan`'s VNI — all of which are surfaced starting at `Depth::Keys`, never `Full`, per the 09.1 kit's mechanical rule that key fields must exist at ≥ `Keys`) · `Structural`: `header_form` (Long/Short), `fixed_bit` (both header forms) · **Long header only**, `Full`: `version` (U64), `scid` (Bytes, variable length), `packet_type` (Initial/0-RTT/Handshake/Retry, derived from the type bits + `version`; recognizes QUICv1 RFC 9000 §17.2 and QUICv2 RFC 9369 §3.2's permuted mapping — any other version, including the version-negotiation marker `version==0`, yields `version`/`dcid`/`scid` honestly with no `packet_type` guess) |
 | Hint | `Terminal` unconditionally — even a Long-header Initial packet's frame contents sit behind QUIC's mandatory header protection (a lightweight but real cryptographic step RFC 9001 requires even before TLS keys exist); this plugin does not remove header protection, so there is nothing further to route to, ever. Short-header (1-RTT) packets carry no invariant-guaranteed fields beyond `header_form`/`fixed_bit` at all |
-| Probe | `fixed_bit == 1` and (Long header: `header_form==1` and `version` is a value that has ever been assigned, or is the reserved-for-negotiation pattern `0x?a?a?a?a`) → 40 (deliberately modest — QUIC's invariants are thin, honest reflection of how little is guessable) |
+| Probe | `fixed_bit == 1` and (Long header: `header_form==1` and `version` is a value that has ever been assigned, or is the reserved-for-negotiation pattern `0x?a?a?a?a`) → `MIN_CONFIDENCE` (50). Set at exactly the router's own admission floor rather than below it (an earlier draft of this row said 40): a probe that can never clear `MIN_CONFIDENCE` never actually admits a non-standard-port deployment to the fallback pool, which would defeat the reason this plugin implements one at all — still deliberately unauthoritative (the same tier `wireguard`'s analogous thin per-packet signal uses, 11.5), just not inert |
 | Identity | key `[{dcid, None}]` (Long-header packets only) — one QUIC stream per destination connection id observed. **Known v1 limitation, documented not hidden**: QUIC connections may migrate to a new connection ID mid-session (RFC 9000 §5.1.1); a post-migration DCID forms a new sibling stream rather than folding into the pre-migration one, the same shape as ESP's per-direction-SPI note (11.5) — a protocol-level identifier rotation the plugin can observe but not reconcile without decrypting NEW_CONNECTION_ID frames it has no access to |
 | Rollups | `Accumulate` on `packet_type` (Initial/0-RTT/Handshake/Retry mix seen for this DCID — the handshake's shape, without its content) |
 
@@ -60,11 +60,11 @@ transport or crypto, purely the invariant-level framing D12 permits).
       lifecycle criterion exactly.
 - [x] `sctp` multi-chunk-bundle fixture: only the first chunk's type/fields are asserted;
       no attempt to walk a second bundled chunk (explicit non-goal, tested not just stated).
-- [ ] `quic` fixtures: Initial, 0-RTT, Handshake, Retry Long-header packets parse
+- [x] `quic` fixtures: Initial, 0-RTT, Handshake, Retry Long-header packets parse
       `dcid`/`scid`/`packet_type` exactly; a Short-header packet stops `Terminal` with no
       fields beyond `header_form`/`fixed_bit`.
-- [ ] `quic` connection-migration fixture (same connection, DCID changes mid-capture)
+- [x] `quic` connection-migration fixture (same connection, DCID changes mid-capture)
       produces two sibling streams under the same parent UDP stream — proves the documented
       limitation is real and bounded, not a crash or a silently wrong fold.
-- [ ] `quic` probe honesty: random UDP payload on port 443 scores low/`None`; a genuine
+- [x] `quic` probe honesty: random UDP payload on port 443 scores low/`None`; a genuine
       QUIC Initial packet on a non-standard port is still admitted via the fallback pool.

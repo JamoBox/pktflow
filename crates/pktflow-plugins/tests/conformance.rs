@@ -42,6 +42,7 @@ use pktflow_plugins::ospf::Ospf;
 use pktflow_plugins::ppp::Ppp;
 use pktflow_plugins::pppoe::Pppoe;
 use pktflow_plugins::pvst_plus::PvstPlus;
+use pktflow_plugins::quic::Quic;
 use pktflow_plugins::radiotap::Radiotap;
 use pktflow_plugins::sctp::Sctp;
 use pktflow_plugins::snmp::Snmp;
@@ -1037,6 +1038,98 @@ fn sctp_conforms() {
                     ("dst_port", Value::U64(3868)),
                     ("verification_tag", Value::U64(0x1234_5678)),
                     ("first_chunk_type", Value::U64(11)),
+                ],
+                expected_hint: Hint::Terminal,
+            },
+        ],
+        outer_ctx: Vec::new(),
+    });
+}
+
+/// RFC 8999 §5.2 / RFC 9000 §17.2: a QUICv1 Long Header packet.
+/// `type_bits` occupies bits 5-4 of byte 0 (Initial=00, 0-RTT=01,
+/// Handshake=10, Retry=11); the trailing bytes stand in for the
+/// header-protected region this plugin never reads (D12).
+fn quic_packet(type_bits: u8, dcid: &[u8], scid: &[u8]) -> Vec<u8> {
+    let mut b = Vec::new();
+    b.push(0x80 | 0x40 | (type_bits << 4) | 0x0F);
+    b.extend_from_slice(&1u32.to_be_bytes()); // QUIC version 1 (RFC 9000)
+    b.push(dcid.len() as u8);
+    b.extend_from_slice(dcid);
+    b.push(scid.len() as u8);
+    b.extend_from_slice(scid);
+    b.extend_from_slice(&[0xEE; 16]);
+    b
+}
+
+#[test]
+fn quic_conforms() {
+    let initial_dcid = [0xAA; 8];
+    let initial_scid = [0xBB; 8];
+    let initial_bytes = quic_packet(0b00, &initial_dcid, &initial_scid);
+
+    let zero_rtt_dcid = [0xCC; 8];
+    let zero_rtt_bytes = quic_packet(0b01, &zero_rtt_dcid, &[]);
+
+    let handshake_dcid = [0xDD; 4];
+    let handshake_scid = [0xEE; 4];
+    let handshake_bytes = quic_packet(0b10, &handshake_dcid, &handshake_scid);
+
+    let retry_scid = [0xFF; 8];
+    let retry_bytes = quic_packet(0b11, &[], &retry_scid);
+
+    run_conformance(&ConformanceCase {
+        plugin: Box::new(Quic),
+        good: vec![
+            GoodPacket {
+                bytes: initial_bytes,
+                expected_header_len: 1 + 4 + 1 + 8 + 1 + 8,
+                expected_full_fields: vec![
+                    ("dcid", Value::from(&initial_dcid[..])),
+                    ("scid", Value::from(&initial_scid[..])),
+                    ("header_form", Value::from("long")),
+                    ("fixed_bit", Value::Bool(true)),
+                    ("version", Value::U64(1)),
+                    ("packet_type", Value::from("initial")),
+                ],
+                expected_hint: Hint::Terminal,
+            },
+            GoodPacket {
+                bytes: zero_rtt_bytes,
+                expected_header_len: 1 + 4 + 1 + 8 + 1, // empty scid
+                expected_full_fields: vec![
+                    ("dcid", Value::from(&zero_rtt_dcid[..])),
+                    ("scid", Value::from(&[][..])),
+                    ("header_form", Value::from("long")),
+                    ("fixed_bit", Value::Bool(true)),
+                    ("version", Value::U64(1)),
+                    ("packet_type", Value::from("zero_rtt")),
+                ],
+                expected_hint: Hint::Terminal,
+            },
+            GoodPacket {
+                bytes: handshake_bytes,
+                expected_header_len: 1 + 4 + 1 + 4 + 1 + 4,
+                expected_full_fields: vec![
+                    ("dcid", Value::from(&handshake_dcid[..])),
+                    ("scid", Value::from(&handshake_scid[..])),
+                    ("header_form", Value::from("long")),
+                    ("fixed_bit", Value::Bool(true)),
+                    ("version", Value::U64(1)),
+                    ("packet_type", Value::from("handshake")),
+                ],
+                expected_hint: Hint::Terminal,
+            },
+            GoodPacket {
+                bytes: retry_bytes,
+                expected_header_len: 1 + 4 + 1 + 1 + 8, // empty dcid
+                expected_full_fields: vec![
+                    ("dcid", Value::from(&[][..])),
+                    ("scid", Value::from(&retry_scid[..])),
+                    ("header_form", Value::from("long")),
+                    ("fixed_bit", Value::Bool(true)),
+                    ("version", Value::U64(1)),
+                    ("packet_type", Value::from("retry")),
                 ],
                 expected_hint: Hint::Terminal,
             },
