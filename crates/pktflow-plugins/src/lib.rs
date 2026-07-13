@@ -43,6 +43,7 @@ pub mod ppp;
 pub mod pppoe;
 pub mod pvst_plus;
 pub mod radiotap;
+pub mod sctp;
 pub mod snmp;
 pub mod stp;
 pub mod syslog;
@@ -74,6 +75,7 @@ pub fn default_engine() -> Engine {
         .plugin(hsrp::Hsrp)
         .plugin(ospf::Ospf)
         .plugin(tcp::Tcp)
+        .plugin(sctp::Sctp)
         .plugin(udp::Udp)
         .plugin(bgp::Bgp)
         .plugin(gre::Gre)

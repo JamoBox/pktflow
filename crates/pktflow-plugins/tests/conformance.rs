@@ -43,6 +43,7 @@ use pktflow_plugins::ppp::Ppp;
 use pktflow_plugins::pppoe::Pppoe;
 use pktflow_plugins::pvst_plus::PvstPlus;
 use pktflow_plugins::radiotap::Radiotap;
+use pktflow_plugins::sctp::Sctp;
 use pktflow_plugins::snmp::Snmp;
 use pktflow_plugins::stp::Stp;
 use pktflow_plugins::syslog::Syslog;
@@ -976,6 +977,70 @@ fn udp_conforms() {
                 RouteId::UdpPort(53),
             ])),
         }],
+        outer_ctx: Vec::new(),
+    });
+}
+
+/// RFC 9260 §3.1 common header + one chunk's Type/Flags/Length/Value.
+fn sctp_packet(chunk_type: u8, value: &[u8]) -> Vec<u8> {
+    let mut b = Vec::new();
+    b.extend_from_slice(&34567u16.to_be_bytes());
+    b.extend_from_slice(&3868u16.to_be_bytes()); // Diameter-over-SCTP's registered port
+    b.extend_from_slice(&0x1234_5678u32.to_be_bytes()); // verification tag
+    b.extend_from_slice(&0u32.to_be_bytes()); // checksum, unverified
+    b.push(chunk_type);
+    b.push(0); // chunk flags
+    let length = (4 + value.len()) as u16;
+    b.extend_from_slice(&length.to_be_bytes());
+    b.extend_from_slice(value);
+    b
+}
+
+#[test]
+fn sctp_conforms() {
+    // INIT (type 1): common header + fixed parameters (RFC 9260 §3.3.2).
+    let mut init_value = Vec::new();
+    init_value.extend_from_slice(&0xCAFE_BABEu32.to_be_bytes()); // Initiate Tag
+    init_value.extend_from_slice(&65536u32.to_be_bytes()); // a_rwnd
+    init_value.extend_from_slice(&10u16.to_be_bytes()); // Outbound Streams
+    init_value.extend_from_slice(&10u16.to_be_bytes()); // Inbound Streams
+    init_value.extend_from_slice(&42u32.to_be_bytes()); // Initial TSN
+    let init_bytes = sctp_packet(1, &init_value);
+
+    // COOKIE ACK (type 11): common header + empty value, no Tier-1 body fields.
+    let cookie_ack_bytes = sctp_packet(11, &[]);
+
+    run_conformance(&ConformanceCase {
+        plugin: Box::new(Sctp),
+        good: vec![
+            GoodPacket {
+                bytes: init_bytes,
+                expected_header_len: 12 + 4 + 16,
+                expected_full_fields: vec![
+                    ("src_port", Value::U64(34567)),
+                    ("dst_port", Value::U64(3868)),
+                    ("verification_tag", Value::U64(0x1234_5678)),
+                    ("first_chunk_type", Value::U64(1)),
+                    ("initiate_tag", Value::U64(0xCAFE_BABE)),
+                    ("a_rwnd", Value::U64(65536)),
+                    ("num_outbound_streams", Value::U64(10)),
+                    ("num_inbound_streams", Value::U64(10)),
+                    ("initial_tsn", Value::U64(42)),
+                ],
+                expected_hint: Hint::Terminal,
+            },
+            GoodPacket {
+                bytes: cookie_ack_bytes,
+                expected_header_len: 12 + 4,
+                expected_full_fields: vec![
+                    ("src_port", Value::U64(34567)),
+                    ("dst_port", Value::U64(3868)),
+                    ("verification_tag", Value::U64(0x1234_5678)),
+                    ("first_chunk_type", Value::U64(11)),
+                ],
+                expected_hint: Hint::Terminal,
+            },
+        ],
         outer_ctx: Vec::new(),
     });
 }
