@@ -21,6 +21,7 @@ pub mod esp;
 pub mod ethernet;
 pub mod geneve;
 pub mod gre;
+pub mod gtp_u;
 pub mod hsrp;
 pub mod icmpv4;
 pub mod icmpv6;
@@ -81,6 +82,7 @@ pub fn default_engine() -> Engine {
         .plugin(bgp::Bgp)
         .plugin(gre::Gre)
         .plugin(vxlan::Vxlan)
+        .plugin(gtp_u::GtpU)
         .plugin(geneve::Geneve)
         .plugin(esp::Esp)
         .plugin(ah::Ah)

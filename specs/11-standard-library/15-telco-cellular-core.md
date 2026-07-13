@@ -23,7 +23,7 @@ its own plugin (`gtp_u`) on its own port.
 | Item | Spec |
 |---|---|
 | Claims | `UdpPort(2152)` |
-| Fields | `Keys`: `teid` (U64) · `Structural`: `message_type` (255=G-PDU/1=Echo-Request/2=Echo-Response/26=Error-Indication/31=End-Marker), `flags`, `length` · `Full`: `sequence_number` (present per the flags' E/S/PN bits) |
+| Fields | `Keys`: `teid` (U64) · `Structural`: `message_type` (255=G-PDU/1=Echo-Request/2=Echo-Response/26=Error-Indication/31=Supported-Extension-Headers-Notification/254=End-Marker — Table 6.1-1; corrected here from an earlier draft that had 31 and 254 transposed), `flags`, `length` · `Full`: `sequence_number` (present per the flags' E/S/PN bits) |
 | Hint | `message_type == 255` (G-PDU — the actual encapsulated subscriber traffic) → `Unknown`. GTP-U's header names no explicit next-protocol field for its payload (it's always IP, but never says *which* version) — `Hint::Unknown` is the contract-correct choice here (02.2: "header named nothing usable"), not a plugin declining to be more specific. This works with **zero new code** in `ipv4`/`ipv6` (06.3): both already carry a `probe()` (version-nibble check) exactly for this heuristic-fallback case, so G-PDU payloads route correctly through the existing fallback pool unmodified. Other message types → `Terminal` (control messages, no encapsulated payload) |
 | Identity | key `[{teid, None}]` (shared qualifier, GRE/VXLAN shape) → one **GTP-U tunnel** stream per Tunnel Endpoint ID |
 | Rollups | `Accumulate` on `message_type` |
@@ -48,17 +48,18 @@ disambiguates, the `ospf`/`stun` precedent from 11.4/11.8).
 | Diameter (S6a/Gx) | RFC 6733 | Cross-referenced from 11.7 — mobile-core AAA/policy signaling, same protocol either domain |
 
 ## Acceptance criteria
-- [ ] `gtp_u` fixture: a G-PDU carrying a real inner IPv4 packet routes through `Unknown` →
+- [x] `gtp_u` fixture: a G-PDU carrying a real inner IPv4 packet routes through `Unknown` →
       fallback pool → `ipv4`'s existing probe, ending with the correct nested stream — proves
       the zero-new-code claim end-to-end, not just in prose (mirrors 06.5's tunnel-hierarchy
-      acceptance-criteria rigor).
-- [ ] `gtp_u` Echo-Request/Response and Error-Indication fixtures stop `Terminal`, no
-      spurious inner-stream attempt.
+      acceptance-criteria rigor). (`tests/telco.rs`)
+- [x] `gtp_u` Echo-Request/Response and Error-Indication fixtures stop `Terminal`, no
+      spurious inner-stream attempt. (`tests/telco.rs`)
 - [ ] `gtp_c` fixture: a GTPv1-C Create-PDP-Context Request/Response pair and a GTPv2-C
       Create-Session Request/Response pair both parse `version`/`message_type`/`teid`
       exactly through the same plugin.
 - [ ] `gtp_c` IE-walk honesty: a fixture with an unrecognized/vendor-specific IE type present
       alongside a recognized `imsi`/`apn` still extracts the recognized ones correctly and
       skips the unrecognized one via its own length field (bounded walk, no misalignment).
-- [ ] Two different TEIDs over one UDP 5-tuple (a GTP-U gateway serving multiple subscriber
+- [x] Two different TEIDs over one UDP 5-tuple (a GTP-U gateway serving multiple subscriber
       tunnels) produce two sibling streams (06.5's two-VNIs-one-outer-stream test shape).
+      (`tests/telco.rs`)
