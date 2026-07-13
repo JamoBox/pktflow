@@ -49,6 +49,7 @@ use pktflow_plugins::udp::Udp;
 use pktflow_plugins::vlan::Vlan;
 use pktflow_plugins::vrrp::Vrrp;
 use pktflow_plugins::vxlan::Vxlan;
+use pktflow_plugins::wireguard::Wireguard;
 
 use kit::{run_conformance, ConformanceCase, GoodPacket};
 
@@ -1143,6 +1144,106 @@ fn ah_conforms() {
                     ("icv", Value::from(&b""[..])),
                 ],
                 expected_hint: Hint::Route(RouteId::IpProtocol(17)),
+            },
+        ],
+        outer_ctx: Vec::new(),
+    });
+}
+
+// wireguard.com/protocol/ ("Messages"): every message shares message_type
+// (1 byte) + 3 reserved bytes, encoded together as one little-endian u32
+// (11.5) — these four builders cover all four message types, each a
+// fixed-size, all-or-nothing Noise/AEAD message except Transport Data.
+
+/// Handshake Initiation (148 bytes): sender_index, then ephemeral(32) +
+/// encrypted static(48) + encrypted timestamp(28) + mac1(16) + mac2(16).
+fn wg_handshake_initiation_bytes() -> Vec<u8> {
+    let mut m = vec![0x01, 0x00, 0x00, 0x00]; // type=1, reserved=0
+    m.extend_from_slice(&0x1111_1111u32.to_le_bytes()); // sender_index
+    m.extend(std::iter::repeat_n(0xAB, 148 - 8));
+    m
+}
+
+/// Handshake Response (92 bytes): sender_index, receiver_index, then
+/// ephemeral(32) + encrypted-nothing(16) + mac1(16) + mac2(16).
+fn wg_handshake_response_bytes() -> Vec<u8> {
+    let mut m = vec![0x02, 0x00, 0x00, 0x00]; // type=2, reserved=0
+    m.extend_from_slice(&0x2222_2222u32.to_le_bytes()); // sender_index
+    m.extend_from_slice(&0x1111_1111u32.to_le_bytes()); // receiver_index
+    m.extend(std::iter::repeat_n(0xCD, 92 - 12));
+    m
+}
+
+/// Cookie Reply (64 bytes): receiver_index, then nonce(24) + encrypted
+/// cookie(32) — a DoS-mitigation message (whitepaper §5.3), not session
+/// traffic.
+fn wg_cookie_reply_bytes() -> Vec<u8> {
+    let mut m = vec![0x03, 0x00, 0x00, 0x00]; // type=3, reserved=0
+    m.extend_from_slice(&0x1111_1111u32.to_le_bytes()); // receiver_index
+    m.extend(std::iter::repeat_n(0xEF, 64 - 8));
+    m
+}
+
+/// Transport Data: the one variable-length type. `header_len` covers only
+/// the fixed 16-byte prefix (message_type+reserved, receiver_index,
+/// counter) — the AEAD-encrypted payload past it is never counted as
+/// header, the ESP precedent (D12, 11.5's `esp`).
+fn wg_transport_data_bytes() -> Vec<u8> {
+    let mut m = vec![0x04, 0x00, 0x00, 0x00]; // type=4, reserved=0
+    m.extend_from_slice(&0x3333_3333u32.to_le_bytes()); // receiver_index
+    m.extend_from_slice(&7u64.to_le_bytes()); // counter
+    m.extend(std::iter::repeat_n(0x11, 16)); // Poly1305 tag, zero plaintext
+    m
+}
+
+#[test]
+fn wireguard_conforms() {
+    run_conformance(&ConformanceCase {
+        plugin: Box::new(Wireguard),
+        good: vec![
+            GoodPacket {
+                expected_header_len: wg_handshake_initiation_bytes().len(),
+                bytes: wg_handshake_initiation_bytes(),
+                expected_full_fields: vec![
+                    ("app", Value::from("wireguard")),
+                    ("msg_type", Value::from("handshake_initiation")),
+                    ("sender_index", Value::U64(0x1111_1111)),
+                ],
+                expected_hint: Hint::Terminal,
+            },
+            GoodPacket {
+                expected_header_len: wg_handshake_response_bytes().len(),
+                bytes: wg_handshake_response_bytes(),
+                expected_full_fields: vec![
+                    ("app", Value::from("wireguard")),
+                    ("msg_type", Value::from("handshake_response")),
+                    ("sender_index", Value::U64(0x2222_2222)),
+                    ("receiver_index", Value::U64(0x1111_1111)),
+                ],
+                expected_hint: Hint::Terminal,
+            },
+            GoodPacket {
+                expected_header_len: wg_cookie_reply_bytes().len(),
+                bytes: wg_cookie_reply_bytes(),
+                expected_full_fields: vec![
+                    ("app", Value::from("wireguard")),
+                    ("msg_type", Value::from("cookie_reply")),
+                    ("receiver_index", Value::U64(0x1111_1111)),
+                ],
+                expected_hint: Hint::Terminal,
+            },
+            GoodPacket {
+                // header_len (16) is deliberately shorter than the full
+                // fixture (32 bytes: prefix + Poly1305 tag) — Transport
+                // Data's ciphertext trails the header, uncounted (D12).
+                expected_header_len: 16,
+                bytes: wg_transport_data_bytes(),
+                expected_full_fields: vec![
+                    ("app", Value::from("wireguard")),
+                    ("msg_type", Value::from("transport_data")),
+                    ("receiver_index", Value::U64(0x3333_3333)),
+                ],
+                expected_hint: Hint::Terminal,
             },
         ],
         outer_ctx: Vec::new(),

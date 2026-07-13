@@ -49,6 +49,7 @@ pub mod udp;
 pub mod vlan;
 pub mod vrrp;
 pub mod vxlan;
+pub mod wireguard;
 
 /// The one registration list (PRD §8): adding a protocol end-to-end is a
 /// new file plus one `.plugin(...)` line here.
@@ -77,6 +78,7 @@ pub fn default_engine() -> Engine {
         .plugin(geneve::Geneve)
         .plugin(esp::Esp)
         .plugin(ah::Ah)
+        .plugin(wireguard::Wireguard)
         .plugin(dns::Dns)
         .plugin(mdns::Mdns)
         .plugin(dhcp::Dhcp)

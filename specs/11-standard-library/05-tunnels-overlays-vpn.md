@@ -109,7 +109,7 @@ Geneve:   eth ▸ ipv4 ▸ udp ▸ geneve ▸ ipv4 ▸ ...          (EtherType r
 - [x] `esp`/`ah` fixtures: AH correctly routes to its inner transport layer; ESP stops
       `Terminal` at the encryption boundary with no fabricated inner stream (D12/PRD §4.B.4
       "no phantom streams" applied to a real encrypted-tunnel case, not just encrypted UDP).
-- [ ] `wireguard` fixtures cover all four message types on both the default port (static
+- [x] `wireguard` fixtures cover all four message types on both the default port (static
       claim) and a non-default port (probe-based fallback-pool admission) — both must reach
       the same plugin and produce the same parsed fields.
 - [ ] `l2tpv3` data-path fixture nests a full inner Ethernet stack under the `session_id`
