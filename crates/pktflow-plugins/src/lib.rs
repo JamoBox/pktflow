@@ -35,6 +35,7 @@ pub mod lldp;
 pub mod mdns;
 pub mod mld;
 pub mod modbus;
+pub mod mqtt;
 pub mod ndp;
 pub mod netflow9;
 pub mod ntp;
@@ -98,6 +99,7 @@ pub fn default_engine() -> Engine {
         .plugin(radiotap::Radiotap)
         .plugin(dot11::Dot11)
         .plugin(modbus::Modbus)
+        .plugin(mqtt::Mqtt)
         .plugin(dnp3::Dnp3)
         .plugin(enip::Enip)
         .plugin(bacnet_ip::BacnetIp)
