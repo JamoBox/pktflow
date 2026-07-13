@@ -28,6 +28,7 @@ pub mod ipv6;
 pub mod lacp;
 pub mod llc;
 pub mod lldp;
+pub mod llmnr;
 pub mod mdns;
 pub mod mld;
 pub mod modbus;
@@ -73,6 +74,7 @@ pub fn default_engine() -> Engine {
         .plugin(vxlan::Vxlan)
         .plugin(dns::Dns)
         .plugin(mdns::Mdns)
+        .plugin(llmnr::Llmnr)
         .plugin(dhcp::Dhcp)
         .plugin(dhcpv6::Dhcpv6)
         .plugin(ntp::Ntp)
