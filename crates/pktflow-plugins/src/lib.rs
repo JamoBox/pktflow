@@ -39,6 +39,8 @@ pub mod ndp;
 pub mod netflow9;
 pub mod ntp;
 pub mod ospf;
+pub mod ppp;
+pub mod pppoe;
 pub mod pvst_plus;
 pub mod radiotap;
 pub mod snmp;
@@ -81,6 +83,8 @@ pub fn default_engine() -> Engine {
         .plugin(ah::Ah)
         .plugin(wireguard::Wireguard)
         .plugin(l2tpv3::L2tpv3)
+        .plugin(pppoe::Pppoe)
+        .plugin(ppp::Ppp)
         .plugin(dns::Dns)
         .plugin(mdns::Mdns)
         .plugin(dhcp::Dhcp)

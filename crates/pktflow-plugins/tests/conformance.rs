@@ -39,6 +39,8 @@ use pktflow_plugins::ndp::Ndp;
 use pktflow_plugins::netflow9::Netflow9;
 use pktflow_plugins::ntp::Ntp;
 use pktflow_plugins::ospf::Ospf;
+use pktflow_plugins::ppp::Ppp;
+use pktflow_plugins::pppoe::Pppoe;
 use pktflow_plugins::pvst_plus::PvstPlus;
 use pktflow_plugins::radiotap::Radiotap;
 use pktflow_plugins::snmp::Snmp;
@@ -1313,6 +1315,76 @@ fn l2tpv3_over_ip_data_conforms() {
             expected_hint: Hint::ByProtocol("ethernet"),
         }],
         outer_ctx: vec![ipv4_predecessor_layer()],
+    });
+}
+
+// No `pppoe_discovery_conforms` case: Discovery frames never surface
+// `session_id` (`pppoe.rs`'s module/parse doc — always the §5.2 `0x0000`
+// placeholder, never a real stream key), so a Discovery `GoodPacket` here
+// would fail the 09.1 kit's rule 2/3 (identity key field required at
+// `>= Keys` for every sample once `stream_identity()` is `Some`) — the
+// same reason `l2tpv3`'s control-path sample isn't a `ConformanceCase`
+// either. Discovery's own field extraction (tags, VER/TYPE/CODE) is
+// covered directly in `pppoe.rs`'s unit tests instead.
+
+#[test]
+fn pppoe_session_conforms() {
+    // RFC 2516 §4.4: CODE 0x00, LENGTH not sliced (11.5's domain spec —
+    // the `udp` precedent, 06.4), so this stops right after the fixed
+    // 6-byte header regardless of the payload that follows.
+    let bytes = vec![
+        0x11, 0x00, // VER=1 TYPE=1 CODE=Session Data
+        0x00, 0x2A, // SESSION_ID = 42
+        0x00, 0x04, // LENGTH
+        0x00, 0x21, 0xDE, 0xAD, // PPP payload (not this plugin's to read)
+    ];
+    run_conformance(&ConformanceCase {
+        plugin: Box::new(Pppoe),
+        good: vec![GoodPacket {
+            bytes,
+            expected_header_len: 6,
+            expected_full_fields: vec![
+                ("session_id", Value::U64(42)),
+                ("version", Value::U64(1)),
+                ("type", Value::U64(1)),
+                ("code", Value::U64(0x00)),
+            ],
+            expected_hint: Hint::ByProtocol("ppp"),
+        }],
+        outer_ctx: Vec::new(),
+    });
+}
+
+#[test]
+fn ppp_ipv4_conforms() {
+    // RFC 1661 §2: uncompressed 2-octet Protocol field, IPv4 (RFC 1332).
+    let bytes = vec![0x00, 0x21, 0x45, 0x00];
+    run_conformance(&ConformanceCase {
+        plugin: Box::new(Ppp),
+        good: vec![GoodPacket {
+            bytes,
+            expected_header_len: 2,
+            expected_full_fields: vec![("protocol", Value::U64(0x0021))],
+            expected_hint: Hint::Route(RouteId::EtherType(0x0800)),
+        }],
+        outer_ctx: Vec::new(),
+    });
+}
+
+#[test]
+fn ppp_lcp_conforms() {
+    // RFC 1661 §2: uncompressed 2-octet Protocol field, LCP — Tier 2, so
+    // this plugin only identifies it and stops, doesn't decode it.
+    let bytes = vec![0xC0, 0x21, 0x01, 0x00];
+    run_conformance(&ConformanceCase {
+        plugin: Box::new(Ppp),
+        good: vec![GoodPacket {
+            bytes,
+            expected_header_len: 2,
+            expected_full_fields: vec![("protocol", Value::U64(0xC021))],
+            expected_hint: Hint::Terminal,
+        }],
+        outer_ctx: Vec::new(),
     });
 }
 

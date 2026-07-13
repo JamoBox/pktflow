@@ -71,9 +71,9 @@ ever needs to handle that trimmed shape.
 | Item | Spec |
 |---|---|
 | Claims | `EtherType(0x8863 /* Discovery */)`, `EtherType(0x8864 /* Session */)` |
-| Fields | `Structural`: `version`, `type`, `code`, `session_id` · `Full` (Discovery only, `code` ∈ {PADI 0x09, PADO 0x07, PADR 0x19, PADS 0x65, PADT 0xa7}): tag walk — `service_name` (Str), `ac_name` (Str), `host_uniq` (Bytes) |
+| Fields | `Structural`: `version`, `type`, `code` · Session stage only (`code == 0x00`) `Keys`: `session_id` (U64) · `Full` (Discovery only, `code` ∈ {PADI 0x09, PADO 0x07, PADR 0x19, PADS 0x65, PADT 0xa7}): tag walk — `service_name` (Str), `ac_name` (Str), `host_uniq` (Bytes) |
 | Hint | `code == 0x00` (Session data) → `ByProtocol("ppp")`; else (Discovery) → `Terminal` |
-| Identity | key `[{session_id, None}]` — one PPPoE session stream per `session_id`, parenting the `ppp ▸ ipv4/ipv6 ▸ ...` inner stack |
+| Identity | key `[{session_id, None}]` — one PPPoE session stream per `session_id`, parenting the `ppp ▸ ipv4/ipv6 ▸ ...` inner stack. Discovery frames never carry a `session_id` field at all (it's always the §5.2 `0x0000` placeholder before a session exists) — the L2TPv3 control-path precedent above, applied here: no stream forms during Discovery, only once a real session is established |
 
 **geneve** (RFC 8926) — like GRE, its `protocol_type` field *is* an EtherType value by
 protocol design (no translation table needed, unlike `ppp` above).
@@ -114,9 +114,9 @@ Geneve:   eth ▸ ipv4 ▸ udp ▸ geneve ▸ ipv4 ▸ ...          (EtherType r
       the same plugin and produce the same parsed fields.
 - [x] `l2tpv3` data-path fixture nests a full inner Ethernet stack under the `session_id`
       stream; control-path fixture stops `Terminal` without misinterpreting AVPs as data.
-- [ ] `pppoe ▸ ppp ▸ ipv4` fixture proves the translation-hint mechanism end-to-end with
+- [x] `pppoe ▸ ppp ▸ ipv4` fixture proves the translation-hint mechanism end-to-end with
       the **unmodified** 06.3 `ipv4` plugin (no `claims()` diff in that file) — the specific
       claim this domain makes about zero-touch reuse.
 - [x] `geneve` fixture mirrors 06.5's VXLAN two-VNIs-one-outer-stream test.
-- [ ] All five hierarchies above asserted node-by-node, same rigor as 06.5's acceptance
+- [x] All five hierarchies above asserted node-by-node, same rigor as 06.5's acceptance
       criteria.

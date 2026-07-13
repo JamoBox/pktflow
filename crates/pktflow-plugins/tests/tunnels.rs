@@ -5,7 +5,7 @@
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
-use pktflow_core::{LinkType, PacketMeta, ParseOpts, ProtocolName, StopReason};
+use pktflow_core::{LinkType, PacketMeta, ParseOpts, ProtocolName, StopReason, Value};
 use pktflow_flows::{Aggregator, AggregatorConfig, StreamId};
 use pktflow_plugins::default_engine;
 use pktflow_plugins::ipv4::internet_checksum;
@@ -129,6 +129,22 @@ fn ah(next_header: u8, spi: u32, sequence: u32, icv: &[u8]) -> Vec<u8> {
     a.extend_from_slice(&sequence.to_be_bytes());
     a.extend_from_slice(icv);
     a
+}
+
+/// PPPoE Session-stage header (RFC 2516 §4.1/§4.4): VER=1 TYPE=1,
+/// CODE=Session Data, the given `session_id`, LENGTH filled in from
+/// `payload` (not that this plugin slices by it — 11.5's domain spec).
+fn pppoe_session(session_id: u16, payload: &[u8]) -> Vec<u8> {
+    let mut p = vec![0x11, 0x00];
+    p.extend_from_slice(&session_id.to_be_bytes());
+    p.extend_from_slice(&(payload.len() as u16).to_be_bytes());
+    p
+}
+
+/// PPP frame (RFC 1661 §2): uncompressed 2-octet Protocol field, no HDLC
+/// framing (already stripped by PPPoE, RFC 2516 §4.4).
+fn ppp(protocol: u16) -> Vec<u8> {
+    protocol.to_be_bytes().to_vec()
 }
 
 /// Walks the single root-to-leaf chain, returning protocols in order.
@@ -634,4 +650,177 @@ fn inner_direction_stays_canonical_when_outer_disagrees() {
     assert!(inner_ip.stats.iter().all(|s| s.packets == 1));
     let session = agg.at_layer("tcp")[0];
     assert!(session.stats.iter().all(|s| s.packets == 1));
+}
+
+/// The single root-to-leaf protocol chain of one dissected packet,
+/// including translation-only layers (`ppp`) that form no aggregator
+/// stream (ipv6_control_plane.rs's helper, duplicated here — no shared
+/// test-support module, same as this file's own `chain`).
+fn packet_chain(packet: &pktflow_core::DissectedPacket) -> Vec<ProtocolName> {
+    packet.layers.iter().map(|l| l.protocol).collect()
+}
+
+fn pppoe_session_fixture(
+    session_id: u16,
+    ppp_protocol: u16,
+    inner_ip_protocol: u8,
+    src: [u8; 4],
+    dst: [u8; 4],
+    sport: u16,
+    dport: u16,
+) -> Vec<u8> {
+    let mut inner = ipv4(inner_ip_protocol, src, dst);
+    inner.extend_from_slice(&tcp(sport, dport));
+
+    let mut frame = eth(MAC_B, MAC_A, 0x8864); // PPPoE Session EtherType
+    frame.extend_from_slice(&pppoe_session(session_id, &ppp(ppp_protocol)));
+    frame.extend_from_slice(&ppp(ppp_protocol));
+    frame.extend_from_slice(&inner);
+    frame
+}
+
+#[test]
+fn pppoe_session_ppp_ipv4_translation_hint_works_with_unmodified_ipv4_plugin() {
+    // 11.5's specific claim: eth ▸ pppoe ▸ ppp ▸ ipv4 ▸ tcp, reaching the
+    // real 06.3 `ipv4` plugin purely through `ppp`'s Hint::Route
+    // translation (protocol 0x0021 -> EtherType 0x0800) with zero changes
+    // to `ipv4::claims()`. Checking `ipv4`'s own extracted fields (not
+    // just the protocol-name chain) proves the *real* plugin ran, not a
+    // stub.
+    let engine = Arc::new(default_engine());
+    let frame = pppoe_session_fixture(
+        0x1234,
+        0x0021,
+        6,
+        [203, 0, 113, 10],
+        [203, 0, 113, 20],
+        51000,
+        80,
+    );
+    let packet = engine.dissect(&frame, meta(frame.len(), 0), ParseOpts::default());
+
+    assert_eq!(
+        packet_chain(&packet),
+        ["ethernet", "pppoe", "ppp", "ipv4", "tcp"]
+    );
+    assert_eq!(packet.stop, StopReason::Complete);
+
+    let ip_layer = packet
+        .layers
+        .iter()
+        .find(|l| l.protocol == "ipv4")
+        .expect("ipv4 layer");
+    assert_eq!(
+        ip_layer.fields.get("src_addr"),
+        Some(&Value::from(&[203, 0, 113, 10][..]))
+    );
+    assert_eq!(
+        ip_layer.fields.get("dst_addr"),
+        Some(&Value::from(&[203, 0, 113, 20][..]))
+    );
+
+    let tcp_layer = packet
+        .layers
+        .iter()
+        .find(|l| l.protocol == "tcp")
+        .expect("tcp layer");
+    assert_eq!(tcp_layer.fields.get("dst_port"), Some(&Value::U64(80)));
+}
+
+#[test]
+fn pppoe_session_ppp_ipv6_translation_hint_works_with_unmodified_ipv6_plugin() {
+    // The IPv6 half of the same translation claim (protocol 0x0057 ->
+    // EtherType 0x86DD): RFC 8200's fixed 40-byte header, next_header=59
+    // (No Next Header) so this plugin's own dissection ends right there.
+    let engine = Arc::new(default_engine());
+    let mut ipv6_hdr = vec![0x60, 0, 0, 0, 0, 0, 59, 64]; // ver=6, payload_len=0, next_header=59, hop_limit=64
+    ipv6_hdr.extend_from_slice(&[0xFE, 0x80, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x01]); // src
+    ipv6_hdr.extend_from_slice(&[0xFE, 0x80, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x02]); // dst
+    assert_eq!(ipv6_hdr.len(), 40);
+
+    let mut frame = eth(MAC_B, MAC_A, 0x8864);
+    frame.extend_from_slice(&pppoe_session(1, &ppp(0x0057)));
+    frame.extend_from_slice(&ppp(0x0057));
+    frame.extend_from_slice(&ipv6_hdr);
+    let m = meta(frame.len(), 0);
+    let packet = engine.dissect(&frame, m, ParseOpts::default());
+
+    assert_eq!(packet_chain(&packet), ["ethernet", "pppoe", "ppp", "ipv6"]);
+    assert_eq!(packet.stop, StopReason::Complete);
+}
+
+#[test]
+fn pppoe_session_stream_parents_directly_under_ppp_since_ppp_forms_no_stream() {
+    // `ppp` declares no stream identity (a pure translation layer, like
+    // `llc`), so by the aggregator's nearest-outer-stream rule (05.3) the
+    // inner IP conversation parents directly to the `pppoe` session
+    // stream, with no intervening `ppp` node — this is the one place
+    // where "ppp forms no stream" is actually observable in the
+    // aggregator tree rather than just the per-packet layer list.
+    let engine = Arc::new(default_engine());
+    let mut agg = Aggregator::new(&engine, AggregatorConfig::default());
+    let frame = pppoe_session_fixture(
+        0xABCD,
+        0x0021,
+        6,
+        [198, 51, 100, 5],
+        [198, 51, 100, 6],
+        4000,
+        22,
+    );
+    agg.ingest(&engine.dissect(&frame, meta(frame.len(), 0), ParseOpts::default()));
+
+    let pppoe_stream = agg.at_layer("pppoe")[0];
+    let inner_ip = agg
+        .at_layer("ipv4")
+        .into_iter()
+        .find(|s| s.parent == Some(pppoe_stream.id))
+        .expect("inner ip parented directly to pppoe, skipping ppp");
+    let session = agg.at_layer("tcp")[0];
+    assert_eq!(session.parent, Some(inner_ip.id));
+}
+
+#[test]
+fn two_session_ids_over_the_same_link_are_sibling_pppoe_streams() {
+    let engine = Arc::new(default_engine());
+    let mut agg = Aggregator::new(&engine, AggregatorConfig::default());
+
+    for (ms, session_id) in [(0u64, 1u16), (1, 2)] {
+        let frame = pppoe_session_fixture(
+            session_id,
+            0x0021,
+            6,
+            [10, 1, 1, 1],
+            [10, 1, 1, 2],
+            5000,
+            443,
+        );
+        agg.ingest(&engine.dissect(&frame, meta(frame.len(), ms), ParseOpts::default()));
+    }
+
+    let sessions = agg.at_layer("pppoe");
+    assert_eq!(sessions.len(), 2, "one stream per session_id");
+    assert_ne!(sessions[0].key, sessions[1].key);
+}
+
+#[test]
+fn pppoe_discovery_stops_terminal_with_no_stream() {
+    // A PADI's `session_id` is always the §5.2 `0x0000` placeholder sent
+    // before a session exists, so `pppoe.rs` never surfaces it as a field
+    // for Discovery frames (its parse doc) — with no `session_id` field to
+    // key on, the aggregator's standard missing-key handling applies and
+    // no stream forms, the same "no phantom streams" principle D12/PRD
+    // §4.B.4 already applies to ESP past its encryption boundary.
+    let engine = Arc::new(default_engine());
+    let mut agg = Aggregator::new(&engine, AggregatorConfig::default());
+
+    let mut frame = eth(MAC_A, MAC_B, 0x8863); // PPPoE Discovery EtherType
+    frame.extend_from_slice(&[0x11, 0x09, 0x00, 0x00, 0x00, 0x00]); // PADI, no tags
+
+    agg.ingest(&engine.dissect(&frame, meta(frame.len(), 0), ParseOpts::default()));
+    assert_eq!(
+        agg.at_layer("pppoe").len(),
+        0,
+        "Discovery frames carry no session_id field, so no stream can key on it"
+    );
 }
