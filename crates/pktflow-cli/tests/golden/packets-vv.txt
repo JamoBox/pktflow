@@ -1,13 +1,13 @@
 0  00:10:00.000  ethernet ▸ ipv4 ▸ tcp  10.0.0.5:52341 → 93.184.216.34:443  flags=SYN  54 B  [complete]
-    ethernet @0 hdr 14: src_mac=aa:bb:cc:dd:ee:01 dst_mac=aa:bb:cc:dd:ee:02 ethertype=2048
-    ipv4 @14 hdr 20: src_addr=10.0.0.5 dst_addr=93.184.216.34 protocol=6 ttl=64 total_len=40 flags=2 frag_offset=0 ihl=5
+    ethernet @0 hdr 14: src_mac=aa:bb:cc:dd:ee:01 dst_mac=aa:bb:cc:dd:ee:02 ethertype=IPv4 (0x0800)
+    ipv4 @14 hdr 20: src_addr=10.0.0.5 dst_addr=93.184.216.34 protocol=TCP (6) ttl=64 total_len=40 flags=2 frag_offset=0 ihl=5
     tcp @34 hdr 20: src_port=52341 dst_port=443 flags=SYN seq=1 ack=0 window=8192 data_offset=5
-1  00:10:01.000  ethernet ▸ ipv4 ▸ udp  10.0.0.5:40000 → 10.0.0.9:55555  50 B  [unclaimed: udp_port:55555]
-    ethernet @0 hdr 14: src_mac=aa:bb:cc:dd:ee:01 dst_mac=aa:bb:cc:dd:ee:02 ethertype=2048
-    ipv4 @14 hdr 20: src_addr=10.0.0.5 dst_addr=10.0.0.9 protocol=17 ttl=64 total_len=36 flags=2 frag_offset=0 ihl=5
-    udp @34 hdr 8: src_port=40000 dst_port=55555 length=16
+1  00:10:01.000  ethernet ▸ ipv4 ▸ udp  10.0.0.5:40000 → 10.0.0.9:51820  50 B  [unclaimed: udp_port:51820]
+    ethernet @0 hdr 14: src_mac=aa:bb:cc:dd:ee:01 dst_mac=aa:bb:cc:dd:ee:02 ethertype=IPv4 (0x0800)
+    ipv4 @14 hdr 20: src_addr=10.0.0.5 dst_addr=10.0.0.9 protocol=UDP (17) ttl=64 total_len=36 flags=2 frag_offset=0 ihl=5
+    udp @34 hdr 8: src_port=40000 dst_port=51820 length=16
     payload (8 of 8 unparsed bytes): cc cc cc cc cc cc cc cc
 2  00:10:02.000  ethernet ▸ ipv4  10.0.0.5 → 93.184.216.34  42 B  [truncated: needed 4, have 0]
-    ethernet @0 hdr 14: src_mac=aa:bb:cc:dd:ee:01 dst_mac=aa:bb:cc:dd:ee:02 ethertype=2048
-    ipv4 @14 hdr 20: src_addr=10.0.0.5 dst_addr=93.184.216.34 protocol=6 ttl=64 total_len=28 flags=2 frag_offset=0 ihl=5
+    ethernet @0 hdr 14: src_mac=aa:bb:cc:dd:ee:01 dst_mac=aa:bb:cc:dd:ee:02 ethertype=IPv4 (0x0800)
+    ipv4 @14 hdr 20: src_addr=10.0.0.5 dst_addr=93.184.216.34 protocol=TCP (6) ttl=64 total_len=28 flags=2 frag_offset=0 ihl=5
     payload (8 of 8 unparsed bytes): 00 50 01 bb 00 00 00 01

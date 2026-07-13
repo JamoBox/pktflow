@@ -38,7 +38,7 @@
           "observations": 9,
           "overflow": false,
           "values": [
-            "2048"
+            "IPv4 (0x0800)"
           ]
         }
       },
@@ -78,7 +78,7 @@
           "observations": 2,
           "overflow": false,
           "values": [
-            "17"
+            "UDP (17)"
           ]
         }
       },
@@ -197,7 +197,7 @@
           "observations": 7,
           "overflow": false,
           "values": [
-            "6"
+            "TCP (6)"
           ]
         }
       },

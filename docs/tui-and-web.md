@@ -66,6 +66,12 @@ stop-class chips, and the unknown-triage table with in-browser hex dumps.
 During live capture the page updates itself over SSE; the LIVE badge pulses
 until the run finishes.
 
+The page can also **load a new capture without restarting the server**: drop
+a `.pcap`/`.pcapng` anywhere on the page (or use the header's *open capture*
+button). The upload replaces the current view — the previous pipeline is
+stopped, a fresh one is spawned over the uploaded file with the same flags
+(`--depth`, `-c`, …), and every open page follows the swap on its next tick.
+
 `--listen` defaults to `127.0.0.1:8320`. Binding beyond loopback exposes the
 capture contents to whoever can reach the port — there is no auth layer.
 
@@ -81,6 +87,7 @@ record shape from `pktflow streams --format json`:
 | `GET /api/stream/{id}` | a single D8 record by display id; 404 if evicted/absent |
 | `GET /api/search?q=EXPR` | evaluate a [query](query-language.md): `matches` (selected ids), `visible` (matches + ancestors), or `error` for a bad expression |
 | `GET /api/events` | SSE `tick` events (~2/s): generation, finished, packets, bytes, live streams — refetch `/api/snapshot` when the generation moves |
+| `POST /api/upload?name=FILE` | raw `.pcap`/`.pcapng` bytes as the body (magic-validated, ≤512 MB): stops the current pipeline and serves the uploaded capture instead |
 
 ```sh
 curl -s localhost:8320/api/snapshot | jq '.streams[] | select(.protocol=="tcp")'

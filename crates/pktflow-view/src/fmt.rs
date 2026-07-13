@@ -1,10 +1,129 @@
-//! The FR-28 renderer table (per-shape unit tests, IPv6 compression)
-//! and D8's timestamp formatting; the shared primitives the views
-//! build on.
-
+use std::sync::RwLock;
 use std::time::{Duration, SystemTime};
 
-use pktflow_core::{FieldMap, Value};
+use pktflow_core::{FieldMap, RouteId, Value};
+
+type RouteResolver = Box<dyn Fn(RouteId) -> Option<String> + Send + Sync>;
+
+static RESOLVER: RwLock<Option<RouteResolver>> = RwLock::new(None);
+
+pub fn register_route_resolver<F>(f: F)
+where
+    F: Fn(RouteId) -> Option<String> + Send + Sync + 'static,
+{
+    if let Ok(mut guard) = RESOLVER.write() {
+        *guard = Some(Box::new(f));
+    }
+}
+
+pub fn resolve_route_name(route_id: RouteId) -> Option<String> {
+    if let Ok(guard) = RESOLVER.read() {
+        if let Some(resolver) = guard.as_ref() {
+            return resolver(route_id);
+        }
+    }
+    None
+}
+
+fn get_u64(value: &Value) -> Option<u64> {
+    match value {
+        Value::U64(v) => Some(*v),
+        Value::I64(v) => u64::try_from(*v).ok(),
+        _ => None,
+    }
+}
+
+fn format_protocol_display_name(name: &str) -> String {
+    match name {
+        "ipv4" => "IPv4".to_string(),
+        "ipv6" => "IPv6".to_string(),
+        "icmpv4" => "ICMPv4".to_string(),
+        "icmpv6" => "ICMPv6".to_string(),
+        "dhcpv6" => "DHCPv6".to_string(),
+        "bacnet_ip" => "BACnet/IP".to_string(),
+        "pvst_plus" => "PVST+".to_string(),
+        "netflow9" => "NetFlow 9".to_string(),
+        other => other.to_uppercase(),
+    }
+}
+
+fn resolve_field_route_id(protocol: &str, name: &str, val: u64) -> Option<RouteId> {
+    if name == "ethertype"
+        || (protocol == "gre" && name == "protocol")
+        || (protocol == "llc" && name == "pid")
+    {
+        if let Ok(v) = u16::try_from(val) {
+            return Some(RouteId::EtherType(v));
+        }
+    }
+    if name == "next_header" || (protocol == "ipv4" && name == "protocol") {
+        if let Ok(v) = u8::try_from(val) {
+            return Some(RouteId::IpProtocol(v));
+        }
+    }
+    if protocol == "udp" && (name == "src_port" || name == "dst_port" || name == "port") {
+        if let Ok(v) = u16::try_from(val) {
+            return Some(RouteId::UdpPort(v));
+        }
+    }
+    if protocol == "tcp" && (name == "src_port" || name == "dst_port" || name == "port") {
+        if let Ok(v) = u16::try_from(val) {
+            return Some(RouteId::TcpPort(v));
+        }
+    }
+    if protocol == "llc" && (name == "dsap" || name == "ssap") {
+        return Some(RouteId::Custom {
+            space: "llc_dsap",
+            id: val,
+        });
+    }
+    if protocol == "icmpv6" && name == "type" {
+        return Some(RouteId::Custom {
+            space: "icmpv6_type",
+            id: val,
+        });
+    }
+    None
+}
+
+fn format_resolved_value(route_id: &RouteId, name: &str) -> String {
+    let display_name = format_protocol_display_name(name);
+    match route_id {
+        RouteId::EtherType(val) => format!("{display_name} (0x{val:04x})"),
+        RouteId::Custom {
+            space: "snap_pid",
+            id,
+        } => format!("{display_name} (0x{id:04x})"),
+        RouteId::Custom {
+            space: "llc_dsap",
+            id,
+        } => format!("{display_name} (0x{id:02x})"),
+        RouteId::IpProtocol(val) => format!("{display_name} ({val})"),
+        RouteId::UdpPort(val) => format!("{display_name} ({val})"),
+        RouteId::TcpPort(val) => format!("{display_name} ({val})"),
+        RouteId::LinkType(val) => format!("{display_name} ({val})"),
+        RouteId::Custom { id, .. } => format!("{display_name} ({id})"),
+    }
+}
+
+fn format_unresolved_value(route_id: &RouteId) -> String {
+    match route_id {
+        RouteId::EtherType(val) => format!("0x{val:04x}"),
+        RouteId::Custom {
+            space: "snap_pid",
+            id,
+        } => format!("0x{id:04x}"),
+        RouteId::Custom {
+            space: "llc_dsap",
+            id,
+        } => format!("0x{id:02x}"),
+        RouteId::IpProtocol(val) => val.to_string(),
+        RouteId::UdpPort(val) => val.to_string(),
+        RouteId::TcpPort(val) => val.to_string(),
+        RouteId::LinkType(val) => val.to_string(),
+        RouteId::Custom { id, .. } => id.to_string(),
+    }
+}
 
 /// RFC 3339 UTC (D8 JSON timestamps): `2026-07-02T12:04:01Z`, with a
 /// fractional-second suffix only when the packet timestamp carries one.
@@ -22,6 +141,17 @@ pub fn field_value_str(protocol: &str, name: &str, value: &Value) -> String {
             return tcp_flags_str(*bits);
         }
     }
+
+    if let Some(val) = get_u64(value) {
+        if let Some(route_id) = resolve_field_route_id(protocol, name, val) {
+            if let Some(resolved_name) = resolve_route_name(route_id) {
+                return format_resolved_value(&route_id, &resolved_name);
+            } else {
+                return format_unresolved_value(&route_id);
+            }
+        }
+    }
+
     value_str(name, value)
 }
 
@@ -359,5 +489,62 @@ mod tests {
             rfc3339(SystemTime::UNIX_EPOCH + Duration::from_millis(1_751_457_841_221)),
             "2025-07-02T12:04:01.221Z"
         );
+    }
+
+    #[test]
+    fn generic_route_resolver_formatting() {
+        register_route_resolver(|route| match route {
+            RouteId::EtherType(0x0800) => Some("ipv4".to_string()),
+            RouteId::EtherType(0x8847) => Some("mpls".to_string()),
+            RouteId::IpProtocol(6) => Some("tcp".to_string()),
+            RouteId::UdpPort(53) => Some("dns".to_string()),
+            RouteId::Custom {
+                space: "llc_dsap",
+                id: 0x42,
+            } => Some("stp".to_string()),
+            _ => None,
+        });
+
+        // EtherType resolved
+        assert_eq!(
+            field_value_str("eth", "ethertype", &Value::U64(0x0800)),
+            "IPv4 (0x0800)"
+        );
+        assert_eq!(
+            field_value_str("eth", "ethertype", &Value::U64(0x8847)),
+            "MPLS (0x8847)"
+        );
+        // EtherType unresolved
+        assert_eq!(
+            field_value_str("eth", "ethertype", &Value::U64(0x9999)),
+            "0x9999"
+        );
+
+        // IP Protocol resolved
+        assert_eq!(
+            field_value_str("ipv4", "protocol", &Value::U64(6)),
+            "TCP (6)"
+        );
+        // IP Protocol unresolved
+        assert_eq!(field_value_str("ipv4", "protocol", &Value::U64(99)), "99");
+
+        // Port resolved
+        assert_eq!(
+            field_value_str("udp", "src_port", &Value::U64(53)),
+            "DNS (53)"
+        );
+        // Port unresolved
+        assert_eq!(
+            field_value_str("udp", "dst_port", &Value::U64(12345)),
+            "12345"
+        );
+
+        // Custom space resolved
+        assert_eq!(
+            field_value_str("llc", "dsap", &Value::U64(0x42)),
+            "STP (0x42)"
+        );
+        // Custom space unresolved
+        assert_eq!(field_value_str("llc", "ssap", &Value::U64(0x55)), "0x55");
     }
 }
