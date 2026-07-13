@@ -5,6 +5,7 @@ mod kit;
 
 use pktflow_core::{Canonicalize, FieldMap, KeyField, LayerRecord, StreamIdentity};
 use pktflow_core::{Hint, RouteId, Value};
+use pktflow_plugins::ah::Ah;
 use pktflow_plugins::arp::Arp;
 use pktflow_plugins::bacnet_ip::BacnetIp;
 use pktflow_plugins::bgp::Bgp;
@@ -16,7 +17,9 @@ use pktflow_plugins::dns::Dns;
 use pktflow_plugins::dot11::Dot11;
 use pktflow_plugins::eapol::Eapol;
 use pktflow_plugins::enip::Enip;
+use pktflow_plugins::esp::Esp;
 use pktflow_plugins::ethernet::Ethernet;
+use pktflow_plugins::geneve::Geneve;
 use pktflow_plugins::gre::Gre;
 use pktflow_plugins::gtp_u::GtpU;
 use pktflow_plugins::hsrp::Hsrp;
@@ -26,19 +29,24 @@ use pktflow_plugins::igmp::Igmp;
 use pktflow_plugins::ipfix::Ipfix;
 use pktflow_plugins::ipv4::{internet_checksum, Ipv4};
 use pktflow_plugins::ipv6::Ipv6;
+use pktflow_plugins::l2tpv3::L2tpv3;
 use pktflow_plugins::lacp::Lacp;
 use pktflow_plugins::llc::Llc;
 use pktflow_plugins::lldp::Lldp;
+use pktflow_plugins::llmnr::Llmnr;
 use pktflow_plugins::mdns::Mdns;
 use pktflow_plugins::mld::Mld;
 use pktflow_plugins::modbus::Modbus;
+use pktflow_plugins::mqtt::Mqtt;
 use pktflow_plugins::ndp::Ndp;
 use pktflow_plugins::netflow9::Netflow9;
 use pktflow_plugins::ntp::Ntp;
 use pktflow_plugins::ospf::Ospf;
 use pktflow_plugins::pvst_plus::PvstPlus;
 use pktflow_plugins::radiotap::Radiotap;
+use pktflow_plugins::sctp::Sctp;
 use pktflow_plugins::snmp::Snmp;
+use pktflow_plugins::ssdp::Ssdp;
 use pktflow_plugins::stp::Stp;
 use pktflow_plugins::syslog::Syslog;
 use pktflow_plugins::tcp::Tcp;
@@ -47,6 +55,7 @@ use pktflow_plugins::udp::Udp;
 use pktflow_plugins::vlan::Vlan;
 use pktflow_plugins::vrrp::Vrrp;
 use pktflow_plugins::vxlan::Vxlan;
+use pktflow_plugins::wireguard::Wireguard;
 
 use kit::{run_conformance, ConformanceCase, GoodPacket};
 
@@ -947,6 +956,67 @@ fn tcp_conforms() {
 }
 
 #[test]
+fn sctp_conforms() {
+    // RFC 9260 §3.1 common header + §3.3.2 bare INIT chunk (20 bytes, no
+    // optional parameters).
+    let mut init_packet = vec![
+        0x87, 0x07, 0x0F, 0x1C, // 34567 -> 3868
+        0x11, 0x22, 0x33, 0x44, // verification tag
+        0x00, 0x00, 0x00, 0x00, // checksum (not verified)
+    ];
+    init_packet.extend_from_slice(&[0x01, 0x00, 0x00, 0x14]); // INIT, flags 0, length 20
+    init_packet.extend_from_slice(&0xAABB_CCDDu32.to_be_bytes()); // initiate tag
+    init_packet.extend_from_slice(&0x0001_0000u32.to_be_bytes()); // a_rwnd
+    init_packet.extend_from_slice(&10u16.to_be_bytes()); // outbound streams
+    init_packet.extend_from_slice(&5u16.to_be_bytes()); // inbound streams
+    init_packet.extend_from_slice(&0x1234_5678u32.to_be_bytes()); // initial tsn
+
+    // RFC 9260 §3.3.8 SHUTDOWN: 4-byte Cumulative TSN Ack value, no
+    // INIT-family fixed fields to extract.
+    let mut shutdown_packet = vec![
+        0x0F, 0x1C, 0x87, 0x07, // 3868 -> 34567
+        0x99, 0x88, 0x77, 0x66, // verification tag
+        0x00, 0x00, 0x00, 0x00, // checksum
+    ];
+    shutdown_packet.extend_from_slice(&[0x07, 0x00, 0x00, 0x08]); // SHUTDOWN, length 8
+    shutdown_packet.extend_from_slice(&0xDEAD_BEEFu32.to_be_bytes());
+
+    run_conformance(&ConformanceCase {
+        plugin: Box::new(Sctp),
+        good: vec![
+            GoodPacket {
+                bytes: init_packet,
+                expected_header_len: 32,
+                expected_full_fields: vec![
+                    ("src_port", Value::U64(34567)),
+                    ("dst_port", Value::U64(3868)),
+                    ("verification_tag", Value::U64(0x1122_3344)),
+                    ("first_chunk_type", Value::U64(1)),
+                    ("initiate_tag", Value::U64(0xAABB_CCDD)),
+                    ("a_rwnd", Value::U64(65536)),
+                    ("num_outbound_streams", Value::U64(10)),
+                    ("num_inbound_streams", Value::U64(5)),
+                    ("initial_tsn", Value::U64(0x1234_5678)),
+                ],
+                expected_hint: Hint::Terminal,
+            },
+            GoodPacket {
+                bytes: shutdown_packet,
+                expected_header_len: 20,
+                expected_full_fields: vec![
+                    ("src_port", Value::U64(3868)),
+                    ("dst_port", Value::U64(34567)),
+                    ("verification_tag", Value::U64(0x9988_7766)),
+                    ("first_chunk_type", Value::U64(7)),
+                ],
+                expected_hint: Hint::Terminal,
+            },
+        ],
+        outer_ctx: Vec::new(),
+    });
+}
+
+#[test]
 fn udp_conforms() {
     // DNS-reply-shaped datagram: 53 -> 34567 with 4 payload bytes.
     let bytes = vec![
@@ -1078,6 +1148,287 @@ fn gtp_u_conforms() {
     });
 }
 
+#[test]
+fn geneve_conforms() {
+    run_conformance(&ConformanceCase {
+        plugin: Box::new(Geneve),
+        good: vec![
+            // RFC 8926 bare header: no options, VNI 5001, IPv4 inside.
+            GoodPacket {
+                bytes: vec![0x00, 0x00, 0x08, 0x00, 0x00, 0x13, 0x89, 0x00],
+                expected_header_len: 8,
+                expected_full_fields: vec![
+                    ("vni", Value::U64(5001)),
+                    ("version", Value::U64(0)),
+                    ("opt_len", Value::U64(0)),
+                    ("o_bit", Value::Bool(false)),
+                    ("c_bit", Value::Bool(false)),
+                    ("protocol_type", Value::U64(0x0800)),
+                    ("options", Value::from(&b""[..])),
+                ],
+                expected_hint: Hint::Route(RouteId::EtherType(0x0800)),
+            },
+            // One option word present, O and C bits set.
+            GoodPacket {
+                bytes: vec![
+                    0x01, 0xC0, // Ver=0, Opt Len=1; O=1, C=1
+                    0x08, 0x00, // protocol_type = IPv4
+                    0x00, 0x13, 0x89, // VNI = 5001
+                    0x00, // reserved
+                    0xDE, 0xAD, 0xBE, 0xEF, // one 4-byte option word, opaque
+                ],
+                expected_header_len: 12,
+                expected_full_fields: vec![
+                    ("vni", Value::U64(5001)),
+                    ("version", Value::U64(0)),
+                    ("opt_len", Value::U64(1)),
+                    ("o_bit", Value::Bool(true)),
+                    ("c_bit", Value::Bool(true)),
+                    ("protocol_type", Value::U64(0x0800)),
+                    ("options", Value::from(&[0xDE, 0xAD, 0xBE, 0xEF][..])),
+                ],
+                expected_hint: Hint::Route(RouteId::EtherType(0x0800)),
+            },
+        ],
+        outer_ctx: Vec::new(),
+    });
+}
+
+#[test]
+fn esp_conforms() {
+    run_conformance(&ConformanceCase {
+        plugin: Box::new(Esp),
+        good: vec![GoodPacket {
+            // RFC 4303 §2: SPI 0x1234_5678, sequence 42, then opaque
+            // ciphertext this plugin must never interpret.
+            bytes: vec![
+                0x12, 0x34, 0x56, 0x78, 0x00, 0x00, 0x00, 0x2A, 0xDE, 0xAD, 0xBE, 0xEF,
+            ],
+            expected_header_len: 8,
+            expected_full_fields: vec![
+                ("spi", Value::U64(0x1234_5678)),
+                ("sequence", Value::U64(42)),
+            ],
+            expected_hint: Hint::Terminal,
+        }],
+        outer_ctx: Vec::new(),
+    });
+}
+
+#[test]
+fn ah_conforms() {
+    run_conformance(&ConformanceCase {
+        plugin: Box::new(Ah),
+        good: vec![
+            // RFC 4302 §2: Next Header=TCP(6), Payload Len=4 (12-byte ICV,
+            // the HMAC-SHA1-96 default per §5), SPI 0x1234_5678, sequence
+            // 42, then the ICV — every byte cleartext.
+            GoodPacket {
+                bytes: vec![
+                    0x06, 0x04, 0x00, 0x00, 0x12, 0x34, 0x56, 0x78, 0x00, 0x00, 0x00, 0x2A, 0xAA,
+                    0xBB, 0xCC, 0xDD, 0xEE, 0xFF, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66,
+                ],
+                expected_header_len: 24,
+                expected_full_fields: vec![
+                    ("spi", Value::U64(0x1234_5678)),
+                    ("next_header", Value::U64(6)),
+                    ("payload_len", Value::U64(4)),
+                    ("sequence", Value::U64(42)),
+                    (
+                        "icv",
+                        Value::from(
+                            &[
+                                0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF, 0x11, 0x22, 0x33, 0x44, 0x55,
+                                0x66,
+                            ][..],
+                        ),
+                    ),
+                ],
+                expected_hint: Hint::Route(RouteId::IpProtocol(6)),
+            },
+            // Next Header=UDP(17), Payload Len=1 (zero-length ICV): the
+            // minimum syntactically valid header, no ICV bytes at all.
+            GoodPacket {
+                bytes: vec![0x11, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0, 0, 0, 1],
+                expected_header_len: 12,
+                expected_full_fields: vec![
+                    ("spi", Value::U64(1)),
+                    ("next_header", Value::U64(17)),
+                    ("payload_len", Value::U64(1)),
+                    ("sequence", Value::U64(1)),
+                    ("icv", Value::from(&b""[..])),
+                ],
+                expected_hint: Hint::Route(RouteId::IpProtocol(17)),
+            },
+        ],
+        outer_ctx: Vec::new(),
+    });
+}
+
+// wireguard.com/protocol/ ("Messages"): every message shares message_type
+// (1 byte) + 3 reserved bytes, encoded together as one little-endian u32
+// (11.5) — these four builders cover all four message types, each a
+// fixed-size, all-or-nothing Noise/AEAD message except Transport Data.
+
+/// Handshake Initiation (148 bytes): sender_index, then ephemeral(32) +
+/// encrypted static(48) + encrypted timestamp(28) + mac1(16) + mac2(16).
+fn wg_handshake_initiation_bytes() -> Vec<u8> {
+    let mut m = vec![0x01, 0x00, 0x00, 0x00]; // type=1, reserved=0
+    m.extend_from_slice(&0x1111_1111u32.to_le_bytes()); // sender_index
+    m.extend(std::iter::repeat_n(0xAB, 148 - 8));
+    m
+}
+
+/// Handshake Response (92 bytes): sender_index, receiver_index, then
+/// ephemeral(32) + encrypted-nothing(16) + mac1(16) + mac2(16).
+fn wg_handshake_response_bytes() -> Vec<u8> {
+    let mut m = vec![0x02, 0x00, 0x00, 0x00]; // type=2, reserved=0
+    m.extend_from_slice(&0x2222_2222u32.to_le_bytes()); // sender_index
+    m.extend_from_slice(&0x1111_1111u32.to_le_bytes()); // receiver_index
+    m.extend(std::iter::repeat_n(0xCD, 92 - 12));
+    m
+}
+
+/// Cookie Reply (64 bytes): receiver_index, then nonce(24) + encrypted
+/// cookie(32) — a DoS-mitigation message (whitepaper §5.3), not session
+/// traffic.
+fn wg_cookie_reply_bytes() -> Vec<u8> {
+    let mut m = vec![0x03, 0x00, 0x00, 0x00]; // type=3, reserved=0
+    m.extend_from_slice(&0x1111_1111u32.to_le_bytes()); // receiver_index
+    m.extend(std::iter::repeat_n(0xEF, 64 - 8));
+    m
+}
+
+/// Transport Data: the one variable-length type. `header_len` covers only
+/// the fixed 16-byte prefix (message_type+reserved, receiver_index,
+/// counter) — the AEAD-encrypted payload past it is never counted as
+/// header, the ESP precedent (D12, 11.5's `esp`).
+fn wg_transport_data_bytes() -> Vec<u8> {
+    let mut m = vec![0x04, 0x00, 0x00, 0x00]; // type=4, reserved=0
+    m.extend_from_slice(&0x3333_3333u32.to_le_bytes()); // receiver_index
+    m.extend_from_slice(&7u64.to_le_bytes()); // counter
+    m.extend(std::iter::repeat_n(0x11, 16)); // Poly1305 tag, zero plaintext
+    m
+}
+
+#[test]
+fn wireguard_conforms() {
+    run_conformance(&ConformanceCase {
+        plugin: Box::new(Wireguard),
+        good: vec![
+            GoodPacket {
+                expected_header_len: wg_handshake_initiation_bytes().len(),
+                bytes: wg_handshake_initiation_bytes(),
+                expected_full_fields: vec![
+                    ("app", Value::from("wireguard")),
+                    ("msg_type", Value::from("handshake_initiation")),
+                    ("sender_index", Value::U64(0x1111_1111)),
+                ],
+                expected_hint: Hint::Terminal,
+            },
+            GoodPacket {
+                expected_header_len: wg_handshake_response_bytes().len(),
+                bytes: wg_handshake_response_bytes(),
+                expected_full_fields: vec![
+                    ("app", Value::from("wireguard")),
+                    ("msg_type", Value::from("handshake_response")),
+                    ("sender_index", Value::U64(0x2222_2222)),
+                    ("receiver_index", Value::U64(0x1111_1111)),
+                ],
+                expected_hint: Hint::Terminal,
+            },
+            GoodPacket {
+                expected_header_len: wg_cookie_reply_bytes().len(),
+                bytes: wg_cookie_reply_bytes(),
+                expected_full_fields: vec![
+                    ("app", Value::from("wireguard")),
+                    ("msg_type", Value::from("cookie_reply")),
+                    ("receiver_index", Value::U64(0x1111_1111)),
+                ],
+                expected_hint: Hint::Terminal,
+            },
+            GoodPacket {
+                // header_len (16) is deliberately shorter than the full
+                // fixture (32 bytes: prefix + Poly1305 tag) — Transport
+                // Data's ciphertext trails the header, uncounted (D12).
+                expected_header_len: 16,
+                bytes: wg_transport_data_bytes(),
+                expected_full_fields: vec![
+                    ("app", Value::from("wireguard")),
+                    ("msg_type", Value::from("transport_data")),
+                    ("receiver_index", Value::U64(0x3333_3333)),
+                ],
+                expected_hint: Hint::Terminal,
+            },
+        ],
+        outer_ctx: Vec::new(),
+    });
+}
+
+fn udp_predecessor_layer() -> LayerRecord {
+    LayerRecord {
+        protocol: "udp",
+        offset: 34,
+        header_len: 8,
+        fields: FieldMap::new(),
+    }
+}
+
+fn ipv4_predecessor_layer() -> LayerRecord {
+    LayerRecord {
+        protocol: "ipv4",
+        offset: 14,
+        header_len: 20,
+        fields: FieldMap::new(),
+    }
+}
+
+#[test]
+fn l2tpv3_over_udp_data_conforms() {
+    // RFC 3931 §3.2.2: T=0, Ver=3, reserved word, Session ID 0x1234_5678,
+    // no cookie (11.5's documented v1 default), then pseudowire payload.
+    let bytes = vec![
+        0x00, 0x03, 0x00, 0x00, // T=0, Ver=3, reserved=0
+        0x12, 0x34, 0x56, 0x78, // Session ID
+        0xDE, 0xAD, 0xBE, 0xEF, // pseudowire payload (opaque to this plugin)
+    ];
+    run_conformance(&ConformanceCase {
+        plugin: Box::new(L2tpv3),
+        good: vec![GoodPacket {
+            bytes,
+            expected_header_len: 8,
+            expected_full_fields: vec![
+                ("session_id", Value::U64(0x1234_5678)),
+                ("t_bit", Value::Bool(false)),
+            ],
+            expected_hint: Hint::ByProtocol("ethernet"),
+        }],
+        outer_ctx: vec![udp_predecessor_layer()],
+    });
+}
+
+#[test]
+fn l2tpv3_over_ip_data_conforms() {
+    // RFC 3931 §4.1.1: direct IP encapsulation carries data messages only
+    // and has no T/Ver word at all — Session ID is the entire header.
+    let bytes = vec![
+        0x00, 0x00, 0x00, 0x2A, // Session ID = 42
+        0xAA, 0xBB, // pseudowire payload
+    ];
+    run_conformance(&ConformanceCase {
+        plugin: Box::new(L2tpv3),
+        good: vec![GoodPacket {
+            bytes,
+            expected_header_len: 4,
+            expected_full_fields: vec![
+                ("session_id", Value::U64(42)),
+                ("t_bit", Value::Bool(false)),
+            ],
+            expected_hint: Hint::ByProtocol("ethernet"),
+        }],
+        outer_ctx: vec![ipv4_predecessor_layer()],
+    });
+}
 /// RFC 1035 standard query for example.com (A, IN), RD set.
 fn dns_query_bytes() -> Vec<u8> {
     let mut m = vec![0x12, 0x34, 0x01, 0x00, 0, 1, 0, 0, 0, 0, 0, 0];
@@ -1186,6 +1537,49 @@ fn mdns_conforms() {
                 ("qtype", Value::U64(1)),
                 ("is_multicast_query", Value::Bool(true)),
                 ("answers", Value::List(vec![])),
+            ],
+            expected_hint: Hint::Terminal,
+        }],
+        outer_ctx: Vec::new(),
+    });
+}
+
+/// RFC 4795 §7.1 response for `host-a` (A, IN) with the `C` (conflict) bit
+/// set on the flags word — the one LLMNR reuses from DNS's `AA` position
+/// `mdns`'s own fixture never exercises (mdns reuses the class field's top
+/// bit instead, not the flags word). Echoes the question (as `dns`'s own
+/// compressed-response fixture does) so `qname`/`qtype` are populated too.
+fn llmnr_response_bytes() -> Vec<u8> {
+    let mut m = vec![0x00, 0x00, 0x84, 0x00, 0, 1, 0, 1, 0, 0, 0, 0];
+    m.extend_from_slice(&[6]);
+    m.extend_from_slice(b"host-a");
+    m.push(0);
+    m.extend_from_slice(&[0, 1, 0, 1]); // qtype A, qclass IN
+    m.extend_from_slice(&[0xC0, 0x0C]); // answer name: pointer to question
+    m.extend_from_slice(&[0, 1, 0, 1]); // type A, class IN
+    m.extend_from_slice(&[0, 0, 0, 120]); // ttl
+    m.extend_from_slice(&[0, 4, 192, 0, 2, 5]); // rdlength + A record
+    m
+}
+
+#[test]
+fn llmnr_conforms() {
+    run_conformance(&ConformanceCase {
+        plugin: Box::new(Llmnr),
+        good: vec![GoodPacket {
+            expected_header_len: llmnr_response_bytes().len(),
+            bytes: llmnr_response_bytes(),
+            expected_full_fields: vec![
+                ("app", Value::from("llmnr")),
+                ("id", Value::U64(0)),
+                ("is_response", Value::Bool(true)),
+                ("opcode", Value::U64(0)),
+                ("rcode", Value::U64(0)),
+                ("conflict", Value::Bool(true)),
+                ("tentative", Value::Bool(false)),
+                ("qname", Value::from("host-a")),
+                ("qtype", Value::U64(1)),
+                ("answers", Value::List(vec![Value::from("192.0.2.5")])),
             ],
             expected_hint: Hint::Terminal,
         }],
@@ -1877,6 +2271,90 @@ fn modbus_conforms() {
     });
 }
 
+/// Encodes `value` as an MQTT Variable Byte Integer (OASIS MQTT 5.0 §1.5.5).
+fn mqtt_variable_byte_int(mut value: usize) -> Vec<u8> {
+    let mut out = Vec::new();
+    loop {
+        let mut byte = (value % 128) as u8;
+        value /= 128;
+        if value > 0 {
+            byte |= 0x80;
+        }
+        out.push(byte);
+        if value == 0 {
+            break;
+        }
+    }
+    out
+}
+
+/// Encodes an MQTT UTF-8 Encoded String (2-byte length prefix + bytes).
+fn mqtt_utf8_field(s: &str) -> Vec<u8> {
+    let mut out = (s.len() as u16).to_be_bytes().to_vec();
+    out.extend_from_slice(s.as_bytes());
+    out
+}
+
+fn mqtt_frame(message_type: u8, flags: u8, body: &[u8]) -> Vec<u8> {
+    let mut f = vec![(message_type << 4) | flags];
+    f.extend_from_slice(&mqtt_variable_byte_int(body.len()));
+    f.extend_from_slice(body);
+    f
+}
+
+#[test]
+fn mqtt_conforms() {
+    // PUBLISH, QoS 1, RETAIN set (fixed-header flags 0x03): topic
+    // "sensors/temp", packet id 7 (present because QoS > 0), payload "21.5"
+    // (OASIS MQTT 5.0 §3.3 / 3.1.1 §3.3 — identical shape for this case).
+    let mut publish_body = mqtt_utf8_field("sensors/temp");
+    publish_body.extend_from_slice(&7u16.to_be_bytes());
+    publish_body.extend_from_slice(b"21.5");
+    let publish_remaining_length = publish_body.len() as u64;
+    let publish = mqtt_frame(3, 0x03, &publish_body);
+
+    // PUBLISH, QoS 0 (no packet id), RETAIN clear: topic "alerts/fire", empty payload.
+    let publish_qos0_body = mqtt_utf8_field("alerts/fire");
+    let publish_qos0_remaining_length = publish_qos0_body.len() as u64;
+    let publish_qos0 = mqtt_frame(3, 0x00, &publish_qos0_body);
+
+    run_conformance(&ConformanceCase {
+        plugin: Box::new(Mqtt),
+        good: vec![
+            GoodPacket {
+                expected_header_len: publish.len(),
+                bytes: publish,
+                expected_full_fields: vec![
+                    ("app", Value::from("mqtt")),
+                    ("message_type", Value::U64(3)),
+                    ("remaining_length", Value::U64(publish_remaining_length)),
+                    ("topic", Value::from("sensors/temp")),
+                    ("qos", Value::U64(1)),
+                    ("retain", Value::Bool(true)),
+                ],
+                expected_hint: Hint::Terminal,
+            },
+            GoodPacket {
+                expected_header_len: publish_qos0.len(),
+                bytes: publish_qos0,
+                expected_full_fields: vec![
+                    ("app", Value::from("mqtt")),
+                    ("message_type", Value::U64(3)),
+                    (
+                        "remaining_length",
+                        Value::U64(publish_qos0_remaining_length),
+                    ),
+                    ("topic", Value::from("alerts/fire")),
+                    ("qos", Value::U64(0)),
+                    ("retain", Value::Bool(false)),
+                ],
+                expected_hint: Hint::Terminal,
+            },
+        ],
+        outer_ctx: Vec::new(),
+    });
+}
+
 /// A DNP3 Data Link Layer frame: sync + length + control, little-endian
 /// destination/source, a 2-byte header CRC (not validated), and — when
 /// `pdu` is non-empty — a transport header + application control byte
@@ -2101,6 +2579,77 @@ fn syslog_conforms() {
                     ("version", Value::U64(0)),
                     ("hostname", Value::from("mymachine")),
                     ("app_name", Value::from("su")),
+                ],
+                expected_hint: Hint::Terminal,
+            },
+        ],
+        outer_ctx: Vec::new(),
+    });
+}
+
+#[test]
+fn ssdp_conforms() {
+    // Hand-built against the UPnP Device Architecture v2.0 §1.2 examples
+    // (NOTIFY shape; ssdp.rs's own module doc has the full citation — there
+    // is no ratified IETF RFC for SSDP). Both good samples are `ssdp:alive`
+    // announcements (NOTIFY is the only message type that legally carries
+    // both of ssdp's rollup fields, `nts` and `location`, at once — the
+    // kit's rule 3 requires every rollup field on every good sample; the
+    // M-SEARCH-request and search-response shapes, where `nts` is absent
+    // by protocol design, are covered instead by ssdp.rs's own fixtures
+    // and application.rs's app-stream test).
+    let alive_root_device = b"NOTIFY * HTTP/1.1\r\n\
+HOST: 239.255.255.250:1900\r\n\
+CACHE-CONTROL: max-age=1800\r\n\
+LOCATION: http://192.168.1.20:8080/description.xml\r\n\
+NT: upnp:rootdevice\r\n\
+NTS: ssdp:alive\r\n\
+USN: uuid:4d696e69-1dd2-11b2-8349-e31881a5f45a::upnp:rootdevice\r\n\
+\r\n"
+        .to_vec();
+
+    let alive_content_directory = b"NOTIFY * HTTP/1.1\r\n\
+HOST: 239.255.255.250:1900\r\n\
+CACHE-CONTROL: max-age=1800\r\n\
+LOCATION: http://192.168.1.20:8080/description.xml\r\n\
+NT: urn:schemas-upnp-org:service:ContentDirectory:1\r\n\
+NTS: ssdp:alive\r\n\
+USN: uuid:4d696e69-1dd2-11b2-8349-e31881a5f45a::urn:schemas-upnp-org:service:ContentDirectory:1\r\n\
+\r\n"
+        .to_vec();
+
+    run_conformance(&ConformanceCase {
+        plugin: Box::new(Ssdp),
+        good: vec![
+            GoodPacket {
+                expected_header_len: alive_root_device.len(),
+                bytes: alive_root_device,
+                expected_full_fields: vec![
+                    ("app", Value::from("ssdp")),
+                    ("method", Value::from("NOTIFY")),
+                    ("nts", Value::from("ssdp:alive")),
+                    ("location", Value::from("http://192.168.1.20:8080/description.xml")),
+                    (
+                        "usn",
+                        Value::from("uuid:4d696e69-1dd2-11b2-8349-e31881a5f45a::upnp:rootdevice"),
+                    ),
+                ],
+                expected_hint: Hint::Terminal,
+            },
+            GoodPacket {
+                expected_header_len: alive_content_directory.len(),
+                bytes: alive_content_directory,
+                expected_full_fields: vec![
+                    ("app", Value::from("ssdp")),
+                    ("method", Value::from("NOTIFY")),
+                    ("nts", Value::from("ssdp:alive")),
+                    ("location", Value::from("http://192.168.1.20:8080/description.xml")),
+                    (
+                        "usn",
+                        Value::from(
+                            "uuid:4d696e69-1dd2-11b2-8349-e31881a5f45a::urn:schemas-upnp-org:service:ContentDirectory:1",
+                        ),
+                    ),
                 ],
                 expected_hint: Hint::Terminal,
             },

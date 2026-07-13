@@ -74,7 +74,7 @@ fn unclaimed_udp_with_tcp_shaped_payload(sport: u16) -> Vec<u8> {
     ];
     let mut udp = Vec::new();
     udp.extend_from_slice(&sport.to_be_bytes());
-    udp.extend_from_slice(&51820u16.to_be_bytes()); // unclaimed
+    udp.extend_from_slice(&55555u16.to_be_bytes()); // unclaimed
     udp.extend_from_slice(&(8 + tcp_shaped.len() as u16).to_be_bytes());
     udp.extend_from_slice(&[0x00, 0x00]); // checksum
     udp.extend_from_slice(&tcp_shaped);
@@ -189,7 +189,7 @@ fn table_lists_both_group_kinds_each_with_a_near_miss() {
     assert_eq!(out.status.code(), Some(0));
     let text = stdout(&out);
     assert!(text.contains("UNKNOWN PROTOCOLS"));
-    assert!(text.contains("udp → udp_port:51820"));
+    assert!(text.contains("udp → udp_port:55555"));
     assert!(text.contains("unclaimed route"));
     assert!(text.contains("ethernet"));
     assert!(text.contains("no heuristic winner"));
@@ -224,7 +224,7 @@ fn drilldown_shows_the_full_near_miss_ranking() {
     let out = pktflow(&["unknown", "-r", &path.to_string_lossy(), "#1"]);
     assert_eq!(out.status.code(), Some(0));
     let text = stdout(&out);
-    assert!(text.contains("#1  udp → udp_port:51820"));
+    assert!(text.contains("#1  udp → udp_port:55555"));
     assert!(text.contains("count     2"));
     assert!(text.contains("near misses"));
     assert!(text.contains("tcp(60)"));
@@ -387,7 +387,7 @@ fn scaffold_writes_exactly_one_file_prefilled_from_the_route() {
         std::fs::read_to_string(plugins_dir.join("scaffolded_proto.rs")).expect("test setup");
     assert!(generated.contains("struct ScaffoldedProto"));
     assert!(generated.contains("\"scaffolded_proto\""));
-    assert!(generated.contains("RouteId::UdpPort(51820)"));
+    assert!(generated.contains("RouteId::UdpPort(55555)"));
 
     // Structural checks (09.1-style: name/claims present) without pulling
     // in the full conformance kit, which needs a `good` fixture the
