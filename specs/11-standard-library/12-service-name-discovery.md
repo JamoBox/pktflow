@@ -71,7 +71,7 @@ this plugin owns its own name decoder.
 - [ ] `mdns`/`llmnr` fixtures parse identically to equivalent `dns` fixtures for the shared
       fields, proving the reused-routine claim (same test vectors through both call paths
       where the wire bytes are format-identical) plus their own extra bits/fields correctly.
-- [ ] `ssdp` fixtures cover M-SEARCH, NOTIFY (`ssdp:alive` and `ssdp:byebye`), and a search
+- [x] `ssdp` fixtures cover M-SEARCH, NOTIFY (`ssdp:alive` and `ssdp:byebye`), and a search
       response; `location` extracted exactly.
 - [ ] `netbios_ns` fixture decodes a real first-level-encoded name (the classic
       `"FACFCEECFCEFFCFGEFGEFCCACACACACA"`-style 32-char encoded form) to its correct

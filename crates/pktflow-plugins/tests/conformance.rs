@@ -38,6 +38,7 @@ use pktflow_plugins::ospf::Ospf;
 use pktflow_plugins::pvst_plus::PvstPlus;
 use pktflow_plugins::radiotap::Radiotap;
 use pktflow_plugins::snmp::Snmp;
+use pktflow_plugins::ssdp::Ssdp;
 use pktflow_plugins::stp::Stp;
 use pktflow_plugins::syslog::Syslog;
 use pktflow_plugins::tcp::Tcp;
@@ -2056,6 +2057,51 @@ fn syslog_conforms() {
                 expected_hint: Hint::Terminal,
             },
         ],
+        outer_ctx: Vec::new(),
+    });
+}
+
+#[test]
+fn ssdp_conforms() {
+    // UDA §1.2.1 NOTIFY ssdp:alive — the one message form that carries
+    // both declared rollup fields (`nts`, `location`) at once, so it's
+    // the single good sample the kit's rule 3 needs to see both on. The
+    // other three message forms (M-SEARCH, NOTIFY byebye, search
+    // response) are covered outside the kit in tests/discovery.rs, where
+    // per-sample rollup presence isn't required.
+    let notify_alive: Vec<u8> = b"NOTIFY * HTTP/1.1\r\n\
+        HOST: 239.255.255.250:1900\r\n\
+        CACHE-CONTROL: max-age=1800\r\n\
+        LOCATION: http://192.168.1.50:1400/xml/device_description.xml\r\n\
+        NT: urn:schemas-upnp-org:device:ZonePlayer:1\r\n\
+        NTS: ssdp:alive\r\n\
+        SERVER: Linux/3.14 UPnP/1.0 Sonos/56.0\r\n\
+        USN: uuid:RINCON_000E58B5A8E401400::urn:schemas-upnp-org:device:ZonePlayer:1\r\n\
+        \r\n"
+        .to_vec();
+
+    run_conformance(&ConformanceCase {
+        plugin: Box::new(Ssdp),
+        good: vec![GoodPacket {
+            expected_header_len: notify_alive.len(),
+            bytes: notify_alive,
+            expected_full_fields: vec![
+                ("app", Value::from("ssdp")),
+                ("method", Value::from("NOTIFY")),
+                ("nts", Value::from("ssdp:alive")),
+                (
+                    "location",
+                    Value::from("http://192.168.1.50:1400/xml/device_description.xml"),
+                ),
+                (
+                    "usn",
+                    Value::from(
+                        "uuid:RINCON_000E58B5A8E401400::urn:schemas-upnp-org:device:ZonePlayer:1",
+                    ),
+                ),
+            ],
+            expected_hint: Hint::Terminal,
+        }],
         outer_ctx: Vec::new(),
     });
 }
