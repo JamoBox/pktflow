@@ -1,10 +1,10 @@
-#1  udp → udp_port:51820   unclaimed route
+#1  udp → udp_port:55555   unclaimed route
 count     2
 bytes     total 40 B  min 20 B  max 20 B
 seen      first 1970-01-01T00:01:40Z  last 1970-01-01T00:01:41Z
 endpoints
-  udp [1, 0, 0, 0, 0, 0, 0, 9c, 41, 1, 0, 0, 0, 0, 0, 0, ca, 6c]
-  udp [1, 0, 0, 0, 0, 0, 0, 9c, 42, 1, 0, 0, 0, 0, 0, 0, ca, 6c]
+  udp [1, 0, 0, 0, 0, 0, 0, 9c, 41, 1, 0, 0, 0, 0, 0, 0, d9, 3]
+  udp [1, 0, 0, 0, 0, 0, 0, 9c, 42, 1, 0, 0, 0, 0, 0, 0, d9, 3]
 near misses
   tcp(60)
 samples   (2 of 2 retained)

@@ -6,11 +6,14 @@
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
-use pktflow_core::{LinkType, PacketMeta, ParseOpts, StopReason, Value};
+use pktflow_core::{
+    Depth, LayerPlugin, LinkType, PacketMeta, ParseCtx, ParseOpts, StopReason, Value,
+};
 use pktflow_flows::{Aggregator, AggregatorConfig, Rollup};
 use pktflow_plugins::default_engine;
 use pktflow_plugins::dns::decode_name;
 use pktflow_plugins::ipv4::internet_checksum;
+use pktflow_plugins::wireguard::Wireguard;
 use proptest::prelude::*;
 
 fn meta(len: usize, ms: u64) -> PacketMeta {
@@ -360,6 +363,100 @@ proptest! {
         let frame = ssdp_frame([10, 0, 0, 1], [10, 0, 0, 2], 1900, 1900, &payload);
         let _ = engine.dissect(&frame, meta(frame.len(), 0), ParseOpts::default());
     }
+}
+
+/// RFC 4795 standard query for `<name>` (A record). `flags` sets the raw
+/// flags word so tests can flip the `C`/`T` bits LLMNR repurposes from
+/// DNS's `AA`/`RD` positions (§2.1.1).
+fn llmnr_query(id: u16, name_labels: &[&str], flags: u16) -> Vec<u8> {
+    let mut m = Vec::new();
+    m.extend_from_slice(&id.to_be_bytes());
+    m.extend_from_slice(&flags.to_be_bytes());
+    m.extend_from_slice(&[0, 1, 0, 0, 0, 0, 0, 0]);
+    for label in name_labels {
+        m.push(label.len() as u8);
+        m.extend_from_slice(label.as_bytes());
+    }
+    m.push(0);
+    m.extend_from_slice(&[0, 1, 0, 1]); // type A, class IN
+    m
+}
+
+#[test]
+fn llmnr_app_stream_is_distinct_from_dns_and_mdns_and_accumulates_qnames() {
+    let engine = Arc::new(default_engine());
+    let mut agg = Aggregator::new(&engine, AggregatorConfig::default());
+
+    for (i, labels) in [&["host-a"][..], &["host-b"][..], &["host-a"][..]]
+        .iter()
+        .enumerate()
+    {
+        let msg = llmnr_query(0x0000, labels, 0x0000);
+        let mut frame = eth();
+        frame.extend_from_slice(&ipv4_udp([10, 0, 0, 5], [224, 0, 0, 252], 5355, 5355, &msg));
+        agg.ingest(&engine.dissect(&frame, meta(frame.len(), i as u64), ParseOpts::default()));
+    }
+
+    let llmnr_streams = agg.at_layer("llmnr");
+    assert_eq!(
+        llmnr_streams.len(),
+        1,
+        "one app-stream per transport stream"
+    );
+    assert!(
+        agg.at_layer("dns").is_empty(),
+        "llmnr must not fold into dns's app-stream constant"
+    );
+    assert!(
+        agg.at_layer("mdns").is_empty(),
+        "llmnr must not fold into mdns's app-stream constant"
+    );
+
+    match llmnr_streams[0].rollups.get("qname") {
+        Some(Rollup::Accumulate { values, count, .. }) => {
+            assert_eq!(*count, 3);
+            assert_eq!(
+                values.as_slice(),
+                [Value::from("host-a"), Value::from("host-b")]
+            );
+        }
+        other => panic!("wrong rollup: {other:?}"),
+    }
+}
+
+#[test]
+fn llmnr_response_reports_conflict_and_tentative_bits() {
+    let engine = Arc::new(default_engine());
+
+    // QR|C: responder has detected the queried name is not unique on this
+    // link (RFC 4795 §7.1).
+    let mut response = llmnr_query(0x0000, &["host-a"], 0x8400);
+    response[7] = 1; // ancount = 1
+    response.extend_from_slice(&[0xC0, 0x0C]); // name: pointer to question
+    response.extend_from_slice(&[0, 1, 0, 1]); // type A, class IN
+    response.extend_from_slice(&[0, 0, 0, 120]); // ttl
+    response.extend_from_slice(&[0, 4, 192, 0, 2, 5]); // rdlength + A record
+    let mut frame = eth();
+    frame.extend_from_slice(&ipv4_udp(
+        [10, 0, 0, 5],
+        [224, 0, 0, 252],
+        5355,
+        5355,
+        &response,
+    ));
+    let packet = engine.dissect(&frame, meta(frame.len(), 0), ParseOpts::default());
+    let protocols: Vec<_> = packet.layers.iter().map(|l| l.protocol).collect();
+    assert_eq!(protocols, ["ethernet", "ipv4", "udp", "llmnr"]);
+    let llmnr_layer = &packet.layers[3];
+    assert_eq!(llmnr_layer.fields.get("conflict"), Some(&Value::Bool(true)));
+    assert_eq!(
+        llmnr_layer.fields.get("tentative"),
+        Some(&Value::Bool(false))
+    );
+    assert_eq!(
+        llmnr_layer.fields.get("answers"),
+        Some(&Value::List(vec![Value::from("192.0.2.5")]))
+    );
 }
 
 /// BOOTP + magic cookie + options (53 = msg_type, then END).
@@ -1046,4 +1143,151 @@ proptest! {
         let frame = ipfix_frame([10, 0, 0, 1], [10, 0, 0, 53], 51234, &payload);
         let _ = engine.dissect(&frame, meta(frame.len(), 0), ParseOpts::default());
     }
+}
+
+/// WireGuard Handshake Initiation (wireguard.com/protocol/): message_type
+/// 1, 3 reserved bytes, then `sender_index` and the fixed-size Noise
+/// payload this test never needs to fabricate meaningfully (11.5 parses
+/// only sender_index, everything else is opaque cryptographic material).
+fn wg_handshake_initiation(sender_index: u32) -> Vec<u8> {
+    let mut m = Vec::new();
+    m.extend_from_slice(&1u32.to_le_bytes());
+    m.extend_from_slice(&sender_index.to_le_bytes());
+    m.extend(std::iter::repeat_n(0xAB, 148 - 8));
+    m
+}
+
+/// WireGuard Handshake Response: message_type 2, `sender_index` and
+/// `receiver_index`, then the fixed-size remainder.
+fn wg_handshake_response(sender_index: u32, receiver_index: u32) -> Vec<u8> {
+    let mut m = Vec::new();
+    m.extend_from_slice(&2u32.to_le_bytes());
+    m.extend_from_slice(&sender_index.to_le_bytes());
+    m.extend_from_slice(&receiver_index.to_le_bytes());
+    m.extend(std::iter::repeat_n(0xCD, 92 - 12));
+    m
+}
+
+/// WireGuard Transport Data: message_type 4, `receiver_index`, a 64-bit
+/// counter, then `encrypted_len` bytes of AEAD ciphertext this plugin must
+/// never look inside (D12 — the ESP precedent, 11.5).
+fn wg_transport_data(receiver_index: u32, counter: u64, encrypted_len: usize) -> Vec<u8> {
+    let mut m = Vec::new();
+    m.extend_from_slice(&4u32.to_le_bytes());
+    m.extend_from_slice(&receiver_index.to_le_bytes());
+    m.extend_from_slice(&counter.to_le_bytes());
+    m.extend(std::iter::repeat_n(0x11, encrypted_len));
+    m
+}
+
+#[test]
+fn wireguard_app_stream_accumulates_msg_type_across_handshake() {
+    // Mirrors mdns's app-stream pattern (11.12): no endpoint identity of
+    // its own (sender/receiver indices are per-session, RFC-less
+    // whitepaper §5's own rationale), so one `wireguard` child stream
+    // forms per outer UDP stream, with the handshake lifecycle mix
+    // visible on the `msg_type` rollup.
+    let engine = Arc::new(default_engine());
+    let mut agg = Aggregator::new(&engine, AggregatorConfig::default());
+
+    let msgs = [
+        wg_handshake_initiation(0x1111_1111),
+        wg_handshake_response(0x2222_2222, 0x1111_1111),
+        wg_transport_data(0x1111_1111, 0, 16),
+    ];
+    for (i, msg) in msgs.iter().enumerate() {
+        let mut frame = eth();
+        frame.extend_from_slice(&ipv4_udp([10, 0, 0, 5], [10, 0, 0, 6], 51820, 51820, msg));
+        agg.ingest(&engine.dissect(&frame, meta(frame.len(), i as u64), ParseOpts::default()));
+    }
+
+    let wg_streams = agg.at_layer("wireguard");
+    assert_eq!(wg_streams.len(), 1, "one app-stream per transport stream");
+
+    match wg_streams[0].rollups.get("msg_type") {
+        Some(Rollup::Accumulate { values, count, .. }) => {
+            assert_eq!(*count, 3);
+            assert_eq!(
+                values.as_slice(),
+                [
+                    Value::from("handshake_initiation"),
+                    Value::from("handshake_response"),
+                    Value::from("transport_data"),
+                ]
+            );
+        }
+        other => panic!("wrong rollup: {other:?}"),
+    }
+}
+
+#[test]
+fn wireguard_transport_data_stops_terminal_before_ciphertext_no_phantom_stream() {
+    // D12's "no phantom streams" honesty, applied to WireGuard's session
+    // traffic (11.5's real-encrypted-tunnel case, alongside ESP's):
+    // ciphertext trailing the 16-byte fixed prefix is never dissected,
+    // however plausible it looks.
+    let engine = Arc::new(default_engine());
+    let mut agg = Aggregator::new(&engine, AggregatorConfig::default());
+
+    let msg = wg_transport_data(0x4242_4242, 9, 64);
+    let mut frame = eth();
+    frame.extend_from_slice(&ipv4_udp([10, 0, 0, 5], [10, 0, 0, 6], 51820, 51820, &msg));
+
+    let packet = engine.dissect(&frame, meta(frame.len(), 0), ParseOpts::default());
+    let protocols: Vec<_> = packet.layers.iter().map(|l| l.protocol).collect();
+    assert_eq!(protocols, ["ethernet", "ipv4", "udp", "wireguard"]);
+    assert_eq!(packet.stop, StopReason::Terminal);
+
+    agg.ingest(&packet);
+    let wg_stream = &agg.at_layer("wireguard")[0];
+    assert_eq!(wg_stream.opaque_bytes, 64, "ciphertext never dissected");
+}
+
+#[test]
+fn wireguard_claim_path_and_probe_admitted_path_parse_identically() {
+    // 11.5 acceptance criterion: the default-port static claim and a
+    // non-default-port, probe-based fallback-pool admission must reach
+    // the same plugin and produce the same parsed fields. The engine's
+    // `Hint::Candidates` gate (03.4, `udp.rs`) only ever opens the
+    // fallback pool via `Hint::Unknown` — mirroring how 11.13's `dnp3`
+    // proves its own non-standard-port probe (a direct `probe()`/`parse()`
+    // check, not a full unclaimed-UDP-port dissect) — so this proves the
+    // invariant the acceptance criterion actually cares about: `parse()`
+    // is a pure function of bytes and depth, so whichever path admits
+    // these bytes, the extracted fields are identical.
+    let bytes = wg_handshake_initiation(0x1111_1111);
+    let engine = Arc::new(default_engine());
+
+    // Path 1: default port 51820, the static `claims()` route.
+    let mut claimed_frame = eth();
+    claimed_frame.extend_from_slice(&ipv4_udp(
+        [10, 0, 0, 5],
+        [10, 0, 0, 6],
+        51820,
+        51820,
+        &bytes,
+    ));
+    let packet = engine.dissect(
+        &claimed_frame,
+        meta(claimed_frame.len(), 0),
+        ParseOpts::default(),
+    );
+    let claimed_layer = packet.layers.last().expect("wireguard layer");
+    assert_eq!(claimed_layer.protocol, "wireguard");
+
+    // Path 2: probe-admitted (any other port routes here in the fallback
+    // pool once `Hint::Unknown` opens it, e.g. entry-point identification,
+    // 04.2) — same bytes, same depth, no port involved in `parse()` at all.
+    let probe_meta = meta(bytes.len(), 0);
+    let full_ctx = ParseCtx::new(&[], Depth::Full, &probe_meta);
+    assert!(
+        Wireguard.probe(&bytes, &full_ctx).is_some(),
+        "must be probe-admissible for the fallback pool to ever reach it"
+    );
+    let probe_admitted = Wireguard
+        .parse(&bytes, &full_ctx)
+        .expect("valid handshake initiation");
+
+    assert_eq!(claimed_layer.fields, probe_admitted.fields);
+    assert_eq!(claimed_layer.header_len, probe_admitted.header_len);
 }
