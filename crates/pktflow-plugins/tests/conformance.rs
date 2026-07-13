@@ -31,6 +31,7 @@ use pktflow_plugins::lldp::Lldp;
 use pktflow_plugins::mdns::Mdns;
 use pktflow_plugins::mld::Mld;
 use pktflow_plugins::modbus::Modbus;
+use pktflow_plugins::mqtt::Mqtt;
 use pktflow_plugins::ndp::Ndp;
 use pktflow_plugins::netflow9::Netflow9;
 use pktflow_plugins::ntp::Ntp;
@@ -1820,6 +1821,90 @@ fn modbus_conforms() {
                     ("function_code", Value::U64(0x83)),
                     ("is_exception", Value::Bool(true)),
                     ("exception_code", Value::U64(2)),
+                ],
+                expected_hint: Hint::Terminal,
+            },
+        ],
+        outer_ctx: Vec::new(),
+    });
+}
+
+/// Encodes `value` as an MQTT Variable Byte Integer (OASIS MQTT 5.0 §1.5.5).
+fn mqtt_variable_byte_int(mut value: usize) -> Vec<u8> {
+    let mut out = Vec::new();
+    loop {
+        let mut byte = (value % 128) as u8;
+        value /= 128;
+        if value > 0 {
+            byte |= 0x80;
+        }
+        out.push(byte);
+        if value == 0 {
+            break;
+        }
+    }
+    out
+}
+
+/// Encodes an MQTT UTF-8 Encoded String (2-byte length prefix + bytes).
+fn mqtt_utf8_field(s: &str) -> Vec<u8> {
+    let mut out = (s.len() as u16).to_be_bytes().to_vec();
+    out.extend_from_slice(s.as_bytes());
+    out
+}
+
+fn mqtt_frame(message_type: u8, flags: u8, body: &[u8]) -> Vec<u8> {
+    let mut f = vec![(message_type << 4) | flags];
+    f.extend_from_slice(&mqtt_variable_byte_int(body.len()));
+    f.extend_from_slice(body);
+    f
+}
+
+#[test]
+fn mqtt_conforms() {
+    // PUBLISH, QoS 1, RETAIN set (fixed-header flags 0x03): topic
+    // "sensors/temp", packet id 7 (present because QoS > 0), payload "21.5"
+    // (OASIS MQTT 5.0 §3.3 / 3.1.1 §3.3 — identical shape for this case).
+    let mut publish_body = mqtt_utf8_field("sensors/temp");
+    publish_body.extend_from_slice(&7u16.to_be_bytes());
+    publish_body.extend_from_slice(b"21.5");
+    let publish_remaining_length = publish_body.len() as u64;
+    let publish = mqtt_frame(3, 0x03, &publish_body);
+
+    // PUBLISH, QoS 0 (no packet id), RETAIN clear: topic "alerts/fire", empty payload.
+    let publish_qos0_body = mqtt_utf8_field("alerts/fire");
+    let publish_qos0_remaining_length = publish_qos0_body.len() as u64;
+    let publish_qos0 = mqtt_frame(3, 0x00, &publish_qos0_body);
+
+    run_conformance(&ConformanceCase {
+        plugin: Box::new(Mqtt),
+        good: vec![
+            GoodPacket {
+                expected_header_len: publish.len(),
+                bytes: publish,
+                expected_full_fields: vec![
+                    ("app", Value::from("mqtt")),
+                    ("message_type", Value::U64(3)),
+                    ("remaining_length", Value::U64(publish_remaining_length)),
+                    ("topic", Value::from("sensors/temp")),
+                    ("qos", Value::U64(1)),
+                    ("retain", Value::Bool(true)),
+                ],
+                expected_hint: Hint::Terminal,
+            },
+            GoodPacket {
+                expected_header_len: publish_qos0.len(),
+                bytes: publish_qos0,
+                expected_full_fields: vec![
+                    ("app", Value::from("mqtt")),
+                    ("message_type", Value::U64(3)),
+                    (
+                        "remaining_length",
+                        Value::U64(publish_qos0_remaining_length),
+                    ),
+                    ("topic", Value::from("alerts/fire")),
+                    ("qos", Value::U64(0)),
+                    ("retain", Value::Bool(false)),
                 ],
                 expected_hint: Hint::Terminal,
             },
