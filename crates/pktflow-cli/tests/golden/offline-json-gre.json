@@ -208,7 +208,7 @@
     "packets": 3,
     "stop_classes": {
       "clean": 2,
-      "unknown_payload": 1
+      "malformed": 1
     },
     "streams": {
       "ethernet": 1,

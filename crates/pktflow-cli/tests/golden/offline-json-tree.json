@@ -280,7 +280,7 @@
     "packets": 9,
     "stop_classes": {
       "clean": 7,
-      "unknown_payload": 2
+      "malformed": 2
     },
     "streams": {
       "dns": 1,
