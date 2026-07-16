@@ -8,7 +8,7 @@ use pktflow_flows::{AggregatorSnapshot, UnknownGroup};
 use pktflow_view::fmt::rfc3339;
 use pktflow_view::json::stream_record;
 use pktflow_view::query::matching_with_ancestors;
-use pktflow_view::{by_id, total_bytes, SnapshotHub, StreamQuery};
+use pktflow_view::{by_id, SnapshotHub, StreamQuery};
 use serde_json::{json, Value as Json};
 
 /// JSON key for a stop class (D8 stable names, same as the CLI summary).
@@ -49,20 +49,16 @@ pub fn tick_json(hub: &SnapshotHub) -> Json {
 
 fn summary_json(snapshot: &AggregatorSnapshot) -> Json {
     // Live per-protocol byte totals feed the protocol chart; `ever`
-    // survives eviction, bytes are summed over live streams only.
+    // survives eviction, bytes are summed over live streams only —
+    // maintained incrementally by the aggregator (12.1), not rescanned
+    // here.
     let mut per_protocol: Vec<Json> = Vec::new();
     for p in &snapshot.summary.per_protocol {
-        let bytes: u64 = snapshot
-            .streams
-            .iter()
-            .filter(|s| s.protocol == p.protocol)
-            .map(total_bytes)
-            .sum();
         per_protocol.push(json!({
             "protocol": p.protocol,
             "ever": p.ever,
             "live": p.live,
-            "bytes": bytes,
+            "bytes": p.bytes,
         }));
     }
     let mut stop_classes = serde_json::Map::new();

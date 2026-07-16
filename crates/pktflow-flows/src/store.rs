@@ -167,12 +167,18 @@ pub struct MergedStreamView {
     pub nodes: Vec<StreamId>,
 }
 
-/// Per-protocol stream counts for the summary (FR-27).
+/// Per-protocol stream counts for the summary (FR-27). `live` and
+/// `bytes` are maintained incrementally (12.1/D17.1): `summary()` never
+/// scans the live set.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct ProtocolCounts {
     pub protocol: ProtocolName,
     pub ever: u64,
     pub live: u64,
+    /// Stats bytes summed over live streams of this protocol (the web
+    /// UI's protocol chart); opaque bytes excluded, matching
+    /// `total_bytes`.
+    pub bytes: u64,
 }
 
 /// Global counters (FR-27); eviction cannot distort these.
@@ -189,12 +195,15 @@ pub struct AggregateSummary {
     pub stop_classes: [(StopClass, u64); 4],
 }
 
-/// Deep, immutable copy for cross-thread reads (D5): the aggregation
-/// thread owns the `Aggregator`; UI threads consume snapshots.
+/// Immutable view for cross-thread reads (D5): the aggregation thread
+/// owns the `Aggregator`; UI threads consume snapshots. Stream records
+/// are structurally shared with the store (12.1/D17.1): consecutive
+/// snapshots share every record untouched between them, and the store
+/// pays a copy only when mutating a record a snapshot still holds.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AggregatorSnapshot {
     /// Every live stream, `created_seq` order.
-    pub streams: Vec<Stream>,
+    pub streams: Vec<Arc<Stream>>,
     /// Root ids, creation order.
     pub roots: Vec<StreamId>,
     pub summary: AggregateSummary,
@@ -203,9 +212,12 @@ pub struct AggregatorSnapshot {
     pub unknowns: Vec<UnknownGroup>,
 }
 
+/// Streams live behind copy-on-write handles (12.1/D17.1): `snapshot()`
+/// collects `Arc` clones, and `Arc::make_mut` on the mutation path pays
+/// a deep copy only for a record some snapshot still shares.
 struct Slot {
     generation: u32,
-    stream: Option<Stream>,
+    stream: Option<Arc<Stream>>,
 }
 
 /// Aggregate counters that survive eviction (FR-27): the end-of-run
@@ -236,6 +248,12 @@ pub struct Aggregator {
     stop_classes: [u64; 4],
     /// Streams ever created per protocol (survives eviction, FR-27).
     created_per_protocol: DetHashMap<ProtocolName, u64>,
+    /// Live streams per protocol, maintained on create/evict (12.1):
+    /// `summary()` must not scan the live set.
+    live_per_protocol: DetHashMap<ProtocolName, u64>,
+    /// Stats bytes over live streams per protocol, maintained on
+    /// ingest/evict (12.1) — feeds `ProtocolCounts::bytes`.
+    live_bytes_per_protocol: DetHashMap<ProtocolName, u64>,
     /// Lazy expiry min-heap (05.6): entries carry the deadline known at
     /// push time; a popped entry whose stream has a later actual deadline
     /// is re-pushed, making the sweep O(evicted), not O(streams).
@@ -260,6 +278,8 @@ impl Aggregator {
             next_seq: 0,
             stop_classes: [0; 4],
             created_per_protocol: DetHashMap::default(),
+            live_per_protocol: DetHashMap::default(),
+            live_bytes_per_protocol: DetHashMap::default(),
             expiry: BinaryHeap::new(),
             free: Vec::new(),
             live_count: 0,
@@ -312,6 +332,10 @@ impl Aggregator {
                 key: key.clone(),
             });
             let id = self.get_or_insert(parent, key, identity, layer, dir, ts);
+            *self
+                .live_bytes_per_protocol
+                .entry(layer.protocol)
+                .or_insert(0) += pkt.meta.origlen as u64;
             let mut became_eligible = false;
             if let Some(stream) = self.get_mut(id) {
                 stream.last_seen = ts;
@@ -423,12 +447,13 @@ impl Aggregator {
         self.next_seq += 1;
         self.totals.streams_created += 1;
         *self.created_per_protocol.entry(protocol).or_insert(0) += 1;
+        *self.live_per_protocol.entry(protocol).or_insert(0) += 1;
         self.live_count += 1;
         match self.slots.get_mut(index as usize) {
-            Some(slot) => slot.stream = Some(stream),
+            Some(slot) => slot.stream = Some(Arc::new(stream)),
             None => self.slots.push(Slot {
                 generation: 0,
-                stream: Some(stream),
+                stream: Some(Arc::new(stream)),
             }),
         }
         self.index.insert((parent, protocol, key), id);
@@ -524,6 +549,8 @@ impl Aggregator {
     /// Removes one live leaf: index entry gone (recurrence of the key
     /// creates a fresh stream), slot generation bumped (stale handles fail,
     /// no ABA), parent unlinked and re-armed for expiry, sink notified.
+    /// The store's `Arc` is released here (12.1): a snapshot still holding
+    /// the record keeps it alive; otherwise it frees now.
     fn evict(&mut self, id: StreamId, reason: CloseReason) {
         let Some(slot) = self.slots.get_mut(id.index as usize) else {
             return;
@@ -531,12 +558,19 @@ impl Aggregator {
         if slot.generation != id.generation {
             return;
         }
-        let Some(mut stream) = slot.stream.take() else {
+        let Some(shared) = slot.stream.take() else {
             return;
         };
         slot.generation = slot.generation.wrapping_add(1);
         self.free.push(id.index);
         self.live_count -= 1;
+        if let Some(count) = self.live_per_protocol.get_mut(&shared.protocol) {
+            *count = count.saturating_sub(1);
+        }
+        if let Some(bytes) = self.live_bytes_per_protocol.get_mut(&shared.protocol) {
+            *bytes = bytes.saturating_sub(shared.stats[0].bytes + shared.stats[1].bytes);
+        }
+        let mut stream = Arc::unwrap_or_clone(shared);
 
         self.index
             .remove(&(stream.parent, stream.protocol, stream.key.clone()));
@@ -604,15 +638,18 @@ impl Aggregator {
         if slot.generation != id.generation {
             return None;
         }
-        slot.stream.as_ref()
+        slot.stream.as_deref()
     }
 
+    /// Copy-on-write mutation handle (12.1): pays a deep copy only when
+    /// a snapshot still shares this record; exclusive records mutate in
+    /// place.
     fn get_mut(&mut self, id: StreamId) -> Option<&mut Stream> {
         let slot = self.slots.get_mut(id.index as usize)?;
         if slot.generation != id.generation {
             return None;
         }
-        slot.stream.as_mut()
+        slot.stream.as_mut().map(Arc::make_mut)
     }
 
     /// Root streams (no parent), creation order (05.7).
@@ -622,7 +659,7 @@ impl Aggregator {
 
     /// Live streams, arena order (queries sort explicitly, 05.7).
     pub fn streams(&self) -> impl Iterator<Item = &Stream> {
-        self.slots.iter().filter_map(|s| s.stream.as_ref())
+        self.slots.iter().filter_map(|s| s.stream.as_deref())
     }
 
     /// Live stream count.
@@ -686,6 +723,9 @@ impl Aggregator {
     }
 
     /// Global counters (FR-27), deterministic ordering throughout.
+    /// O(protocols), never O(streams) (12.1/D17.1): per-protocol live
+    /// counts and bytes are maintained incrementally on create/ingest/
+    /// evict.
     pub fn summary(&self) -> AggregateSummary {
         let mut per_protocol: Vec<ProtocolCounts> = self
             .created_per_protocol
@@ -693,18 +733,15 @@ impl Aggregator {
             .map(|(&protocol, &ever)| ProtocolCounts {
                 protocol,
                 ever,
-                live: 0,
+                live: self.live_per_protocol.get(&protocol).copied().unwrap_or(0),
+                bytes: self
+                    .live_bytes_per_protocol
+                    .get(&protocol)
+                    .copied()
+                    .unwrap_or(0),
             })
             .collect();
         per_protocol.sort_by_key(|c| c.protocol);
-        for stream in self.streams() {
-            if let Some(counts) = per_protocol
-                .iter_mut()
-                .find(|c| c.protocol == stream.protocol)
-            {
-                counts.live += 1;
-            }
-        }
         let mut stop_classes = [(StopClass::Clean, 0); 4];
         for (slot, &class) in stop_classes.iter_mut().zip(STOP_CLASSES.iter()) {
             *slot = (class, self.stop_classes[stop_class_index(class)]);
@@ -720,10 +757,14 @@ impl Aggregator {
         }
     }
 
-    /// Deep, immutable copy for cross-thread reads (05.7, D5). Cost is
-    /// bounded by `max_streams`; measured in 09.4.
+    /// Immutable view for cross-thread reads (05.7, D5). No deep copies
+    /// (12.1/D17.1): the snapshot shares each record's `Arc` with the
+    /// store; the copy for a record a snapshot still holds is paid
+    /// lazily, on that record's next mutation. Cost here is O(live)
+    /// pointer clones; measured in 09.4/12.7.
     pub fn snapshot(&self) -> AggregatorSnapshot {
-        let mut streams: Vec<Stream> = self.streams().cloned().collect();
+        let mut streams: Vec<Arc<Stream>> =
+            self.slots.iter().filter_map(|s| s.stream.clone()).collect();
         streams.sort_by_key(|s| s.created_seq);
         AggregatorSnapshot {
             streams,
@@ -995,5 +1036,149 @@ mod tests {
             generation: 7,
         };
         assert!(agg.get(bogus).is_none());
+    }
+
+    // 12.1 (D17.1): consecutive snapshots share untouched records
+    // pointer-for-pointer; only touched records get a fresh copy.
+    #[test]
+    fn snapshots_share_untouched_records() {
+        let mut agg = aggregator();
+        agg.ingest(&packet(vec![layer("eth", 1, 2)], 60, 0, 0));
+        agg.ingest(&packet(vec![layer("eth", 3, 4)], 60, 0, 1));
+        let before = agg.snapshot();
+
+        // Touch only the (1,2) stream; (3,4) stays untouched.
+        agg.ingest(&packet(vec![layer("eth", 2, 1)], 60, 0, 2));
+        let after = agg.snapshot();
+
+        assert_eq!(before.streams.len(), 2);
+        assert_eq!(after.streams.len(), 2);
+        let touched = 0; // created_seq order: (1,2) first
+        let untouched = 1;
+        assert!(
+            Arc::ptr_eq(&before.streams[untouched], &after.streams[untouched]),
+            "untouched record is shared, not recloned"
+        );
+        assert!(
+            !Arc::ptr_eq(&before.streams[touched], &after.streams[touched]),
+            "touched record was copied for the old snapshot's benefit"
+        );
+        // The old snapshot kept the pre-touch value; the new one moved on.
+        assert_eq!(before.streams[touched].stats[0].packets, 1);
+        assert_eq!(
+            after.streams[touched].stats[0].packets + after.streams[touched].stats[1].packets,
+            2
+        );
+    }
+
+    // 12.1: a snapshot is value-equal to a from-scratch deep copy of the
+    // live set, across a randomized ingest sequence.
+    #[test]
+    fn snapshot_matches_reference_deep_copy() {
+        let mut agg = aggregator();
+        let mut rng: u64 = 0x243f_6a88_85a3_08d3; // seeded LCG
+        for i in 0..500u64 {
+            rng = rng
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            let a = 1 + (rng >> 33) % 8;
+            let b = 1 + (rng >> 13) % 8;
+            agg.ingest(&packet(
+                vec![layer("eth", a, b), layer("ip", 10 + a, 20 + b)],
+                60 + (i % 9) as usize,
+                0,
+                i,
+            ));
+            if i % 97 == 0 {
+                let snap = agg.snapshot();
+                let mut reference: Vec<Stream> = agg.streams().cloned().collect();
+                reference.sort_by_key(|s| s.created_seq);
+                let materialized: Vec<Stream> =
+                    snap.streams.iter().map(|s| (**s).clone()).collect();
+                assert_eq!(materialized, reference, "packet {i}");
+            }
+        }
+    }
+
+    // 12.1: per-protocol live/byte counters are maintained
+    // incrementally; they must always equal a recomputation from the
+    // live set — including across evictions.
+    #[test]
+    fn summary_counters_match_recomputation_across_eviction() {
+        let engine = engine();
+        let mut agg = Aggregator::new(
+            &engine,
+            AggregatorConfig {
+                eviction: EvictionPolicy::Live {
+                    idle_timeout: Duration::from_millis(40),
+                    close_linger: Duration::from_millis(10),
+                    max_streams: 6,
+                },
+                ..AggregatorConfig::default()
+            },
+        );
+        let mut rng: u64 = 0x1319_8a2e_0370_7344;
+        for i in 0..300u64 {
+            rng = rng
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            let a = 1 + (rng >> 33) % 10;
+            let b = 1 + (rng >> 13) % 10;
+            agg.ingest(&packet(
+                vec![layer("eth", a, b), layer("ip", 10 + a, 20 + b)],
+                40 + (i % 31) as usize,
+                0,
+                i * 7,
+            ));
+
+            let summary = agg.summary();
+            for counts in &summary.per_protocol {
+                let live = agg
+                    .streams()
+                    .filter(|s| s.protocol == counts.protocol)
+                    .count() as u64;
+                let bytes: u64 = agg
+                    .streams()
+                    .filter(|s| s.protocol == counts.protocol)
+                    .map(|s| s.stats[0].bytes + s.stats[1].bytes)
+                    .sum();
+                assert_eq!(counts.live, live, "{} live at packet {i}", counts.protocol);
+                assert_eq!(
+                    counts.bytes, bytes,
+                    "{} bytes at packet {i}",
+                    counts.protocol
+                );
+            }
+        }
+    }
+
+    // 12.1: eviction releases the store's handle — once the last
+    // snapshot holding an evicted stream drops, the record is freed.
+    #[test]
+    fn eviction_releases_the_stores_arc() {
+        let engine = engine();
+        let mut agg = Aggregator::new(
+            &engine,
+            AggregatorConfig {
+                eviction: EvictionPolicy::Live {
+                    idle_timeout: Duration::from_millis(10),
+                    close_linger: Duration::from_millis(10),
+                    max_streams: 4,
+                },
+                ..AggregatorConfig::default()
+            },
+        );
+        agg.ingest(&packet(vec![layer("eth", 1, 2)], 60, 0, 0));
+        let snap = agg.snapshot();
+        let weak = Arc::downgrade(&snap.streams[0]);
+
+        agg.finish(); // live mode: evicts everything
+        assert!(agg.is_empty());
+        assert!(weak.upgrade().is_some(), "snapshot still holds the record");
+        drop(snap);
+        assert!(
+            weak.upgrade().is_none(),
+            "no lingering store-side Arc after eviction (12.1)"
+        );
     }
 }

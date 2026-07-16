@@ -30,6 +30,7 @@
 //!   compiles a case-insensitive regex.
 
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use pktflow_flows::{Rollup, Stream, StreamId};
 use regex::{Regex, RegexBuilder};
@@ -765,12 +766,12 @@ fn compare(c: &Candidate, op: CmpOp, value: &Literal, field: &Field) -> bool {
 /// match — the visible set both UIs display, so results always sit in
 /// their hierarchy context.
 pub fn matching_with_ancestors(
-    streams: &[Stream],
+    streams: &[Arc<Stream>],
     ids: &HashMap<StreamId, &Stream>,
     query: &StreamQuery,
 ) -> std::collections::HashSet<u64> {
     let mut keep = std::collections::HashSet::new();
-    for s in streams {
+    for s in streams.iter().map(|s| &**s) {
         if query.matches(s, ids) {
             keep.insert(s.created_seq);
             let mut cursor = s.parent;

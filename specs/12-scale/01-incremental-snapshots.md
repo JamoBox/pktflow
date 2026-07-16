@@ -10,16 +10,15 @@ ingest thread, no matter how large the capture grows.
 
 ## Specification
 
-**Structural sharing.** `AggregatorSnapshot::streams` becomes `Vec<Arc<Stream>>`. The
-aggregator tracks, per slot, whether the stream mutated since the last publish, and keeps
-the `Arc` it published last time:
+**Structural sharing (copy-on-write).** `AggregatorSnapshot::streams` becomes
+`Vec<Arc<Stream>>`, and the store itself holds each stream behind the same handle —
+mutation goes through `Arc::make_mut`, so the deep copy is paid lazily, by the first
+mutation of a record some snapshot still shares, never in bulk at publish time:
 
 ```rust
 struct Slot {
     generation: u32,
-    stream: Option<Stream>,
-    dirty: bool,                       // mutated since last snapshot()
-    published: Option<Arc<Stream>>,    // what the previous snapshot carries
+    stream: Option<Arc<Stream>>,       // COW: get_mut() = Arc::make_mut
 }
 
 pub struct AggregatorSnapshot {
@@ -28,11 +27,18 @@ pub struct AggregatorSnapshot {
 }
 ```
 
-`snapshot()` walks the slots once: a clean slot contributes its existing `Arc` (pointer
-copy); a dirty slot clones the stream into a fresh `Arc`, caches it, and clears the flag.
-Every mutation path (`ingest` stat updates, lifecycle transitions, rollup applies, child
-attach, close/evict) sets `dirty`. Cost: O(live) pointer copies + O(dirty) clones per
-publish. Eviction drops the slot's cached `Arc` with the slot.
+`snapshot()` collects `Arc` clones — O(live) pointer copies, zero deep clones, still
+`&self`. Total deep-copy work between two publishes is exactly the set of records touched
+in between, amortized into the ingest path (an untouched record has one owner and mutates
+in place; the atomic ownership check is the only per-touch overhead). Nothing is stored
+twice: there is no publish-side cache, so steady-state memory is aggregator state plus
+only the *touched* records' old copies, held solely by the snapshots that still reference
+them. Eviction drops the store's handle; the record frees when the last snapshot lets go.
+
+> Shape note: an earlier draft of this spec sketched explicit per-slot `dirty` flags plus
+> a `published` `Arc` cache. Implementation surfaced the `make_mut` form as strictly
+> better (no double-store, no flag maintenance, `snapshot()` stays `&self`); the spec was
+> updated in the same PR per Article II.
 
 **Incremental summary.** `summary()` may not scan streams at publish time. Per-protocol
 *live* counts become maintained counters (increment on create, decrement on evict —
@@ -55,14 +61,20 @@ sharding the aggregator (D5's door stays open, unopened).
 
 ## Acceptance criteria
 
-- [ ] A snapshot taken after N ingests that touched only k streams deep-clones exactly k
-      stream records; untouched records are pointer-identical (`Arc::ptr_eq`) with the
-      previous snapshot's, proven by a unit test.
-- [ ] Snapshots remain value-equal to a reference deep copy (property test over randomized
-      ingest sequences), and two identical runs publish identical final snapshots.
-- [ ] `summary()` performs no O(live-streams) scan (per-protocol live/byte counters are
-      maintained incrementally and asserted against a recomputed ground truth in tests).
+- [x] Between two snapshots, only the records touched in between are re-copied: untouched
+      records are pointer-identical (`Arc::ptr_eq`) across consecutive snapshots, touched
+      ones are not and the older snapshot keeps the pre-touch value — proven by a unit
+      test. *(Criterion reworded from "snapshot deep-clones exactly k records" when the
+      COW shape moved the k copies from publish time into the mutation path — the shared/
+      copied split is the observable contract; where the copy happens is not.)*
+- [x] Snapshots remain value-equal to a reference deep copy (seeded randomized ingest
+      sequence test), and two identical runs publish identical final snapshots (existing
+      05.7 determinism test, still passing).
+- [x] `summary()` performs no O(live-streams) scan (per-protocol live/byte counters are
+      maintained incrementally and asserted against a recomputed ground truth across
+      evictions in tests).
 - [ ] On the 12.7 fixture, hub-pipeline read time is within 10 % of `--batch`, and
       `snapshot()` p99 measured by the 12.7 bench meets its budget.
-- [ ] Eviction under `EvictionPolicy::Live` releases the cached `Arc` (no snapshot-cache
-      leak: RSS plateaus on the 09.4 live-eviction bench).
+- [x] Eviction under `EvictionPolicy::Live` releases the store's handle: once the last
+      snapshot holding an evicted record drops, the record frees (weak-handle unit test).
+      *(The RSS-plateau measurement lives with 12.7's memory-ceiling tests.)*

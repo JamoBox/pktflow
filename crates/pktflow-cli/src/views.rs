@@ -274,6 +274,7 @@ pub fn resolve_selector<'a>(
         return snapshot
             .streams
             .iter()
+            .map(|s| &**s)
             .find(|s| s.created_seq == seq)
             .ok_or_else(|| CliError::NotFound(format!("no stream #{seq} in this capture")));
     }
@@ -289,6 +290,7 @@ pub fn resolve_selector<'a>(
     let candidates: Vec<&Stream> = snapshot
         .streams
         .iter()
+        .map(|s| &**s)
         .filter(|s| s.protocol == *proto)
         .filter(|s| {
             let (a, b, _) = endpoint_sides(s);

@@ -340,9 +340,14 @@ pub fn run_observed(
 
 /// How often the hub pipeline publishes a fresh snapshot while packets
 /// are flowing: frequent enough to feel live, cheap enough that the
-/// snapshot copy stays off the hot path (its cost is bounded by
-/// `max_streams`, measured in 09.4).
+/// snapshot copy stays off the hot path (measured in 09.4/12.7).
 const PUBLISH_INTERVAL: Duration = Duration::from_millis(250);
+
+/// Adaptive back-off (12.1, D17.2): a publish that took `t` defers the
+/// next by at least `ADAPTIVE_PUBLISH_FACTOR × t`, so on huge captures
+/// snapshots go briefly stale instead of publication dominating the
+/// aggregation thread.
+const ADAPTIVE_PUBLISH_FACTOR: u32 = 8;
 
 /// A hub named for this run's source — the TUI/web header line.
 pub fn hub_for(shared: &SharedArgs) -> SnapshotHub {
@@ -367,7 +372,7 @@ pub fn spawn_hub_pipeline(
 ) -> std::thread::JoinHandle<Result<(), CliError>> {
     std::thread::spawn(move || {
         let publish_hub = Arc::clone(&hub);
-        let mut last_publish: Option<Instant> = None;
+        let mut next_due: Option<Instant> = None;
         let result = run_observed(
             &shared,
             &stop,
@@ -375,10 +380,14 @@ pub fn spawn_hub_pipeline(
             true,
             |_, _| {},
             |agg| {
-                // First snapshot ships immediately; then throttled.
-                if last_publish.is_none_or(|t| t.elapsed() >= PUBLISH_INTERVAL) {
-                    last_publish = Some(Instant::now());
+                // First snapshot ships immediately; then throttled, with
+                // the interval stretched by the last publish's own cost
+                // (12.1, D17.2) so big captures stay ingest-bound.
+                let now = Instant::now();
+                if next_due.is_none_or(|due| now >= due) {
                     publish_hub.publish(agg.snapshot());
+                    let cost = now.elapsed();
+                    next_due = Some(now + PUBLISH_INTERVAL.max(cost * ADAPTIVE_PUBLISH_FACTOR));
                 }
             },
         );

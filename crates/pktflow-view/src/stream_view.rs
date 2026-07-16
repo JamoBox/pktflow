@@ -12,7 +12,7 @@ use crate::fmt::value_str;
 
 /// Id → stream lookup for tree walks within one snapshot.
 pub fn by_id(snapshot: &AggregatorSnapshot) -> HashMap<StreamId, &Stream> {
-    snapshot.streams.iter().map(|s| (s.id, s)).collect()
+    snapshot.streams.iter().map(|s| (s.id, &**s)).collect()
 }
 
 pub fn total_packets(s: &Stream) -> u64 {

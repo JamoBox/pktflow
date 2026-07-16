@@ -210,9 +210,10 @@ generation change. Four rules make cost proportional to *change and viewport* in
 *capture size*, binding on the aggregator, `pktflow-view`, and both front-ends:
 
 1. **Publication is incremental.** Snapshots share unchanged stream records with the
-   previous publish (`Arc`-per-stream structural sharing + per-slot dirty tracking): publish
-   cost is O(streams touched since last publish) deep work, never O(all streams) clones.
-   Summary counters are maintained incrementally, not recomputed by full scan at publish.
+   previous publish (`Arc`-per-stream structural sharing; the store mutates copy-on-write):
+   deep-copy work between two publishes is O(streams touched in between), never O(all
+   streams) clones at publish. Summary counters are maintained incrementally, not
+   recomputed by full scan at publish.
 2. **Publish cadence is adaptive.** The interval floor stays 250 ms, but a publish that took
    `t` defers the next by ≥ max(250 ms, c·t) — a snapshot can be briefly stale, but
    publication may never dominate the ingest thread.
