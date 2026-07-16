@@ -170,3 +170,57 @@ Reading a negotiated port out of one stream's payload and registering a route fo
 aggregator to accept a runtime route registration keyed off a *live stream's* parsed field,
 which doesn't exist yet. Explicitly out of scope for this task; a candidate for its own
 future decision and spec, not a silent gap in the protocols that hit it.
+
+## D16 — High-cardinality condensation (task 12)
+A capture where one service endpoint talks to many ephemeral peer ports (scans, load tests,
+busy client↔server pairs, NAT'd aggregation points) creates one full stream node per
+ephemeral flow under the same parent — hundreds of thousands of siblings that no human will
+ever browse row-by-row, each paying the full per-stream cost in the aggregator, in every
+snapshot, in every JSON document, and in every UI render. The fix lives **in the
+aggregator**, not the view layer: fixing it downstream would leave memory and snapshot cost
+unbounded.
+
+**Decision:** when the number of live same-protocol children under one parent that share the
+same *anchor endpoint* (the repeating side of the declared key pair — e.g. `10.0.0.5:443` —
+compared by field values, not by canonical A/B label) exceeds a threshold **K** (default
+256), subsequent flows in that group fold into a single **condensed stream node** instead of
+creating new nodes. The condensed node retains: member-flow count, summed per-direction
+stats, opaque bytes, first/last seen, a bounded distinct-value tally of the varying
+(ephemeral) key component with an explicit overflow flag (same honesty contract as D4 /
+D11 — never lie by omission), and a lifecycle-state histogram where the protocol declares
+one. The first K flows of a group remain ordinary, fully browsable streams.
+
+Which key components may vary is **plugin-declared** (`StreamIdentity::condense`), keeping
+the engine protocol-free: TCP/UDP nominate their port pair; a protocol that declares nothing
+never condenses. Condensation is on by default in every aggregating mode and can be disabled
+per run (`--no-condense`); the threshold is configurable (`AggregatorConfig`). The trigger
+counts in deterministic creation order, so the same input yields the same expanded set and
+the same condensed tallies (PRD §7). What is knowingly given up: per-flow rollups, lifecycle
+detail, and drill-down for flows beyond the first K of a group — the condensed row states
+the loss explicitly (`+49,744 more flows`), and re-running with `--no-condense` or a raised
+threshold recovers full detail.
+
+## D17 — Snapshot & rendering scale contract (task 12)
+The D5 snapshot model (deep copy, publish, render from the copy) is correct but was costed
+for live captures bounded by D2's `max_streams`. Offline replay has no eviction, so on a
+multi-gigabyte capture every 250 ms publish deep-clones an ever-growing stream set
+(read-time cost quadratic in stream count, peak memory a multiple of aggregator state), and
+the web UI's single-document `/api/snapshot` ships the entire forest to the browser on every
+generation change. Four rules make cost proportional to *change and viewport* instead of
+*capture size*, binding on the aggregator, `pktflow-view`, and both front-ends:
+
+1. **Publication is incremental.** Snapshots share unchanged stream records with the
+   previous publish (`Arc`-per-stream structural sharing + per-slot dirty tracking): publish
+   cost is O(streams touched since last publish) deep work, never O(all streams) clones.
+   Summary counters are maintained incrementally, not recomputed by full scan at publish.
+2. **Publish cadence is adaptive.** The interval floor stays 250 ms, but a publish that took
+   `t` defers the next by ≥ max(250 ms, c·t) — a snapshot can be briefly stale, but
+   publication may never dominate the ingest thread.
+3. **Readers never do O(total streams) work per interaction.** Sort orders, id maps, and
+   child lists are computed once per published snapshot in a shared, lazily-built
+   `SnapshotIndex` (pktflow-view); UI requests and keypresses resolve against windows of it.
+   Timelines render at bounded resolution (server-side time×lane binning), never one drawn
+   element per stream.
+4. **Full-document transfer is size-gated.** `/api/snapshot` carries the whole forest only
+   below a stream-count threshold; above it the client must use the windowed API. The
+   browser's working set is viewport-bounded by design, not by hoping captures stay small.
