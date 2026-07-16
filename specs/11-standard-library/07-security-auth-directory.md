@@ -17,11 +17,11 @@ its TCP session.
 | Item | Spec |
 |---|---|
 | Claims | `TcpPort(443)` |
-| Probe | record `content_type` ∈ {20,21,22,23} and `record_version` is a plausible TLS version (`0x03,0x0X`) → 45. TLS runs on many ports beyond 443 (993, 995, 465/587, 636, 3389, ...) and some of those only switch to TLS mid-session via STARTTLS — a plaintext-then-upgrade transition this single-packet plugin **cannot** detect (no session state, contract rule 5). The static claim plus probe covers "TLS from the first byte"; STARTTLS upgrade is an explicit, documented v1 gap, not silently unhandled |
-| Fields | `Keys`: `app` (shared, constant `Str("tls")`) · `Structural`: `content_type`, `record_version`, `handshake_type` (ClientHello=1/ServerHello=2/..., only when `content_type==22`) · `Full` (ClientHello only): `sni` (Str, server_name extension), `alpn` (List of Str), `cipher_suites` (List of U64); (ServerHello only): `selected_cipher_suite` (U64), `tls_version_selected` |
+| Probe | record `content_type` ∈ {20,21,22,23} and `record_version` is a plausible TLS version (`0x03,0x00..=0x03,0x04`) and the record `length` is consistent with the buffer → 55. (The score must clear `MIN_CONFIDENCE` = 50 — the floor below which the router discards a probe (03.3) — or the probe can never win a fallback-pool route and is dead weight; a valid content type plus a plausible version plus a length check is a specific-enough signal that random bytes almost never pass, which the 09.1 kit's rule 5 verifies.) TLS runs on many ports beyond 443 (993, 995, 465/587, 636, 3389, ...) and some of those only switch to TLS mid-session via STARTTLS — a plaintext-then-upgrade transition this single-packet plugin **cannot** detect (no session state, contract rule 5). The static claim plus probe covers "TLS from the first byte"; STARTTLS upgrade is an explicit, documented v1 gap, not silently unhandled |
+| Fields | `Keys`: `app` (shared, constant `Str("tls")`) · `Structural`: `content_type`, `record_version`, `handshake_type` (ClientHello=1/ServerHello=2/..., only when `content_type==22`), `sni` (Str, ClientHello server_name extension) · `Full` (ClientHello only): `alpn` (List of Str), `cipher_suites` (List of U64); (ServerHello only): `selected_cipher_suite` (U64), `tls_version_selected`. **`sni` is a `Structural` field, not `Full`**, so the `sni` rollup populates in the default (`Structural`) view rather than only under `--depth full` — the same placement `dns` gives its rollup field `qname` (06.6/11.11). |
 | Hint | `Terminal` — `ApplicationData` records (`content_type==23`) are opaque (D12); intermediate handshake records past ServerHello (Certificate, KeyExchange, Finished) are recognized by `content_type`/`handshake_type` but not decoded further in v1 |
 | Identity | key `[{app, None}]`, one `tls` child stream per TCP session |
-| Rollups | `Sample` on `sni` (first/last SNI seen — flags a session that renegotiates); `Sample` on `selected_cipher_suite`, `tls_version_selected` |
+| Rollups | `Sample` on `sni` (first/last SNI seen — flags a session that renegotiates, the analytic payoff for otherwise-opaque HTTPS); `Accumulate` on `handshake_type` (the handshake shapes the session went through). (`selected_cipher_suite`/`tls_version_selected` stay per-packet `Full` fields, **not** rollups: they appear only in the ServerHello while `sni` appears only in the ClientHello — no single record carries both, and the 09.1 kit's rule 3 requires every declared rollup field on every canonical good sample. `sni`+`handshake_type` co-occur on a ClientHello.) |
 
 **ssh** (RFC 4251 architecture, RFC 4253 transport) — app-stream pattern. Scope is narrowed
 to exactly what RFC 4253 guarantees is cleartext: the identification banner exchange, and
@@ -84,8 +84,9 @@ this task's other TLV-based protocols are.
 | RADIUS legacy ports | RFC 2865 (historical) | `UdpPort(1645)`, `UdpPort(1646)` — pre-IANA-assignment ports still seen in older deployments |
 
 ## Acceptance criteria
-- [ ] `tls` fixtures: ClientHello (with SNI+ALPN+cipher list) and ServerHello parse exactly;
-      an ApplicationData record stops `Terminal` with no fields beyond `content_type`.
+- [x] `tls` fixtures: ClientHello (with SNI+ALPN+cipher list) and ServerHello parse exactly;
+      an ApplicationData record stops `Terminal` with no handshake fields beyond the
+      per-record `content_type`/`record_version` envelope.
 - [ ] `ssh` fixtures: both banner lines and both KEXINIT packets parse exactly; a synthetic
       "encrypted-looking" packet on port 22 declines with `ParseError` rather than
       misreading ciphertext as a message type (the port-claim-honesty criterion, ported from

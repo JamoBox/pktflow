@@ -23,6 +23,7 @@ pub mod geneve;
 pub mod gre;
 pub mod gtp_u;
 pub mod hsrp;
+pub mod http;
 pub mod icmpv4;
 pub mod icmpv6;
 pub mod igmp;
@@ -52,6 +53,7 @@ pub mod stp;
 pub mod syslog;
 pub mod tcp;
 pub mod template;
+pub mod tls;
 pub mod udp;
 pub mod vlan;
 pub mod vrrp;
@@ -112,6 +114,8 @@ pub fn default_engine() -> Engine {
         .plugin(snmp::Snmp)
         .plugin(radius::Radius)
         .plugin(ssdp::Ssdp)
+        .plugin(http::Http)
+        .plugin(tls::Tls)
         .plugin(netflow9::Netflow9)
         .plugin(ipfix::Ipfix)
         .build()

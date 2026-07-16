@@ -1444,3 +1444,109 @@ fn wireguard_claim_path_and_probe_admitted_path_parse_identically() {
     assert_eq!(claimed_layer.fields, probe_admitted.fields);
     assert_eq!(claimed_layer.header_len, probe_admitted.header_len);
 }
+
+/// Ethernet + IPv4 + TCP frame carrying `payload` (PSH+ACK), for the
+/// app-stream over-TCP tests.
+fn ipv4_tcp(src: [u8; 4], dst: [u8; 4], sport: u16, dport: u16, payload: &[u8]) -> Vec<u8> {
+    let tcp_len = 20 + payload.len();
+    let total = 20 + tcp_len;
+    let mut h = vec![
+        0x45,
+        0x00,
+        (total >> 8) as u8,
+        (total & 0xff) as u8,
+        0x1C,
+        0x46,
+        0x40,
+        0x00,
+        0x40,
+        6,
+        0,
+        0,
+    ];
+    h.extend_from_slice(&src);
+    h.extend_from_slice(&dst);
+    let ck = internet_checksum(&h);
+    h[10..12].copy_from_slice(&ck.to_be_bytes());
+    // TCP header (20 bytes, data offset 5, flags PSH+ACK).
+    h.extend_from_slice(&sport.to_be_bytes());
+    h.extend_from_slice(&dport.to_be_bytes());
+    h.extend_from_slice(&1u32.to_be_bytes()); // seq
+    h.extend_from_slice(&1u32.to_be_bytes()); // ack
+    h.push(0x50); // data offset 5
+    h.push(0x18); // PSH | ACK
+    h.extend_from_slice(&8192u16.to_be_bytes()); // window
+    h.extend_from_slice(&[0, 0]); // checksum (unchecked)
+    h.extend_from_slice(&[0, 0]); // urgent pointer
+    h.extend_from_slice(payload);
+    let mut frame = eth();
+    frame.extend_from_slice(&h);
+    frame
+}
+
+/// A TLS ClientHello record for `host` (one cipher suite + server_name).
+fn client_hello(host: &str) -> Vec<u8> {
+    let name = host.as_bytes();
+    let mut entry = vec![0u8];
+    entry.extend_from_slice(&(name.len() as u16).to_be_bytes());
+    entry.extend_from_slice(name);
+    let mut sni_data = (entry.len() as u16).to_be_bytes().to_vec();
+    sni_data.extend_from_slice(&entry);
+    let mut sni_ext = 0u16.to_be_bytes().to_vec();
+    sni_ext.extend_from_slice(&(sni_data.len() as u16).to_be_bytes());
+    sni_ext.extend_from_slice(&sni_data);
+
+    let mut body = Vec::new();
+    body.extend_from_slice(&[0x03, 0x03]);
+    body.extend_from_slice(&[0x11; 32]);
+    body.push(0);
+    body.extend_from_slice(&[0x00, 0x02, 0x13, 0x01]);
+    body.push(1);
+    body.push(0);
+    body.extend_from_slice(&(sni_ext.len() as u16).to_be_bytes());
+    body.extend_from_slice(&sni_ext);
+
+    let mut hs = vec![1u8];
+    let len = body.len();
+    hs.extend_from_slice(&[(len >> 16) as u8, (len >> 8) as u8, len as u8]);
+    hs.extend_from_slice(&body);
+    let mut rec = vec![22u8, 0x03, 0x01];
+    rec.extend_from_slice(&(hs.len() as u16).to_be_bytes());
+    rec.extend_from_slice(&hs);
+    rec
+}
+
+/// Regression (reported bug): the `sni` rollup showed `- -> -` in the
+/// default streams view because `sni` was extracted only at `Full`, while
+/// the CLI's default depth is `Structural`. `sni` (a rollup field) must
+/// surface at `Structural` so the sample rollup populates by default.
+#[test]
+fn tls_sni_rollup_populates_at_default_structural_depth() {
+    let engine = Arc::new(default_engine());
+    let mut agg = Aggregator::new(&engine, AggregatorConfig::default());
+
+    let hello = client_hello("example.com");
+    let frame = ipv4_tcp([10, 0, 0, 5], [93, 184, 216, 34], 52341, 443, &hello);
+    // Dissect at Structural depth — exactly what `pktflow streams` uses by
+    // default (crates/pktflow-cli DepthArg default).
+    let opts = ParseOpts {
+        depth: Depth::Structural,
+        ..ParseOpts::default()
+    };
+    agg.ingest(&engine.dissect(&frame, meta(frame.len(), 0), opts));
+
+    let tls_streams = agg.at_layer("tls");
+    assert_eq!(
+        tls_streams.len(),
+        1,
+        "one tls app-stream under the TCP session"
+    );
+    match tls_streams[0].rollups.get("sni") {
+        Some(Rollup::Sample { first, last }) => {
+            let host = Some(Value::from("example.com"));
+            assert_eq!(first, &host);
+            assert_eq!(last, &host);
+        }
+        other => panic!("sni rollup should sample the host, got: {other:?}"),
+    }
+}

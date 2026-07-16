@@ -23,6 +23,7 @@ use pktflow_plugins::geneve::Geneve;
 use pktflow_plugins::gre::Gre;
 use pktflow_plugins::gtp_u::GtpU;
 use pktflow_plugins::hsrp::Hsrp;
+use pktflow_plugins::http::Http;
 use pktflow_plugins::icmpv4::Icmpv4;
 use pktflow_plugins::icmpv6::Icmpv6;
 use pktflow_plugins::igmp::Igmp;
@@ -52,6 +53,7 @@ use pktflow_plugins::stp::Stp;
 use pktflow_plugins::syslog::Syslog;
 use pktflow_plugins::tcp::Tcp;
 use pktflow_plugins::template::Template;
+use pktflow_plugins::tls::Tls;
 use pktflow_plugins::udp::Udp;
 use pktflow_plugins::vlan::Vlan;
 use pktflow_plugins::vrrp::Vrrp;
@@ -2933,6 +2935,131 @@ fn ipfix_conforms() {
                         ])]),
                     ])]),
                 ),
+            ],
+            expected_hint: Hint::Terminal,
+        }],
+        outer_ctx: Vec::new(),
+    });
+}
+
+#[test]
+fn http_conforms() {
+    // A GET request carrying both rollup fields (`method`, `host`) — the
+    // canonical shape the 09.1 kit's rule 3 requires. A response (which has
+    // `status_code` but no `method`) is covered by http.rs's own fixtures.
+    let get = b"GET /index.html HTTP/1.1\r\n\
+Host: example.com\r\n\
+User-Agent: curl/8.4.0\r\n\
+Accept: */*\r\n\
+\r\n"
+        .to_vec();
+
+    // A POST with a body: header_len must stop at the blank line, leaving
+    // the body as unparsed remainder (D7, no body reassembly).
+    let post_body = b"{\"a\":\"b\"}";
+    let mut post = b"POST /submit HTTP/1.1\r\n\
+Host: api.example.com\r\n\
+User-Agent: app/1.0\r\n\
+Content-Type: application/json\r\n\
+Content-Length: 9\r\n\
+\r\n"
+        .to_vec();
+    let post_header_len = post.len();
+    post.extend_from_slice(post_body);
+
+    run_conformance(&ConformanceCase {
+        plugin: Box::new(Http),
+        good: vec![
+            GoodPacket {
+                expected_header_len: get.len(),
+                bytes: get,
+                expected_full_fields: vec![
+                    ("app", Value::from("http")),
+                    ("is_request", Value::Bool(true)),
+                    ("method", Value::from("GET")),
+                    ("version", Value::from("HTTP/1.1")),
+                    ("host", Value::from("example.com")),
+                    ("user_agent", Value::from("curl/8.4.0")),
+                ],
+                expected_hint: Hint::Terminal,
+            },
+            GoodPacket {
+                expected_header_len: post_header_len,
+                bytes: post,
+                expected_full_fields: vec![
+                    ("app", Value::from("http")),
+                    ("is_request", Value::Bool(true)),
+                    ("method", Value::from("POST")),
+                    ("version", Value::from("HTTP/1.1")),
+                    ("host", Value::from("api.example.com")),
+                    ("user_agent", Value::from("app/1.0")),
+                    ("content_type", Value::from("application/json")),
+                    ("content_length", Value::U64(9)),
+                ],
+                expected_hint: Hint::Terminal,
+            },
+        ],
+        outer_ctx: Vec::new(),
+    });
+}
+
+/// Wraps a `handshake` body in TLS record + handshake framing (RFC 8446
+/// §5.1 record, §4 handshake). Record version bytes are `0x0301`.
+fn tls_handshake_record(hs_type: u8, body: &[u8]) -> Vec<u8> {
+    let mut hs = vec![hs_type];
+    let len = body.len();
+    hs.extend_from_slice(&[(len >> 16) as u8, (len >> 8) as u8, len as u8]);
+    hs.extend_from_slice(body);
+    let mut rec = vec![22u8, 0x03, 0x01];
+    rec.extend_from_slice(&(hs.len() as u16).to_be_bytes());
+    rec.extend_from_slice(&hs);
+    rec
+}
+
+/// A ClientHello for `example.com` with one cipher suite and a server_name
+/// extension — carries both TLS rollup fields (`handshake_type`, `sni`).
+fn tls_client_hello() -> Vec<u8> {
+    let name = b"example.com";
+    // ServerNameList: name_type(0) + name_len(2) + name.
+    let mut entry = vec![0u8];
+    entry.extend_from_slice(&(name.len() as u16).to_be_bytes());
+    entry.extend_from_slice(name);
+    let mut sni_data = (entry.len() as u16).to_be_bytes().to_vec();
+    sni_data.extend_from_slice(&entry);
+    // Extension: server_name (0).
+    let mut sni_ext = 0u16.to_be_bytes().to_vec();
+    sni_ext.extend_from_slice(&(sni_data.len() as u16).to_be_bytes());
+    sni_ext.extend_from_slice(&sni_data);
+
+    let mut body = Vec::new();
+    body.extend_from_slice(&[0x03, 0x03]); // legacy_version TLS 1.2
+    body.extend_from_slice(&[0x11; 32]); // random
+    body.push(0); // session_id length 0
+    body.extend_from_slice(&[0x00, 0x02]); // cipher_suites length
+    body.extend_from_slice(&[0x13, 0x01]); // TLS_AES_128_GCM_SHA256
+    body.push(1); // compression_methods length
+    body.push(0); // null compression
+    body.extend_from_slice(&(sni_ext.len() as u16).to_be_bytes());
+    body.extend_from_slice(&sni_ext);
+
+    tls_handshake_record(1, &body)
+}
+
+#[test]
+fn tls_conforms() {
+    let hello = tls_client_hello();
+    run_conformance(&ConformanceCase {
+        plugin: Box::new(Tls),
+        good: vec![GoodPacket {
+            expected_header_len: hello.len(),
+            bytes: hello,
+            expected_full_fields: vec![
+                ("app", Value::from("tls")),
+                ("content_type", Value::U64(22)),
+                ("record_version", Value::U64(0x0301)),
+                ("handshake_type", Value::U64(1)),
+                ("cipher_suites", Value::List(vec![Value::U64(0x1301)])),
+                ("sni", Value::from("example.com")),
             ],
             expected_hint: Hint::Terminal,
         }],
