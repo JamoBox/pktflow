@@ -17,7 +17,7 @@ request/status line and headers are parsed; the body is unparsed remainder.
 | Item | Spec |
 |---|---|
 | Claims | `TcpPort(80)` |
-| Fields | `Keys`: `app` (shared, constant `Str("http")`) · `Structural`: `is_request` (Bool), `method` (Str, request only), `status_code` (U64, response only), `version` (Str) · `Full`: `host` (Str), `content_type` (Str), `content_length` (U64), `user_agent` (Str, request only), `upgrade` (Str, from an `Upgrade:` header if present) |
+| Fields | `Keys`: `app` (shared, constant `Str("http")`) · `Structural`: `is_request` (Bool), `method` (Str, request only), `status_code` (U64, response only), `version` (Str), `host` (Str, from a `Host:` header if present) · `Full`: `content_type` (Str), `content_length` (U64), `user_agent` (Str, request only), `upgrade` (Str, from an `Upgrade:` header if present). **`host` is a `Structural` field, not `Full`**, so the `host` rollup populates in the default (`Structural`) view rather than only under `--depth full` — the same placement `dns` gives its rollup field `qname`. |
 | Header-block framing | `header_len` = offset of the blank-line (`CRLFCRLF`) terminator; not found within this segment ⇒ `Truncated{needed, have}` (D9) — headers split across TCP segments are a known, honestly-declined v1 gap (no reassembly, D7) |
 | h2c handshake | If the packet's bytes begin with HTTP/2's fixed 24-byte connection preface (`"PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n"`, RFC 9113 §3.4), `header_len` is just those 24 bytes and the hint is `ByProtocol("http2")` — a direct-by-name dispatch (VXLAN's pattern, 06.5) that avoids `http2` needing its own claimed route at all (see below) |
 | Hint | h2c preface → `ByProtocol("http2")`, as above; otherwise `Terminal` |

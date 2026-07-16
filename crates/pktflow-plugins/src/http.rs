@@ -248,11 +248,14 @@ impl LayerPlugin for Http {
             if let Some(code) = start.status_code {
                 fields.insert(STATUS_CODE, Value::U64(u64::from(code)));
             }
-        }
-        if ctx.depth() >= Depth::Full {
+            // `host` is a rollup field, so it must reach the default
+            // (Structural) view rather than only at Full (matching dns's
+            // `qname` and tls's `sni`).
             if let Some(v) = header_value(&lines, "Host") {
                 fields.insert(HOST, Value::from(to_str(v).as_str()));
             }
+        }
+        if ctx.depth() >= Depth::Full {
             if let Some(v) = header_value(&lines, "Content-Type") {
                 fields.insert(CONTENT_TYPE, Value::from(to_str(v).as_str()));
             }
@@ -419,14 +422,16 @@ Hello, world!"
     }
 
     #[test]
-    fn structural_depth_omits_full_only_headers() {
+    fn structural_depth_surfaces_host_but_omits_other_headers() {
+        // `host` is a rollup field, so it must reach the default (Structural)
+        // view; other headers (User-Agent, Content-Type) stay Full-only.
         let bytes = get_request();
         let m = meta(bytes.len());
         let parsed = Http
             .parse(&bytes, &ctx(Depth::Structural, &m))
             .expect("valid GET");
         assert_eq!(parsed.fields.get(METHOD), Some(&Value::from("GET")));
-        assert_eq!(parsed.fields.get(HOST), None);
+        assert_eq!(parsed.fields.get(HOST), Some(&Value::from("example.com")));
         assert_eq!(parsed.fields.get(USER_AGENT), None);
     }
 

@@ -140,8 +140,9 @@ fn parse_alpn(data: &[u8]) -> Option<Vec<Value>> {
     (!protos.is_empty()).then_some(protos)
 }
 
-/// Parses a handshake fragment. `deep` gates the Full-only field walk
-/// (extensions, cipher lists); the structural `hs_type` is always read.
+/// Parses a handshake fragment. `deep` gates the field walk past `hs_type`
+/// (hello body + extensions, which yield `sni`/`alpn`/cipher fields); the
+/// caller runs it from Structural up so `sni` reaches the default view.
 fn parse_handshake(fragment: &[u8], deep: bool) -> Option<Handshake> {
     let mut r = ByteReader::new(fragment);
     let hs_type = r.u8().ok()?;
@@ -232,9 +233,12 @@ impl LayerPlugin for Tls {
         let fragment = r.take(length)?;
         let header_len = 5 + length;
 
-        // Deep handshake fields are only extracted at Full depth.
+        // The handshake body is walked from Structural up, so `sni` — the
+        // headline signal and a declared rollup field — is present in the
+        // default (Structural) view rather than only at Full (matching
+        // dns's `qname`). Field *insertion* is still gated per depth below.
         let handshake = (content_type == CT_HANDSHAKE)
-            .then(|| parse_handshake(fragment, ctx.depth() >= Depth::Full))
+            .then(|| parse_handshake(fragment, ctx.depth() >= Depth::Structural))
             .flatten();
 
         let mut fields = FieldMap::new();
@@ -246,15 +250,15 @@ impl LayerPlugin for Tls {
             fields.insert(RECORD_VERSION, Value::U64(u64::from(record_version)));
             if let Some(hs) = &handshake {
                 fields.insert(HANDSHAKE_TYPE, Value::U64(u64::from(hs.hs_type)));
+                if let Some(sni) = &hs.sni {
+                    fields.insert(SNI, Value::from(sni.as_str()));
+                }
             }
         }
         if ctx.depth() >= Depth::Full {
             if let Some(hs) = handshake {
                 if let Some(suites) = hs.cipher_suites {
                     fields.insert(CIPHER_SUITES, Value::List(suites));
-                }
-                if let Some(sni) = hs.sni {
-                    fields.insert(SNI, Value::from(sni.as_str()));
                 }
                 if let Some(alpn) = hs.alpn {
                     fields.insert(ALPN, Value::List(alpn));
@@ -474,15 +478,18 @@ mod tests {
     }
 
     #[test]
-    fn structural_depth_omits_deep_handshake_fields() {
+    fn structural_depth_surfaces_sni_but_omits_deep_fields() {
+        // `sni` is a rollup field, so it must reach the default (Structural)
+        // view; the heavier lists (cipher_suites/alpn) stay Full-only.
         let bytes = client_hello();
         let m = meta(bytes.len());
         let parsed = Tls
             .parse(&bytes, &ctx(Depth::Structural, &m))
             .expect("valid ClientHello");
         assert_eq!(parsed.fields.get(HANDSHAKE_TYPE), Some(&Value::U64(1)));
-        assert_eq!(parsed.fields.get(SNI), None);
+        assert_eq!(parsed.fields.get(SNI), Some(&Value::from("example.com")));
         assert_eq!(parsed.fields.get(CIPHER_SUITES), None);
+        assert_eq!(parsed.fields.get(ALPN), None);
     }
 
     #[test]
