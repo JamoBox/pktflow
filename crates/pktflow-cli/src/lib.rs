@@ -174,7 +174,7 @@ pub fn dispatch(cli: Cli, stop: &StopFlags) -> Result<(), CliError> {
                 run::spawn_hub_pipeline(args.shared.clone(), pipeline_stop, Arc::clone(&hub));
             let upload_shared = args.shared;
             let upload_active = Arc::clone(&active_stop);
-            let state = Arc::new(pktflow_web::WebState::with_uploads(
+            let mut state = pktflow_web::WebState::with_uploads(
                 hub,
                 Box::new(move |name, path| {
                     // Same knobs as the command line (--depth, -c, …),
@@ -198,7 +198,11 @@ pub fn dispatch(cli: Cli, stop: &StopFlags) -> Result<(), CliError> {
                     run::spawn_hub_pipeline(shared, fresh_stop, Arc::clone(&fresh));
                     Ok(fresh)
                 }),
-            ));
+            );
+            if let Some(cap) = args.max_upload_bytes {
+                state = state.upload_cap(cap);
+            }
+            let state = Arc::new(state);
             let shutdown_stop = stop.clone();
             let served = pktflow_web::serve(
                 &args.listen,

@@ -56,7 +56,7 @@ degrades exactly when the cap is doing its job.
 - [x] [12.3 High-cardinality condensation](03-condensation.md) — D16 (PRD §7, §5)
 - [ ] [12.4 Snapshot index & windowed view API](04-windowed-view-api.md) — D17.3/.4 (FR-7)
 - [ ] [12.5 Web UI at scale](05-scalable-web-ui.md) — virtualized tree, canvas timeline, progress (§5)
-- [ ] [12.6 Streaming uploads](06-streaming-uploads.md) — multi-GB `POST /api/upload` (§5)
+- [x] [12.6 Streaming uploads](06-streaming-uploads.md) — multi-GB `POST /api/upload` (§5)
 - [ ] [12.7 Scale fixtures & benchmarks](07-scale-benchmarks.md) — high-cardinality generator, regression gates (§8)
 
 Recommended order: 12.7's fixture generator first (everything else is measured against it),

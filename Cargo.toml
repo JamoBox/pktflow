@@ -29,7 +29,7 @@ pktflow-web = { path = "crates/pktflow-web" }
 pktflow-testkit = { path = "crates/pktflow-testkit" }
 ratatui = "0.30"
 axum = "0.8"
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "time"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "time", "fs", "io-util"] }
 tokio-stream = "0.1"
 pcap = "2"
 thiserror = "2"

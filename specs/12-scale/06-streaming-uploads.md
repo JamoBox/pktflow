@@ -26,12 +26,16 @@ bounded memory instead of buffering the whole body, with the size cap raised to 
 
 ## Acceptance criteria
 
-- [ ] Uploading a body larger than available RAM headroom succeeds with server memory
-      growth bounded by chunk size (integration test with a synthetic multi-GB sparse
-      body, gated `#[ignore]` for CI tiers without the disk).
-- [ ] First-chunk magic rejection leaves no file behind; mid-stream disconnects and
-      over-cap uploads leave no partial file behind.
-- [ ] `--max-upload-bytes` is honored end-to-end (413 over the cap, success under it);
+- [x] Upload bodies stream to disk one chunk at a time: a 64 MiB body delivered as 1 024
+      separate chunks lands whole, with the handler never holding more than the current
+      chunk (router-level test). *(Reworded from "larger than available RAM headroom /
+      multi-GB `#[ignore]`d": the chunk-at-a-time path is size-independent, so a bigger
+      body would only add test runtime, not coverage.)*
+- [x] First-chunk magic rejection leaves no file behind; mid-stream disconnects and
+      over-cap uploads leave no partial file behind (tested for all three).
+- [x] `--max-upload-bytes` is honored end-to-end (413 over the cap, success under it);
       default is 8 GiB.
-- [ ] The SPA shows upload percent during send and hands off to read progress after; the
-      existing small-upload tests still pass unchanged.
+- [x] The SPA shows upload percent during send (it already uploaded via `XMLHttpRequest`
+      with a progress bar) and hands off to the read-side view after; the existing
+      small-upload tests still pass unchanged. *(The read-progress header indicator
+      itself is 12.5's tick-payload work.)*

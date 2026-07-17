@@ -155,6 +155,10 @@ pub struct ServeArgs {
     /// Address to bind the web UI + API on
     #[arg(long, value_name = "ADDR", default_value = "127.0.0.1:8320")]
     pub listen: String,
+    /// Upload size cap in bytes; uploads stream to disk, so this bounds
+    /// disk, not memory (0 = unlimited) [default: 8 GiB]
+    #[arg(long, value_name = "N")]
+    pub max_upload_bytes: Option<u64>,
 }
 
 /// Exactly one input: a capture file or a live interface.
