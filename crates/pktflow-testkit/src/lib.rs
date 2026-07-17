@@ -635,9 +635,198 @@ pub fn mixed_capture(n: usize) -> Vec<(SystemTime, Vec<u8>)> {
     packets
 }
 
+/// 12.7: the high-cardinality fan-out shape task 12 targets — a few
+/// anchor endpoints (one server `addr:443` per anchor) each talking to
+/// `flows_per_anchor` ephemeral peer ports, ~75% TCP (SYN → data → FIN
+/// so lifecycle runs) / 25% UDP by a seeded per-flow pick. Deterministic:
+/// the same spec + seed yields byte-identical traffic.
+#[derive(Clone, Copy, Debug)]
+pub struct FanOutSpec {
+    /// Distinct `(server addr, port 443)` anchors.
+    pub anchors: usize,
+    /// Ephemeral-port flows per anchor; a fresh client host takes over
+    /// every 60 000 flows so ports stay in u16 range.
+    pub flows_per_anchor: usize,
+    /// Packets per flow (≥ 1). TCP flows spend them SYN → PSH… → FIN.
+    pub packets_per_flow: usize,
+    /// Application payload bytes per packet.
+    pub payload_len: usize,
+    pub seed: u64,
+}
+
+impl FanOutSpec {
+    pub fn total_flows(&self) -> usize {
+        self.anchors * self.flows_per_anchor
+    }
+
+    pub fn total_packets(&self) -> usize {
+        self.total_flows() * self.packets_per_flow
+    }
+}
+
+/// Seeded per-flow decision hash (splitmix-style finalizer): stable
+/// across runs and platforms, no `rand` dependency.
+fn fan_out_flow_hash(seed: u64, flow: u64) -> u64 {
+    let mut h = seed ^ flow.wrapping_mul(0x9E37_79B9_7F4A_7C15);
+    h ^= h >> 30;
+    h = h.wrapping_mul(0xBF58_476D_1CE4_E5B9);
+    h ^= h >> 27;
+    h = h.wrapping_mul(0x94D0_49BB_1331_11EB);
+    h ^ (h >> 31)
+}
+
+/// Streaming generator for [`FanOutSpec`] traffic: packets come out
+/// round-major (round 0 of every flow, then round 1, …) — maximal
+/// interleaving, the worst realistic case for stream-table churn — at
+/// 1 ms per packet. An iterator, so multi-gigabyte shapes never
+/// materialize in memory; collect it or feed `MockSource` for small
+/// specs, stream it to disk for big ones.
+pub fn fan_out_packets(spec: &FanOutSpec) -> impl Iterator<Item = (SystemTime, Vec<u8>)> {
+    let spec = *spec;
+    let flows = spec.total_flows() as u64;
+    (0..spec.total_packets() as u64).map(move |idx| {
+        let round = idx / flows;
+        let flow = idx % flows;
+        let anchor = (flow / spec.flows_per_anchor as u64) as u32;
+        let f = flow % spec.flows_per_anchor as u64;
+
+        let server = pool_ipv4(172, anchor);
+        let server_mac = pool_mac(2, anchor);
+        // A fresh client host every 60k flows keeps ports in range.
+        let client_slot = anchor * 4096 + (f / 60_000) as u32;
+        let client = pool_ipv4(10, client_slot);
+        let client_mac = pool_mac(1, client_slot);
+        let cport = match 1024 + (f % 60_000) as u16 {
+            // Skip the one claimed well-known port in the ephemeral
+            // range: a source port of 4789 would get the payload
+            // dissected as VXLAN, polluting the pure fan-out shape.
+            4789 => 61_024,
+            p => p,
+        };
+
+        let ts = SystemTime::UNIX_EPOCH + Duration::from_millis(idx);
+        let tcp = !fan_out_flow_hash(spec.seed, flow).is_multiple_of(4); // 75%
+        let last = round + 1 == spec.packets_per_flow as u64;
+        let client_sends = round == 0 || round.is_multiple_of(2) || last;
+        let (src, dst, smac, dmac, sport, dport) = if client_sends {
+            (&client, &server, &client_mac, &server_mac, cport, 443)
+        } else {
+            (&server, &client, &server_mac, &client_mac, 443, cport)
+        };
+
+        let pkt = PacketBuilder::new(ts).eth(smac, dmac).ipv4(src, dst);
+        let (meta, bytes) = if tcp {
+            let tcp_flags = if round == 0 {
+                flags::SYN
+            } else if last {
+                flags::FIN | flags::ACK
+            } else {
+                flags::PSH | flags::ACK
+            };
+            pkt.tcp(sport, dport, tcp_flags, round as u32 + 1)
+                .payload(spec.payload_len)
+                .build()
+        } else {
+            pkt.udp(sport, dport).payload(spec.payload_len).build()
+        };
+        (meta.timestamp, bytes)
+    })
+}
+
+/// [`fan_out_packets`] materialized into a [`CaptureBuilder`] — for
+/// small specs in tests (`.packets()` in-process, `.write_pcap()` for
+/// CLI-level fixtures). Big shapes should stream from the iterator.
+pub fn fan_out_capture(spec: &FanOutSpec) -> CaptureBuilder {
+    let mut builder = CaptureBuilder::new();
+    for (ts, bytes) in fan_out_packets(spec) {
+        builder = builder.raw_packet(ts, bytes);
+    }
+    builder
+}
+
+/// Streams packets to a classic little-endian µs pcap without ever
+/// materializing the capture in memory (12.7): multi-gigabyte fixtures
+/// go straight to disk. Same format as [`CaptureBuilder::write_pcap`],
+/// byte-identical across runs.
+pub fn write_pcap_streamed(
+    packets: impl Iterator<Item = (SystemTime, Vec<u8>)>,
+    path: &Path,
+) -> std::io::Result<()> {
+    use std::io::Write;
+    let file = std::fs::File::create(path)?;
+    let mut out = std::io::BufWriter::new(file);
+    out.write_all(&0xA1B2_C3D4u32.to_le_bytes())?;
+    out.write_all(&2u16.to_le_bytes())?;
+    out.write_all(&4u16.to_le_bytes())?;
+    out.write_all(&0i32.to_le_bytes())?;
+    out.write_all(&0u32.to_le_bytes())?;
+    out.write_all(&65535u32.to_le_bytes())?;
+    out.write_all(&1u32.to_le_bytes())?;
+    for (ts, frame) in packets {
+        let since = ts
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .expect("fixture timestamps are ≥ epoch");
+        let len = u32::try_from(frame.len()).expect("frame length fits");
+        out.write_all(
+            &u32::try_from(since.as_secs())
+                .expect("secs fit")
+                .to_le_bytes(),
+        )?;
+        out.write_all(&since.subsec_micros().to_le_bytes())?;
+        out.write_all(&len.to_le_bytes())?;
+        out.write_all(&len.to_le_bytes())?;
+        out.write_all(&frame)?;
+    }
+    out.flush()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // 12.7: same spec + seed → byte-identical traffic; a different seed
+    // actually changes the flow mix.
+    #[test]
+    fn fan_out_is_deterministic_and_seed_sensitive() {
+        let spec = FanOutSpec {
+            anchors: 2,
+            flows_per_anchor: 50,
+            packets_per_flow: 3,
+            payload_len: 16,
+            seed: 42,
+        };
+        let a: Vec<_> = fan_out_packets(&spec).collect();
+        let b: Vec<_> = fan_out_packets(&spec).collect();
+        assert_eq!(a, b, "same spec + seed is byte-identical");
+        assert_eq!(a.len(), spec.total_packets());
+
+        let reseeded = FanOutSpec { seed: 43, ..spec };
+        let c: Vec<_> = fan_out_packets(&reseeded).collect();
+        assert_ne!(a, c, "the seed drives the flow mix");
+    }
+
+    // 12.7: ephemeral ports stay in u16 range across the 60k client
+    // rollover, and timestamps are strictly increasing.
+    #[test]
+    fn fan_out_rolls_clients_over_and_time_advances() {
+        let spec = FanOutSpec {
+            anchors: 1,
+            flows_per_anchor: 60_002,
+            packets_per_flow: 1,
+            payload_len: 0,
+            seed: 7,
+        };
+        let mut last_ts = None;
+        for (ts, bytes) in fan_out_packets(&spec) {
+            assert!(last_ts.is_none_or(|t| ts > t), "time strictly advances");
+            last_ts = Some(ts);
+            assert!(bytes.len() >= 14 + 20 + 8, "a full ethernet/ip/l4 frame");
+        }
+        assert_eq!(
+            last_ts,
+            Some(SystemTime::UNIX_EPOCH + Duration::from_millis(60_001)),
+        );
+    }
 
     #[test]
     fn checksum_matches_a_known_vector() {

@@ -21,7 +21,10 @@ pub struct FanOutSpec {
     pub payload_len: usize,
     pub seed: u64,
 }
-pub fn fan_out_capture(spec: &FanOutSpec) -> Vec<u8>;   // pcap bytes, also writable to disk
+// Streaming: multi-GB shapes never materialize in memory.
+pub fn fan_out_packets(spec: &FanOutSpec) -> impl Iterator<Item = (SystemTime, Vec<u8>)>;
+// Materialized for small specs: `.packets()` in-process, `.write_pcap()` to disk.
+pub fn fan_out_capture(spec: &FanOutSpec) -> CaptureBuilder;
 ```
 
 The **reference fixture** used by the task's Definition of done: ≥ 1 M total flows,
@@ -51,11 +54,17 @@ vs. hub, condensed vs. not.
 
 ## Acceptance criteria
 
-- [ ] `fan_out_capture` is deterministic (same spec + seed ⇒ identical bytes) and its
-      output round-trips through the offline reader with the expected flow counts.
+- [x] The fan-out generator is deterministic (same spec + seed ⇒ identical bytes, a
+      different seed differs) and its output aggregates to the exactly-predicted stream
+      shape through the real dissect→aggregate pipeline (unit + integration tests).
 - [ ] All four benches run under `just bench` and are wired into the scheduled bench
       workflow; budgets and baselines are recorded in `benches/README.md`.
-- [ ] The RSS ceiling tests run in the privileged/scheduled tier and fail on a 25 %
-      regression over the recorded budget.
+      *(`snapshot_cost`+`ingest_with_publish` (as the `scale` bench) and the LRU-churn
+      bench are wired and baselined; `window_query` lands with 12.4 and `condensation`
+      with 12.3.)*
+- [x] The RSS ceiling test runs in the scheduled bench workflow (one process per
+      measurement — VmHWM is process-wide) and fails on a 25 % regression over the
+      recorded budget (1,625,000 kB; measured 1,299,492 kB, pre-task baseline
+      2,606,092 kB).
 - [ ] Every task-12 DoD number (README) is traceable to one of these benches or tests by
       name.

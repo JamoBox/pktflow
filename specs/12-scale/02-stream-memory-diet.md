@@ -67,7 +67,10 @@ what rollup kinds retain (D4 stands).
       randomized workloads (oracle test: every `LruEvicted` stream was the
       `(last_seen, created_seq)` minimum among live leaves at its eviction), plus targeted
       tests for stale-entry re-push and becoming-a-leaf re-arm.
-- [ ] The 12.7 live-cap bench shows per-eviction cost is no longer proportional to
+- [x] The 12.7 live-cap bench shows per-eviction cost is no longer proportional to
       live-stream count. *(Split out of the previous criterion — it needs 12.7's bench.)*
-- [ ] On the 12.7 fixture, hub-pipeline peak RSS improves by a measured, documented factor
-      vs. the pre-task baseline (recorded in `benches/README.md`).
+      *(Measured: 2.8× per-eviction growth across a 10× live-set — sub-linear, vs. the
+      ≥10× a scan forces; `scale_lru_cap_churn` in `benches/README.md`.)*
+- [x] On the 12.7 fixture, hub-pipeline peak RSS improves by a measured, documented factor
+      vs. the pre-task baseline (recorded in `benches/README.md`): 2,606,092 kB →
+      1,299,492 kB, a 2.0× improvement.

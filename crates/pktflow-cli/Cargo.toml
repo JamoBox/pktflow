@@ -52,5 +52,9 @@ harness = false
 name = "unknown_diagnostics"
 harness = false
 
+[[bench]]
+name = "scale"
+harness = false
+
 [lints]
 workspace = true
