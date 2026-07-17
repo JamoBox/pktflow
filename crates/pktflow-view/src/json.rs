@@ -62,6 +62,18 @@ pub fn endpoint_json(s: &Stream) -> (Json, Json, Json) {
     let mut a = serde_json::Map::new();
     let mut b = serde_json::Map::new();
     let mut key = serde_json::Map::new();
+    // D16: a condensed node's A side is its anchor; B is the varying
+    // dimension, rendered `*` (`:*` for ports, via the field name).
+    if let Some(info) = s.condensed.as_deref() {
+        if let Some(value) = s.key_fields.get(info.ephemeral_field) {
+            a.insert(
+                info.ephemeral_field.to_string(),
+                field_value_json(s.protocol, info.ephemeral_field, value),
+            );
+            b.insert(info.ephemeral_field.to_string(), Json::String("*".into()));
+        }
+        return (Json::Object(a), Json::Object(b), Json::Object(key));
+    }
     for (name, value) in s.key_fields.iter() {
         if let Some(suffix) = name.strip_prefix("src_") {
             let dst_name = format!("dst_{suffix}");
@@ -188,5 +200,17 @@ pub fn stream_record(
     );
     m.insert("opaque_bytes".into(), json!(s.opaque_bytes));
     m.insert("rollups".into(), Json::Object(rollups));
+    // D16 (12.3): present only on condensed nodes, so ordinary records
+    // (and their goldens) are unchanged.
+    if let Some(info) = s.condensed.as_deref() {
+        m.insert(
+            "condensed".into(),
+            json!({
+                "member_flows": info.member_flows,
+                "ephemeral_field": info.ephemeral_field,
+                "overflow": info.overflow,
+            }),
+        );
+    }
     m
 }

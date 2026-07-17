@@ -73,14 +73,13 @@ sharding the aggregator (D5's door stays open, unopened).
 - [x] `summary()` performs no O(live-streams) scan (per-protocol live/byte counters are
       maintained incrementally and asserted against a recomputed ground truth across
       evictions in tests).
-- [ ] On the 12.7 fixture, hub-pipeline read time is within 10 % of `--batch`, and
-      `snapshot()` p99 measured by the 12.7 bench meets its budget. *(Half proven:
+- [x] On the 12.7 fixture, hub-pipeline read time is within 10 % of `--batch`, and
+      `snapshot()` p99 measured by the 12.7 bench meets its budget. *(Both proven:
       `snapshot()` republish measures 14.1 ms at 100k live streams vs. the 229.8 ms
-      pre-task deep copy — 16×. The read-time gate stays open pre-condensation: the
-      fan-out fixture's round-major interleaving touches every flow between any two
-      publishes, so COW degrades to ~one clone per packet on this shape (+59 % measured,
-      `benches/README.md`) — the very case D16/12.3 removes. Re-measure when 12.3
-      lands.)*
+      pre-task deep copy — 16×. The read-time gate initially failed pre-condensation
+      (+59 %: round-major interleaving made COW pay ~one clone per packet — exactly the
+      shape D16 removes) and closed at **+2.6 %** once 12.3 landed; both measurements
+      recorded in `benches/README.md`.)*
 - [x] Eviction under `EvictionPolicy::Live` releases the store's handle: once the last
       snapshot holding an evicted record drops, the record frees (weak-handle unit test).
       *(The RSS-plateau measurement lives with 12.7's memory-ceiling tests.)*

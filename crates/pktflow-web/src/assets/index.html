@@ -747,7 +747,8 @@ function renderTiles() {
   const tiles = [
     ["packets", thousands(sum.packets), ""],
     ["bytes", humanBytes(sum.bytes), ""],
-    ["streams", thousands(sum.streams_created), `${thousands(sum.streams_live)} live`],
+    ["streams", thousands(sum.streams_created),
+      `${thousands(sum.streams_live)} live` + (sum.flows_condensed ? ` · ${thousands(sum.flows_condensed)} condensed` : "")],
     ["protocols", String(sum.per_protocol.length), ""],
     ["unknown groups", String(S.data.unknowns.length), ""],
   ];
@@ -843,6 +844,8 @@ function renderTree() {
     row.append(caret, protoChip(s.protocol), el("span", "sid", "#" + s.id));
     const eps = endpointsStr(s);
     if (eps) row.append(el("span", "eps", eps));
+    if (s.condensed) row.append(el("span", "state-badge",
+      `× ${s.condensed.overflow ? "≥" : ""}${thousands(s.condensed.member_flows)} flows`));
     if (s.state) row.append(el("span", "state-badge", s.state));
     if (s.closed) row.append(el("span", "closed", "✕ " + s.closed.replace("_", "-")));
     const stats = el("span", "stats");
@@ -928,6 +931,8 @@ function renderDetail() {
     card("duration", durationStr(s.first_seen, s.last_seen)),
   );
   if (s.opaque_bytes > 0) cards.append(card("opaque", humanBytes(s.opaque_bytes)));
+  if (s.condensed) cards.append(card("member flows",
+    `${s.condensed.overflow ? "≥" : ""}${thousands(s.condensed.member_flows)}`));
   host.append(cards);
 
   /* direction split — two segments, direct labels both sides */

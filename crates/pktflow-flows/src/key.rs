@@ -12,7 +12,7 @@ use smallvec::SmallVec;
 
 /// Encoding scratch buffer: inline for every common key shape (an IPv6
 /// pair side is 19 bytes), so the per-packet path allocates nothing.
-type KeyBuf = SmallVec<[u8; 40]>;
+pub(crate) type KeyBuf = SmallVec<[u8; 40]>;
 
 /// Canonical key + direction for one layer.
 ///
@@ -86,7 +86,7 @@ fn encode_len_prefixed(tag: u8, payload: &[u8], out: &mut KeyBuf) {
     out.extend_from_slice(payload.get(..usize::from(len)).unwrap_or(payload));
 }
 
-fn encode_value(v: &Value, out: &mut KeyBuf) {
+pub(crate) fn encode_value(v: &Value, out: &mut KeyBuf) {
     match v {
         Value::Bytes(b) => encode_len_prefixed(TAG_BYTES, b, out),
         Value::U64(n) => {

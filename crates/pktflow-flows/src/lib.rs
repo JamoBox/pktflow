@@ -12,7 +12,7 @@ pub use key::flow_key;
 pub use rollup::{Rollup, RollupSet, SeriesPoint, ACCUMULATE_SET_CAP};
 pub use store::{
     dir_index, AggregateSummary, Aggregator, AggregatorConfig, AggregatorSnapshot, CloseReason,
-    DirStats, EvictedStream, EvictionPolicy, MergedStreamView, ProtocolCounts, Stream, StreamId,
-    Totals, STOP_CLASSES,
+    CondensedInfo, DirStats, EvictedStream, EvictionPolicy, MergedStreamView, ProtocolCounts,
+    Stream, StreamId, Totals, DEFAULT_CONDENSE_THRESHOLD, STOP_CLASSES,
 };
 pub use unknown::{EndpointKey, UnknownGroup, UnknownKey, UnknownRegistryConfig};

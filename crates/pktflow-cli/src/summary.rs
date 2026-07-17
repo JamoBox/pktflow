@@ -89,5 +89,13 @@ fn streams_line(summary: &AggregateSummary) -> String {
         .iter()
         .map(|p| format!("{} {}/{}", p.protocol, p.ever, p.live))
         .collect();
-    format!("streams   {}   (ever/live)\n", parts.join(" · "))
+    let condensed = if summary.flows_condensed > 0 {
+        format!(
+            "   · {} flows condensed (D16)",
+            thousands(summary.flows_condensed)
+        )
+    } else {
+        String::new()
+    };
+    format!("streams   {}   (ever/live){condensed}\n", parts.join(" · "))
 }

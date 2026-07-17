@@ -70,6 +70,7 @@ fn summary_json(snapshot: &AggregatorSnapshot) -> Json {
         "bytes": snapshot.summary.bytes,
         "streams_created": snapshot.summary.streams_created,
         "streams_live": snapshot.summary.streams_live,
+        "flows_condensed": snapshot.summary.flows_condensed,
         "key_errors": snapshot.summary.key_errors,
         "per_protocol": per_protocol,
         "stop_classes": stop_classes,

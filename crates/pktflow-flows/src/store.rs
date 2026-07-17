@@ -12,11 +12,11 @@ use std::time::{Duration, SystemTime};
 use smallvec::SmallVec;
 
 use pktflow_core::{
-    DissectedPacket, Engine, FieldMap, FlowKey, PacketDirection, ProtocolName, StateName,
-    StopClass, StreamIdentity,
+    CondenseSpec, DissectedPacket, Engine, FieldMap, FieldName, FlowKey, PacketDirection,
+    ProtocolName, StateName, StopClass, StreamIdentity, Value,
 };
 
-use crate::key::flow_key;
+use crate::key::{encode_value, flow_key, KeyBuf};
 use crate::rollup::RollupSet;
 use crate::unknown::{
     EndpointKey, UnknownGroup, UnknownKey, UnknownRegistry, UnknownRegistryConfig,
@@ -58,6 +58,9 @@ pub struct AggregatorConfig {
     /// Evicted/closed streams are emitted here before removal so callers
     /// can persist or count them (D2).
     pub sink: Option<Box<dyn FnMut(EvictedStream) + Send>>,
+    /// D16 (12.3): live same-anchor flows beyond this fold into one
+    /// condensed node. 0 disables condensation entirely.
+    pub condense_threshold: usize,
     /// D4 override point for `Series { cap: 0 }`-defaulted rollups.
     pub rollup_series_default_cap: usize,
     /// 12.2: clamp applied over every series cap, including
@@ -74,12 +77,22 @@ impl Default for AggregatorConfig {
         Self {
             eviction: EvictionPolicy::None,
             sink: None,
+            condense_threshold: DEFAULT_CONDENSE_THRESHOLD,
             rollup_series_default_cap: 1024,
             rollup_series_max_cap: None,
             unknown: UnknownRegistryConfig::default(),
         }
     }
 }
+
+/// D16's default K: the number of live same-anchor flows a group shows
+/// individually before further ones condense.
+pub const DEFAULT_CONDENSE_THRESHOLD: usize = 256;
+
+/// Cap on the distinct-member tally a condensed group keeps (a u64
+/// digest per member): covers a full u16 port space exactly; beyond it
+/// the node reports a lower bound with `overflow` set (D4 honesty).
+const CONDENSE_MEMBER_CAP: usize = 65_536;
 
 /// Stable stream handle: slotmap-style index + generation, so a handle
 /// held across an eviction fails the generation check instead of aliasing
@@ -97,6 +110,22 @@ pub struct StreamId {
 pub struct DirStats {
     pub packets: u64,
     pub bytes: u64,
+}
+
+/// D16 (12.3): what a condensed node knows about its folded members.
+/// A member flow is identified within its group by the varying side's
+/// value, so the member count *is* the distinct-ephemeral tally.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CondensedInfo {
+    /// Distinct member flows folded in — exact until `overflow`, a
+    /// lower bound after.
+    pub member_flows: u64,
+    /// The varying pair's anchor-side field name (e.g. `"src_port"`) —
+    /// the one key field a condensed node's `key_fields` carries.
+    pub ephemeral_field: FieldName,
+    /// The member tally hit [`CONDENSE_MEMBER_CAP`]; counts are lower
+    /// bounds from here on (never silently wrong, D4).
+    pub overflow: bool,
 }
 
 /// One conversation node (D10: unique per parent + protocol + key).
@@ -131,6 +160,9 @@ pub struct Stream {
     /// Insertion order for deterministic query sorting (05.7) — not a
     /// global ordering guarantee (keeps D5's sharding door open).
     pub created_seq: u64,
+    /// D16 (12.3): `Some` = this node is a condensed group, not a
+    /// single conversation. Boxed: ordinary streams pay one pointer.
+    pub condensed: Option<Box<CondensedInfo>>,
 }
 
 /// `stats` slot for a direction.
@@ -196,6 +228,10 @@ pub struct AggregateSummary {
     pub bytes: u64,
     pub streams_created: u64,
     pub streams_live: u64,
+    /// D16: member flows folded into condensed nodes — included in
+    /// `streams_created`, so nothing is silently absorbed
+    /// (`streams_created == expanded creations + flows_condensed`).
+    pub flows_condensed: u64,
     pub key_errors: u64,
     /// Sorted by protocol name (deterministic).
     pub per_protocol: Vec<ProtocolCounts>,
@@ -235,9 +271,122 @@ pub struct Totals {
     pub packets: u64,
     pub bytes: u64,
     pub streams_created: u64,
+    /// D16: member flows folded into condensed nodes (also counted in
+    /// `streams_created`).
+    pub flows_condensed: u64,
     /// Flow-key construction failures (05.1): plugin contract violations
     /// that 09.1 should have caught, counted, never fatal.
     pub key_errors: u64,
+}
+
+/// D16 group state, aggregator-side (never cloned into snapshots): one
+/// entry per candidate anchor of a live expanded flow, plus the
+/// member-digest set once the group condenses.
+#[derive(Default)]
+struct CondenseGroup {
+    /// Live expanded flows this anchor is a side of; the trigger count.
+    expanded: u32,
+    /// The condensed node, once triggered (created lazily by the first
+    /// flow to fold).
+    node: Option<StreamId>,
+    /// Digests of the varying-side values folded in (= member flows).
+    members: std::collections::HashSet<u64, BuildHasherDefault<DefaultHasher>>,
+}
+
+/// Group key: parent scope + protocol + the anchor encoding (every
+/// non-ephemeral key component, `identity.key` order with pairs
+/// endpoint-sorted, then the anchor side's value).
+type CondenseKey = (Option<StreamId>, ProtocolName, KeyBuf);
+
+/// Sentinel first byte of a condensed node's synthesized flow key —
+/// no `EndpointSort` encoding starts with it (value tags are
+/// 0–5/255), so it can never alias a real flow's key.
+const CONDENSED_KEY_SENTINEL: u8 = 0xFE;
+
+/// One candidate anchor of a flow under a condense declaration: the
+/// group encoding, what to display for it, the varying side's digest
+/// (the member identity within the group), and the packet's direction
+/// with A defined as the anchor side.
+struct CondenseCandidate {
+    anchor: KeyBuf,
+    anchor_field: FieldName,
+    anchor_value: Value,
+    varying_digest: u64,
+    fold_dir: PacketDirection,
+}
+
+fn value_encoding(v: &Value) -> KeyBuf {
+    let mut out = KeyBuf::new();
+    encode_value(v, &mut out);
+    out
+}
+
+fn encoding_digest(buf: &KeyBuf) -> u64 {
+    let mut hasher = DefaultHasher::default();
+    buf.hash(&mut hasher);
+    hasher.finish()
+}
+
+/// The flow's two candidate anchors (one per side of the ephemeral
+/// pair; self-talk yields one). The anchor encoding is every
+/// non-ephemeral key component (`identity.key` order, pairs
+/// endpoint-sorted so it's direction-agnostic) followed by the anchor
+/// side's value — the same encoding whichever side the anchor appears
+/// on in a given packet. `None` if any key field is absent.
+fn condense_candidates(
+    identity: &StreamIdentity,
+    spec: &CondenseSpec,
+    fields: &FieldMap,
+) -> Option<[Option<CondenseCandidate>; 2]> {
+    let eph = spec.ephemeral;
+    let b_name = eph.b?;
+    let va = fields.get(eph.a)?;
+    let vb = fields.get(b_name)?;
+
+    let mut prefix = KeyBuf::new();
+    for kf in identity.key {
+        if kf.a == eph.a && kf.b == eph.b {
+            continue;
+        }
+        match kf.b {
+            None => encode_value(fields.get(kf.a)?, &mut prefix),
+            Some(b) => {
+                let ea = value_encoding(fields.get(kf.a)?);
+                let eb = value_encoding(fields.get(b)?);
+                let (lo, hi) = if ea <= eb { (&ea, &eb) } else { (&eb, &ea) };
+                prefix.extend_from_slice(lo);
+                prefix.extend_from_slice(hi);
+            }
+        }
+    }
+
+    let enc_a = value_encoding(va);
+    let enc_b = value_encoding(vb);
+    let mut anchor_a = prefix.clone();
+    anchor_a.extend_from_slice(&enc_a);
+    let first = CondenseCandidate {
+        anchor: anchor_a,
+        anchor_field: eph.a,
+        anchor_value: va.clone(),
+        varying_digest: encoding_digest(&enc_b),
+        // The packet's source is the anchor: A (= anchor) sends.
+        fold_dir: PacketDirection::AtoB,
+    };
+    let second = if enc_a == enc_b {
+        None // self-talk: one group, direction pinned like D3 does
+    } else {
+        let mut anchor_b = prefix;
+        anchor_b.extend_from_slice(&enc_b);
+        Some(CondenseCandidate {
+            anchor: anchor_b,
+            anchor_field: b_name,
+            anchor_value: vb.clone(),
+            varying_digest: encoding_digest(&enc_a),
+            // The packet's destination is the anchor: B → A.
+            fold_dir: PacketDirection::BtoA,
+        })
+    };
+    Some([Some(first), second])
 }
 
 /// The single-writer stream aggregator (D5): exactly one thread mutates
@@ -282,6 +431,8 @@ pub struct Aggregator {
     live_count: usize,
     /// 10.2: capture-wide, independent of stream storage/eviction (D11).
     unknowns: UnknownRegistry,
+    /// D16 (12.3): per-anchor fan-out tallies and condensed-group state.
+    condense: DetHashMap<CondenseKey, CondenseGroup>,
 }
 
 impl Aggregator {
@@ -304,6 +455,7 @@ impl Aggregator {
             free: Vec::new(),
             live_count: 0,
             unknowns: UnknownRegistry::new(),
+            condense: DetHashMap::default(),
         }
     }
 
@@ -353,7 +505,8 @@ impl Aggregator {
                 protocol: layer.protocol,
                 key: key.clone(),
             });
-            let id = self.get_or_insert(parent, key, identity, layer, dir, ts);
+            let (id, dir) =
+                self.get_or_insert(parent, key, identity, plugin.condense(), layer, dir, ts);
             *self
                 .live_bytes_per_protocol
                 .entry(layer.protocol)
@@ -413,6 +566,48 @@ impl Aggregator {
         self.enforce_max_streams();
     }
 
+    /// D16 bookkeeping on eviction: an expanded flow's anchors lose a
+    /// tally (empty pre-trigger groups are dropped); a condensed node's
+    /// group is removed entirely — recurrence of the shape starts a
+    /// fresh count, matching 05.6's re-keying rule.
+    fn condense_evict(&mut self, stream: &Stream) {
+        if self.config.condense_threshold == 0 {
+            return;
+        }
+        if stream.condensed.is_some() {
+            let ckey = (
+                stream.parent,
+                stream.protocol,
+                KeyBuf::from_slice(&stream.key.as_bytes()[1..]),
+            );
+            self.condense.remove(&ckey);
+            return;
+        }
+        let engine = Arc::clone(&self.engine);
+        let Some(plugin) = engine.plugin_by_name(stream.protocol) else {
+            return;
+        };
+        let Some(spec) = plugin.condense() else {
+            return;
+        };
+        let Some(identity) = plugin.stream_identity() else {
+            return;
+        };
+        // `key_fields` retains every key-named field, so the anchors
+        // reconstruct exactly as they were tallied at creation.
+        if let Some(candidates) = condense_candidates(identity, spec, &stream.key_fields) {
+            for candidate in candidates.iter().flatten() {
+                let ckey = (stream.parent, stream.protocol, candidate.anchor.clone());
+                if let Some(group) = self.condense.get_mut(&ckey) {
+                    group.expanded = group.expanded.saturating_sub(1);
+                    if group.expanded == 0 && group.node.is_none() {
+                        self.condense.remove(&ckey);
+                    }
+                }
+            }
+        }
+    }
+
     /// Deterministic flow-key digest for the lookup index (12.2):
     /// `DefaultHasher` from `BuildHasherDefault` has fixed keys, so the
     /// digest is stable across runs (PRD §7).
@@ -422,25 +617,168 @@ impl Aggregator {
         hasher.finish()
     }
 
+    /// Resolves a layer to its stream node: the fast index hit, the D16
+    /// fold-in/trigger paths, or a fresh expanded stream. Returns the
+    /// node plus the direction to attribute the packet with — the
+    /// canonical per-flow `dir` normally, the anchor-relative direction
+    /// (A = anchor side) when the packet folded into a condensed node.
+    #[allow(clippy::too_many_arguments)]
     fn get_or_insert(
         &mut self,
         parent: Option<StreamId>,
         key: FlowKey,
         identity: &StreamIdentity,
+        condense: Option<&CondenseSpec>,
         layer: &pktflow_core::LayerRecord,
         dir: PacketDirection,
         ts: SystemTime,
-    ) -> StreamId {
+    ) -> (StreamId, PacketDirection) {
         let protocol = layer.protocol;
         let key_hash = Self::key_hash(&key);
         if let Some(bucket) = self.index.get(&(parent, protocol, key_hash)) {
             for &id in bucket {
                 if self.get(id).is_some_and(|s| s.key == key) {
-                    return id;
+                    return (id, dir);
                 }
             }
         }
 
+        // D16: an index miss under a condense declaration checks the
+        // flow's two candidate anchors before creating anything.
+        if let Some(spec) = condense.filter(|_| self.config.condense_threshold > 0) {
+            if let Some(candidates) = condense_candidates(identity, spec, &layer.fields) {
+                for candidate in candidates.iter().flatten() {
+                    if let Some(resolved) =
+                        self.condense_fold(parent, protocol, identity, candidate, ts)
+                    {
+                        return resolved;
+                    }
+                }
+                // Not folding: an ordinary expanded flow, tallied
+                // toward both its anchors' thresholds.
+                let id = self.create_stream(parent, key, identity, None, layer, dir, ts);
+                for candidate in candidates.iter().flatten() {
+                    self.condense
+                        .entry((parent, protocol, candidate.anchor.clone()))
+                        .or_default()
+                        .expanded += 1;
+                }
+                return (id, dir);
+            }
+        }
+
+        (
+            self.create_stream(parent, key, identity, None, layer, dir, ts),
+            dir,
+        )
+    }
+
+    /// D16 fold path for one candidate anchor: folds the packet into
+    /// the group's condensed node — creating the node lazily the first
+    /// time a flow folds — or returns `None` if this anchor's group
+    /// isn't over threshold.
+    fn condense_fold(
+        &mut self,
+        parent: Option<StreamId>,
+        protocol: ProtocolName,
+        identity: &StreamIdentity,
+        candidate: &CondenseCandidate,
+        ts: SystemTime,
+    ) -> Option<(StreamId, PacketDirection)> {
+        let ckey = (parent, protocol, candidate.anchor.clone());
+        let group = self.condense.get(&ckey)?;
+        let triggered =
+            group.node.is_some() || group.expanded as usize >= self.config.condense_threshold;
+        if !triggered {
+            return None;
+        }
+
+        let node_id = match group.node.filter(|&id| self.get(id).is_some()) {
+            Some(id) => id,
+            None => {
+                // Synthesized identity: sentinel + the anchor encoding
+                // (recoverable at evict for group cleanup). The node's
+                // display fields carry the anchor side only.
+                let mut key_bytes = KeyBuf::new();
+                key_bytes.push(CONDENSED_KEY_SENTINEL);
+                key_bytes.extend_from_slice(&candidate.anchor);
+                let mut key_fields = FieldMap::new();
+                key_fields.insert(candidate.anchor_field, candidate.anchor_value.clone());
+                let condensed = Box::new(CondensedInfo {
+                    member_flows: 0,
+                    ephemeral_field: candidate.anchor_field,
+                    overflow: false,
+                });
+                let id = self.create_stream_raw(
+                    parent,
+                    FlowKey::from_bytes(&key_bytes),
+                    key_fields,
+                    None, // no lifecycle on a condensed node
+                    RollupSet::new(
+                        identity.rollups,
+                        self.config.rollup_series_default_cap,
+                        self.config.rollup_series_max_cap,
+                    ),
+                    Some(condensed),
+                    candidate.fold_dir,
+                    protocol,
+                    ts,
+                );
+                // The node is a group, not a conversation: it doesn't
+                // count as a created flow itself (its members do).
+                self.totals.streams_created -= 1;
+                if let Some(ever) = self.created_per_protocol.get_mut(&protocol) {
+                    *ever -= 1;
+                }
+                if let Some(group) = self.condense.get_mut(&ckey) {
+                    group.node = Some(id);
+                }
+                id
+            }
+        };
+
+        // Membership: the varying-side value identifies the member flow
+        // within the group (bounded tally, D4-style overflow honesty).
+        let mut new_member = false;
+        let mut overflowed = false;
+        if let Some(group) = self.condense.get_mut(&ckey) {
+            if group.members.len() < CONDENSE_MEMBER_CAP {
+                new_member = group.members.insert(candidate.varying_digest);
+            } else if !group.members.contains(&candidate.varying_digest) {
+                overflowed = true;
+            }
+        }
+        if new_member {
+            self.totals.streams_created += 1;
+            self.totals.flows_condensed += 1;
+            *self.created_per_protocol.entry(protocol).or_insert(0) += 1;
+        }
+        if new_member || overflowed {
+            if let Some(stream) = self.get_mut(node_id) {
+                if let Some(info) = stream.condensed.as_deref_mut() {
+                    if new_member {
+                        info.member_flows += 1;
+                    }
+                    info.overflow |= overflowed;
+                }
+            }
+        }
+        Some((node_id, candidate.fold_dir))
+    }
+
+    /// Creates an ordinary expanded stream for a layer (key display
+    /// fields decoded from the layer, lifecycle/rollups per identity).
+    #[allow(clippy::too_many_arguments)]
+    fn create_stream(
+        &mut self,
+        parent: Option<StreamId>,
+        key: FlowKey,
+        identity: &StreamIdentity,
+        condensed: Option<Box<CondensedInfo>>,
+        layer: &pktflow_core::LayerRecord,
+        dir: PacketDirection,
+        ts: SystemTime,
+    ) -> StreamId {
         // Decode the key-named endpoint fields for display.
         let mut key_fields = FieldMap::new();
         for kf in identity.key {
@@ -450,7 +788,39 @@ impl Aggregator {
                 }
             }
         }
+        self.create_stream_raw(
+            parent,
+            key,
+            key_fields,
+            identity.lifecycle.map(|l| l.initial),
+            RollupSet::new(
+                identity.rollups,
+                self.config.rollup_series_default_cap,
+                self.config.rollup_series_max_cap,
+            ),
+            condensed,
+            dir,
+            layer.protocol,
+            ts,
+        )
+    }
 
+    /// The slot/index/hierarchy/counter mechanics shared by expanded
+    /// and condensed node creation.
+    #[allow(clippy::too_many_arguments)]
+    fn create_stream_raw(
+        &mut self,
+        parent: Option<StreamId>,
+        key: FlowKey,
+        key_fields: FieldMap,
+        state: Option<StateName>,
+        rollups: RollupSet,
+        condensed: Option<Box<CondensedInfo>>,
+        dir: PacketDirection,
+        protocol: ProtocolName,
+        ts: SystemTime,
+    ) -> StreamId {
+        let key_hash = Self::key_hash(&key);
         // Recycle an evicted slot (generation already bumped) or grow.
         let (index, generation) = match self.free.pop() {
             Some(index) => (
@@ -475,16 +845,13 @@ impl Aggregator {
             last_seen: ts,
             stats: [DirStats::default(); 2],
             opaque_bytes: 0,
-            state: identity.lifecycle.map(|l| l.initial),
-            rollups: RollupSet::new(
-                identity.rollups,
-                self.config.rollup_series_default_cap,
-                self.config.rollup_series_max_cap,
-            ),
+            state,
+            rollups,
             closed: None,
             close_eligible: false,
             close_eligible_since: None,
             created_seq,
+            condensed,
         };
         self.next_seq += 1;
         self.totals.streams_created += 1;
@@ -645,6 +1012,7 @@ impl Aggregator {
             *bytes = bytes.saturating_sub(shared.stats[0].bytes + shared.stats[1].bytes);
         }
         let mut stream = Arc::unwrap_or_clone(shared);
+        self.condense_evict(&stream);
 
         let bucket_key = (stream.parent, stream.protocol, Self::key_hash(&stream.key));
         if let Some(bucket) = self.index.get_mut(&bucket_key) {
@@ -841,6 +1209,7 @@ impl Aggregator {
             bytes: self.totals.bytes,
             streams_created: self.totals.streams_created,
             streams_live: self.live_count as u64,
+            flows_condensed: self.totals.flows_condensed,
             key_errors: self.totals.key_errors,
             per_protocol,
             stop_classes,
@@ -908,6 +1277,7 @@ mod tests {
     struct Keyed {
         name: ProtocolName,
         identity: Option<StreamIdentity>,
+        condense: Option<&'static CondenseSpec>,
     }
 
     impl LayerPlugin for Keyed {
@@ -921,6 +1291,10 @@ mod tests {
 
         fn stream_identity(&self) -> Option<&StreamIdentity> {
             self.identity.as_ref()
+        }
+
+        fn condense(&self) -> Option<&'static CondenseSpec> {
+            self.condense
         }
     }
 
@@ -942,6 +1316,7 @@ mod tests {
         Keyed {
             name,
             identity: Some(pair_identity()),
+            condense: None,
         }
     }
 
@@ -949,6 +1324,23 @@ mod tests {
         Keyed {
             name,
             identity: None,
+            condense: None,
+        }
+    }
+
+    /// A keyed plugin whose whole pair is ephemeral (like TCP/UDP's
+    /// port pair under an IP parent).
+    fn condensing(name: ProtocolName) -> Keyed {
+        static COND: CondenseSpec = CondenseSpec {
+            ephemeral: KeyField {
+                a: "src",
+                b: Some("dst"),
+            },
+        };
+        Keyed {
+            name,
+            identity: Some(pair_identity()),
+            condense: Some(&COND),
         }
     }
 
@@ -959,6 +1351,7 @@ mod tests {
                 .plugin(plain("vlan"))
                 .plugin(keyed("ip"))
                 .plugin(keyed("badkey"))
+                .plugin(condensing("cond"))
                 .build()
                 .expect("valid registry"),
         )
@@ -1126,6 +1519,159 @@ mod tests {
             generation: 7,
         };
         assert!(agg.get(bogus).is_none());
+    }
+
+    fn condensing_aggregator(threshold: usize) -> Aggregator {
+        Aggregator::new(
+            &engine(),
+            AggregatorConfig {
+                condense_threshold: threshold,
+                ..AggregatorConfig::default()
+            },
+        )
+    }
+
+    // D16 (12.3): beyond K live same-anchor flows, further ones fold
+    // into one condensed node — counts, stats direction, and totals
+    // reconciliation.
+    #[test]
+    fn fan_out_condenses_beyond_threshold() {
+        let mut agg = condensing_aggregator(4);
+        // Ten flows fanning out to anchor 1000: src 1..=10, dst 1000.
+        for i in 1..=10u64 {
+            agg.ingest(&packet(vec![layer("cond", i, 1000)], 60, 0, i));
+        }
+        assert_eq!(agg.len(), 5, "4 expanded + 1 condensed node");
+        let node = agg
+            .streams()
+            .find(|s| s.condensed.is_some())
+            .expect("condensed node");
+        let info = node.condensed.as_deref().expect("info");
+        assert_eq!(info.member_flows, 6, "flows 5..=10 folded");
+        assert!(!info.overflow);
+        assert_eq!(info.ephemeral_field, "dst", "anchored on the dst side");
+        assert_eq!(node.key_fields.get("dst"), Some(&Value::U64(1000)));
+        // Members send toward the anchor: B→A with A = anchor.
+        assert_eq!(node.stats[dir_index(PacketDirection::BtoA)].packets, 6);
+        assert_eq!(node.stats[dir_index(PacketDirection::AtoB)].packets, 0);
+
+        // A second packet of a folded flow updates stats, not members.
+        agg.ingest(&packet(vec![layer("cond", 7, 1000)], 60, 0, 11));
+        let node = agg
+            .streams()
+            .find(|s| s.condensed.is_some())
+            .expect("condensed node");
+        assert_eq!(node.condensed.as_deref().expect("info").member_flows, 6);
+        assert_eq!(node.stats[dir_index(PacketDirection::BtoA)].packets, 7);
+        // And the anchor answering flows A→B into the same node.
+        agg.ingest(&packet(vec![layer("cond", 1000, 7)], 60, 0, 12));
+        let node = agg
+            .streams()
+            .find(|s| s.condensed.is_some())
+            .expect("condensed node");
+        assert_eq!(node.stats[dir_index(PacketDirection::AtoB)].packets, 1);
+
+        // FR-27 reconciliation: nothing silently absorbed.
+        let summary = agg.summary();
+        assert_eq!(summary.streams_created, 10, "member flows all count");
+        assert_eq!(summary.flows_condensed, 6);
+        assert_eq!(summary.streams_live, 5);
+    }
+
+    // D16: threshold 0 disables condensation — per-flow output exactly.
+    #[test]
+    fn condensation_disabled_is_per_flow() {
+        let mut agg = condensing_aggregator(0);
+        for i in 1..=10u64 {
+            agg.ingest(&packet(vec![layer("cond", i, 1000)], 60, 0, i));
+        }
+        assert_eq!(agg.len(), 10);
+        assert!(agg.streams().all(|s| s.condensed.is_none()));
+        assert_eq!(agg.summary().flows_condensed, 0);
+    }
+
+    // D16: inner layers over folded flows nest under the condensed
+    // node — tunnels survive condensation.
+    #[test]
+    fn condensed_node_hosts_inner_children() {
+        let mut agg = condensing_aggregator(2);
+        for i in 1..=5u64 {
+            agg.ingest(&packet(
+                vec![layer("cond", i, 1000), layer("ip", 50, 60)],
+                60,
+                0,
+                i,
+            ));
+        }
+        let node_id = agg
+            .streams()
+            .find(|s| s.condensed.is_some())
+            .expect("condensed node")
+            .id;
+        let inner: Vec<&Stream> = agg.children(node_id).collect();
+        assert_eq!(inner.len(), 1, "one inner ip conversation, D10-scoped");
+        assert_eq!(inner[0].protocol, "ip");
+        assert_eq!(
+            inner[0].stats[0].packets + inner[0].stats[1].packets,
+            3,
+            "flows 3..=5's inner packets"
+        );
+    }
+
+    // D16: same input ⇒ same expanded set, same condensed tallies.
+    #[test]
+    fn condensation_is_deterministic() {
+        let run = || {
+            let mut agg = condensing_aggregator(3);
+            let mut rng: u64 = 0x452821e638d01377;
+            for i in 0..200u64 {
+                rng = rng
+                    .wrapping_mul(6364136223846793005)
+                    .wrapping_add(1442695040888963407);
+                let src = 1 + (rng >> 33) % 40;
+                agg.ingest(&packet(vec![layer("cond", src, 1000)], 60, 0, i));
+            }
+            agg.snapshot()
+        };
+        assert_eq!(format!("{:?}", run()), format!("{:?}", run()));
+    }
+
+    // D16: evicting a condensed node removes its group — recurrence of
+    // the shape starts a fresh count (05.6's re-keying rule).
+    #[test]
+    fn condensed_node_eviction_resets_the_group() {
+        let engine = engine();
+        let mut agg = Aggregator::new(
+            &engine,
+            AggregatorConfig {
+                condense_threshold: 2,
+                eviction: EvictionPolicy::Live {
+                    idle_timeout: Duration::from_millis(50),
+                    close_linger: Duration::from_millis(50),
+                    max_streams: 100,
+                },
+                ..AggregatorConfig::default()
+            },
+        );
+        for i in 1..=4u64 {
+            agg.ingest(&packet(vec![layer("cond", i, 1000)], 60, 0, i));
+        }
+        assert_eq!(agg.len(), 3, "2 expanded + node with 2 members");
+
+        // Everything idles out…
+        agg.ingest(&packet(vec![layer("cond", 999, 998)], 60, 0, 10_000));
+        assert_eq!(agg.len(), 1, "only the fresh flow survives");
+
+        // …and the shape starts over: expanded again, no stale fold.
+        agg.ingest(&packet(vec![layer("cond", 50, 1000)], 60, 0, 10_001));
+        let newest = agg
+            .streams()
+            .max_by_key(|s| s.created_seq)
+            .expect("a stream");
+        assert!(
+            newest.condensed.is_none(),
+            "fresh count after the group evicted"
+        );
     }
 
     // 12.2: a stale LRU-heap entry (stream touched after arming) must

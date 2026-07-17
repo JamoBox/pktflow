@@ -59,9 +59,9 @@ vs. hub, condensed vs. not.
       shape through the real dissect→aggregate pipeline (unit + integration tests).
 - [ ] All four benches run under `just bench` and are wired into the scheduled bench
       workflow; budgets and baselines are recorded in `benches/README.md`.
-      *(`snapshot_cost`+`ingest_with_publish` (as the `scale` bench) and the LRU-churn
-      bench are wired and baselined; `window_query` lands with 12.4 and `condensation`
-      with 12.3.)*
+      *(`snapshot_cost`+`ingest_with_publish` (as the `scale` bench), the LRU-churn
+      bench, and `condensation` are wired and baselined; `window_query` lands with
+      12.4.)*
 - [x] The RSS ceiling test runs in the scheduled bench workflow (one process per
       measurement — VmHWM is process-wide) and fails on a 25 % regression over the
       recorded budget (1,625,000 kB; measured 1,299,492 kB, pre-task baseline

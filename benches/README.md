@@ -136,25 +136,41 @@ flows_per_anchor: 125_000, packets_per_flow: 3, payload_len: 32, seed: 0xC0FF_EE
 - **12.2 LRU gate:** per-eviction cost grew 2.8× across a 10× live-set (3.4 µs → 9.7 µs
   per packet with one eviction per packet) — sub-linear (heap + cache effects), vs. the
   ≥10× a per-eviction scan would force. Confirmed no longer proportional to live count.
-- **Publish overhead, pre-condensation:** the fixed 8k-packet cadence costs +53% here,
-  and the real adaptive pipeline measures +59% end-to-end (below). The fan-out shape is
-  COW's worst case — round-major interleaving touches *every* flow between any two
-  publishes, so structural sharing degrades to ~one stream clone per packet no matter
-  the spacing. This is exactly the shape D16 condensation (12.3) removes; the 12.1
-  "< 10% of `--batch`" criterion stays open until it lands and this row is re-measured.
+- **Publish overhead, raw COW path:** the fixed 8k-packet cadence costs +53% here, and
+  the pre-12.3 adaptive pipeline measured +59% end-to-end. The fan-out shape is COW's
+  worst case — round-major interleaving touches *every* flow between any two publishes,
+  so structural sharing degrades to ~one stream clone per packet no matter the spacing.
+  D16 condensation (12.3) removes exactly that shape; the re-measurement below closed
+  the 12.1 "< 10% of `--batch`" criterion at **+2.6%**. (These COW/publish/LRU benches
+  pin `condense_threshold: 0` so they keep guarding the raw per-stream machinery at
+  their stated live counts; `scale_condensation` covers the default-on path.)
 
 ### End-to-end, real binary over the on-disk fixture (297 MB pcap)
 
-`write_reference_fixture` (test-gated writer) → `/tmp/.../scale-1m.pcap`, release build:
+`write_reference_fixture` (test-gated writer) → `/tmp/.../scale-1m.pcap`, release build.
+First measured after 12.1/12.2 (pre-condensation), then re-measured with 12.3's D16
+condensation on by default:
 
-| Run | Wall time | Peak RSS |
+| Run | Pre-12.3 | With condensation (default) |
 |---|---|---|
-| `pktflow streams --batch` (no diagnostics, no publish) | 34.4 s | — |
-| `pktflow unknown` (diagnostics, no publish) | 72.5 s | — |
-| `pktflow serve` read-to-finished (diagnostics + adaptive publish) | 115.2 s | 1,984,216 kB |
+| `pktflow streams --batch` (no diagnostics, no publish) | 34.4 s | **21.7 s** |
+| `pktflow unknown` (diagnostics, no publish) | 72.5 s | 65.7 s |
+| `pktflow serve` read-to-finished (diagnostics + adaptive publish) | 115.2 s | **67.4 s** |
+| `pktflow serve` peak RSS | 1,984,216 kB | **48,292 kB** |
+| `/api/snapshot` stream records | 1,000,048 | **12,384** |
 
-Unknown-payload diagnostics — every fan-out payload is opaque — costs as much as the
-whole rest of the pipeline on this shape; worth its own look when 12.3 re-measures.
+- **12.1's read-time gate, closed:** publish overhead is now 67.4 vs 65.7 s = **+2.6 %**
+  (< 10 %). Condensation removed the COW worst case: with ~12k live nodes instead of 1M,
+  inter-publish copies are bounded by nodes, not packets.
+- The in-process RSS ceilings collapse accordingly: hub-style **35,876 kB** / batch
+  32,720 kB on the 1M-flow fixture (budget re-pinned at 48,000 kB; waypoints 2,606,092
+  pre-task → 1,299,492 after 12.1/12.2 → 35,876 after 12.3 — **73×** end to end).
+- `scale_condensation` (65k flows × 3 pkts, replayed dissected packets): default-on
+  794 Kelem/s vs. off 746 Kelem/s — the group bookkeeping costs *less* than the stream
+  creations it avoids, so condensation is a throughput win too, not a trade.
+- Unknown-payload diagnostics — every fan-out payload is opaque — now dominates this
+  shape (65.7 of 67.4 s vs 21.7 s without). Its per-occurrence probing is the next
+  candidate for a bounding knob; out of task-12 scope, noted for a future task.
 
 ## Deferred-tuning callbacks
 

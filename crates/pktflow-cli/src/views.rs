@@ -12,8 +12,8 @@ use pktflow_view::json::{close_reason_json, stream_record};
 use pktflow_view::query::matching_with_ancestors;
 use pktflow_view::StreamQuery;
 use pktflow_view::{
-    by_id, child_chain_str, close_reason_str, endpoint_sides, endpoints_str, lineage_str,
-    total_bytes, total_packets,
+    by_id, child_chain_str, close_reason_str, condensed_marker, endpoint_sides, endpoints_str,
+    lineage_str, total_bytes, total_packets,
 };
 use serde_json::{json, Value as Json};
 
@@ -52,6 +52,10 @@ fn stream_row(prefix: &str, s: &Stream, first_seen_col: bool) -> Row {
     if !endpoints.is_empty() {
         label.push_str("  ");
         label.push_str(&endpoints);
+    }
+    if let Some(marker) = condensed_marker(s) {
+        label.push_str("  ");
+        label.push_str(&marker);
     }
     label.push_str(&state);
 
@@ -707,6 +711,12 @@ fn summary_json(
     m.insert("bytes".into(), json!(snapshot.summary.bytes));
     m.insert("stop_classes".into(), Json::Object(stop_classes));
     m.insert("streams".into(), Json::Object(per_protocol));
+    if snapshot.summary.flows_condensed > 0 {
+        m.insert(
+            "flows_condensed".into(),
+            json!(snapshot.summary.flows_condensed),
+        );
+    }
     m.insert(
         "capture_drops".into(),
         json!(outcome.report.stats.dropped_kernel + outcome.report.stats.dropped_iface),

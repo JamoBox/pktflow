@@ -9,8 +9,8 @@ use pktflow_core::{PacketDirection, Value};
 use pktflow_flows::{AggregatorSnapshot, Rollup, Stream, StreamId, UnknownGroup};
 use pktflow_view::fmt::{hex_dump_lines, human_bytes, human_duration, thousands, time_of_day};
 use pktflow_view::{
-    by_id, capture_span, child_chain_str, close_reason_str, endpoint_sides, endpoints_str,
-    lineage_str, total_bytes, total_packets,
+    by_id, capture_span, child_chain_str, close_reason_str, condensed_marker, endpoint_sides,
+    endpoints_str, lineage_str, total_bytes, total_packets,
 };
 use ratatui::layout::{Alignment, Constraint, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
@@ -307,6 +307,9 @@ fn stream_table_row<'a>(r: &TreeRow<'a>) -> Row<'a> {
     let endpoints = endpoints_str(s);
     if !endpoints.is_empty() {
         spans.push(Span::raw(format!("  {endpoints}")));
+    }
+    if let Some(marker) = condensed_marker(s) {
+        spans.push(Span::styled(format!("  {marker}"), Style::new().fg(ACCENT)));
     }
     if let Some(state) = s.state {
         spans.push(Span::styled(

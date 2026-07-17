@@ -195,6 +195,14 @@ pub struct SharedArgs {
     /// Default: unclamped for batch runs; 128 under `tui`/`serve`.
     #[arg(long, value_name = "N")]
     pub series_cap: Option<usize>,
+    /// Show every flow individually: disable high-cardinality
+    /// condensation (D16)
+    #[arg(long)]
+    pub no_condense: bool,
+    /// Live same-anchor flows shown individually before further ones
+    /// condense into one node [default: 256]
+    #[arg(long, value_name = "K", conflicts_with = "no_condense")]
+    pub condense_threshold: Option<usize>,
     /// Force the first layer to a named plugin instead of routing by
     /// link type — for protocols reached only by direct-by-name
     /// encapsulation (06.1's tutorial "pktt" space) or a raw capture of
@@ -225,6 +233,16 @@ impl SharedArgs {
         match self.series_cap {
             Some(0) => None,
             other => other,
+        }
+    }
+
+    /// D16's K, with `--no-condense` mapping to 0 (off).
+    pub fn condense_threshold(&self) -> usize {
+        if self.no_condense {
+            0
+        } else {
+            self.condense_threshold
+                .unwrap_or(pktflow_flows::DEFAULT_CONDENSE_THRESHOLD)
         }
     }
 }

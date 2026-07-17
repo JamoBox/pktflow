@@ -6,20 +6,22 @@ Arguments:
   [SELECTOR]  `#n` from a prior table view; omit for the table itself
 
 Options:
-  -r, --read <FILE>          Read packets from a capture file (offline replay)
-  -i, --iface <IFACE>        Capture live from a named interface
-  -f, --filter <BPF>         Kernel BPF filter string
-  -c, --count <N>            Stop after N packets
-      --depth <DEPTH>        Field extraction depth [default: structural] [possible values: keys, structural, full]
-      --format <FORMAT>      Output format [default: text] [possible values: text, json]
-      --idle-timeout <SECS>  Live mode: seconds of quiet before a stream is evicted
-      --max-streams <N>      Live mode: hard cap on concurrently tracked streams
-      --series-cap <N>       Clamp per-stream series rollups to N points (0 = unclamped). Default: unclamped for batch runs; 128 under `tui`/`serve`
-      --entry <PLUGIN>       Force the first layer to a named plugin instead of routing by link type — for protocols reached only by direct-by-name encapsulation (06.1's tutorial "pktt" space) or a raw capture of a single known protocol with no link-layer framing
-      --top <N>              Table: cap the number of rows shown [default: 20]
-      --min-count <N>        Table: hide groups seen fewer than N times [default: 1]
-      --samples <N>          Drill-down: how many retained samples to hex-dump [default: 3]
-      --full-samples         Drill-down: lift the display cap on shown samples (still bounded by what the registry actually retained)
-      --export <DIR>         Drill-down: write every retained sample plus a manifest.json to DIR
-      --scaffold <NAME>      Drill-down: scaffold a starter plugin file named NAME from this group
-  -h, --help                 Print help
+  -r, --read <FILE>             Read packets from a capture file (offline replay)
+  -i, --iface <IFACE>           Capture live from a named interface
+  -f, --filter <BPF>            Kernel BPF filter string
+  -c, --count <N>               Stop after N packets
+      --depth <DEPTH>           Field extraction depth [default: structural] [possible values: keys, structural, full]
+      --format <FORMAT>         Output format [default: text] [possible values: text, json]
+      --idle-timeout <SECS>     Live mode: seconds of quiet before a stream is evicted
+      --max-streams <N>         Live mode: hard cap on concurrently tracked streams
+      --series-cap <N>          Clamp per-stream series rollups to N points (0 = unclamped). Default: unclamped for batch runs; 128 under `tui`/`serve`
+      --no-condense             Show every flow individually: disable high-cardinality condensation (D16)
+      --condense-threshold <K>  Live same-anchor flows shown individually before further ones condense into one node [default: 256]
+      --entry <PLUGIN>          Force the first layer to a named plugin instead of routing by link type — for protocols reached only by direct-by-name encapsulation (06.1's tutorial "pktt" space) or a raw capture of a single known protocol with no link-layer framing
+      --top <N>                 Table: cap the number of rows shown [default: 20]
+      --min-count <N>           Table: hide groups seen fewer than N times [default: 1]
+      --samples <N>             Drill-down: how many retained samples to hex-dump [default: 3]
+      --full-samples            Drill-down: lift the display cap on shown samples (still bounded by what the registry actually retained)
+      --export <DIR>            Drill-down: write every retained sample plus a manifest.json to DIR
+      --scaffold <NAME>         Drill-down: scaffold a starter plugin file named NAME from this group
+  -h, --help                    Print help

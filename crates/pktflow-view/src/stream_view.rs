@@ -46,7 +46,29 @@ pub fn endpoints_str(s: &Stream) -> String {
 
 /// The two rendered endpoint sides (canonical A, B) plus non-paired key
 /// fields. Empty side strings = no endpoint pair (qualifier-keyed).
+/// A condensed node (D16) renders its anchor as A and `*` as B — the
+/// varying side is, by definition, many values.
 pub fn endpoint_sides(s: &Stream) -> (String, String, Vec<String>) {
+    if let Some(info) = s.condensed.as_deref() {
+        let anchor = s
+            .key_fields
+            .get(info.ephemeral_field)
+            .map(|v| {
+                let text = value_str(info.ephemeral_field, v);
+                if info.ephemeral_field.ends_with("port") {
+                    format!(":{text}")
+                } else {
+                    text
+                }
+            })
+            .unwrap_or_default();
+        let star = if info.ephemeral_field.ends_with("port") {
+            ":*"
+        } else {
+            "*"
+        };
+        return (anchor, star.into(), Vec::new());
+    }
     let mut a_side = Vec::new();
     let mut b_side = Vec::new();
     let mut extras = Vec::new();
@@ -81,6 +103,17 @@ pub fn endpoint_sides(s: &Stream) -> (String, String, Vec<String>) {
         }
     }
     (a_side.join(","), b_side.join(","), extras)
+}
+
+/// Row marker for a condensed node (D16): `× N flows`, with `≥` once
+/// the member tally overflowed. `None` for ordinary streams.
+pub fn condensed_marker(s: &Stream) -> Option<String> {
+    let info = s.condensed.as_deref()?;
+    let ge = if info.overflow { "≥" } else { "" };
+    Some(format!(
+        "× {ge}{} flows",
+        crate::fmt::thousands(info.member_flows)
+    ))
 }
 
 /// Root-to-parent ancestry as `proto #id (endpoints) ▸ …` — the

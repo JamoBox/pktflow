@@ -32,6 +32,7 @@ fn empty_snapshot() -> AggregatorSnapshot {
             bytes: 0,
             streams_created: 0,
             streams_live: 0,
+            flows_condensed: 0,
             key_errors: 0,
             per_protocol: Vec::new(),
             stop_classes: [

@@ -17,7 +17,7 @@ fn reference_spec() -> FanOutSpec {
         flows_per_anchor: 125_000,
         packets_per_flow: 3,
         payload_len: 32,
-        seed: 0xC0FF_EE,
+        seed: 0x00C0_FFEE,
     }
 }
 
@@ -91,6 +91,61 @@ fn fan_out_aggregates_to_the_expected_stream_shape() {
     );
 }
 
+mod support;
+
+/// D16 end-to-end through the real binary: the tree shows a condensed
+/// row with its member marker, the summary reports the fold, the query
+/// flag selects it — and `--no-condense` reproduces per-flow output.
+#[test]
+fn condensation_flags_work_through_the_binary() {
+    let spec = FanOutSpec {
+        anchors: 1,
+        flows_per_anchor: 10,
+        packets_per_flow: 2,
+        payload_len: 8,
+        seed: 42,
+    };
+    let path =
+        std::env::temp_dir().join(format!("pktflow-scale-{}-fanout.pcap", std::process::id()));
+    pktflow_testkit::write_pcap_streamed(fan_out_packets(&spec), &path).expect("write pcap");
+    let p = path.to_string_lossy();
+
+    let out = support::pktflow(&["streams", "-r", &p, "--batch", "--condense-threshold", "3"]);
+    let tree = String::from_utf8_lossy(&out.stdout);
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(tree.contains("↔ :*"), "condensed row rendered:\n{tree}");
+    assert!(tree.contains("flows"), "member marker rendered:\n{tree}");
+    assert!(
+        err.contains("flows condensed"),
+        "summary reports the fold:\n{err}"
+    );
+
+    // The query flag selects exactly the condensed rows.
+    let out = support::pktflow(&[
+        "streams",
+        "-r",
+        &p,
+        "--batch",
+        "--condense-threshold",
+        "3",
+        "--where",
+        "condensed",
+    ]);
+    let filtered = String::from_utf8_lossy(&out.stdout);
+    assert!(filtered.contains("↔ :*"), "query finds the node");
+
+    // --no-condense: every flow individual, no markers anywhere.
+    let out = support::pktflow(&["streams", "-r", &p, "--batch", "--no-condense"]);
+    let plain = String::from_utf8_lossy(&out.stdout);
+    assert!(!plain.contains(":*"), "no condensed rows:\n{plain}");
+    assert_eq!(
+        plain.matches("tcp #").count() + plain.matches("udp #").count(),
+        10,
+        "all ten flows individual"
+    );
+    let _ = std::fs::remove_file(&path);
+}
+
 /// Peak RSS (VmHWM) in kB — Linux-only, which is where CI runs this.
 #[cfg(target_os = "linux")]
 fn peak_rss_kb() -> u64 {
@@ -109,9 +164,10 @@ fn peak_rss_kb() -> u64 {
 #[ignore = "multi-minute, release-mode memory ceiling — scheduled/manual tier"]
 #[cfg(target_os = "linux")]
 fn hub_scale_rss_stays_under_budget() {
-    // Measured 1,299,484 kB peak (benches/README.md task-12 section)
-    // + 25% headroom. The pre-task baseline measured 2,606,092 kB.
-    const BUDGET_KB: u64 = 1_625_000;
+    // Measured 35,876 kB peak with D16 condensation on (benches/
+    // README.md task-12 section) + ~33% headroom. Waypoints: 2,606,092
+    // kB pre-task; 1,299,492 kB after 12.1/12.2 (pre-condensation).
+    const BUDGET_KB: u64 = 48_000;
     let spec = reference_spec();
     let agg = ingest_fan_out(&spec, 262_144);
     assert_eq!(agg.summary().streams_created, 1_000_048);

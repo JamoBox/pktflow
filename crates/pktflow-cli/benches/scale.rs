@@ -26,7 +26,7 @@ fn spec(flows: usize, packets_per_flow: usize) -> FanOutSpec {
         flows_per_anchor: flows / 4,
         packets_per_flow,
         payload_len: 32,
-        seed: 0xC0FF_EE,
+        seed: 0x00C0_FFEE,
     }
 }
 
@@ -46,8 +46,19 @@ fn dissect_corpus(engine: &Engine, spec: &FanOutSpec) -> Vec<DissectedPacket> {
         .collect()
 }
 
+/// Config for the COW/publish/LRU benches: condensation pinned OFF so
+/// they keep measuring the raw per-stream machinery at the stated live
+/// counts (the fan-out corpus would otherwise condense, 12.3);
+/// `bench_condensation` covers the default-on path.
+fn raw_config() -> AggregatorConfig {
+    AggregatorConfig {
+        condense_threshold: 0,
+        ..AggregatorConfig::default()
+    }
+}
+
 fn aggregator_over(engine: &Arc<Engine>, spec: &FanOutSpec) -> Aggregator {
-    let mut agg = Aggregator::new(engine, AggregatorConfig::default());
+    let mut agg = Aggregator::new(engine, raw_config());
     for pkt in dissect_corpus(engine, spec) {
         agg.ingest(&pkt);
     }
@@ -107,7 +118,7 @@ fn bench_ingest_with_publish(c: &mut Criterion) {
     group.throughput(criterion::Throughput::Elements(corpus.len() as u64));
     group.bench_function("batch", |b| {
         b.iter(|| {
-            let mut agg = Aggregator::new(&engine, AggregatorConfig::default());
+            let mut agg = Aggregator::new(&engine, raw_config());
             for pkt in &corpus {
                 agg.ingest(pkt);
             }
@@ -116,7 +127,7 @@ fn bench_ingest_with_publish(c: &mut Criterion) {
     });
     group.bench_function("publish_every_8k", |b| {
         b.iter(|| {
-            let mut agg = Aggregator::new(&engine, AggregatorConfig::default());
+            let mut agg = Aggregator::new(&engine, raw_config());
             let mut held = None;
             for (i, pkt) in corpus.iter().enumerate() {
                 agg.ingest(pkt);
@@ -153,6 +164,40 @@ fn bench_lru_cap_churn(c: &mut Criterion) {
                             close_linger: Duration::from_secs(3600),
                             max_streams: cap,
                         },
+                        ..raw_config()
+                    },
+                );
+                for pkt in &corpus {
+                    agg.ingest(pkt);
+                }
+                black_box(agg.len());
+            })
+        });
+    }
+    group.finish();
+}
+
+/// D16 (12.3): ingest throughput and live-node count on the fan-out
+/// corpus with the default threshold vs. `--no-condense` — what
+/// condensation buys on the shape it exists for.
+fn bench_condensation(c: &mut Criterion) {
+    let engine = Arc::new(pktflow_plugins::default_engine());
+    let corpus_spec = spec(65_536, 3);
+    let corpus = dissect_corpus(&engine, &corpus_spec);
+
+    let mut group = c.benchmark_group("scale_condensation");
+    group.sample_size(10);
+    group.throughput(criterion::Throughput::Elements(corpus.len() as u64));
+    for (name, threshold) in [
+        ("default_on", AggregatorConfig::default().condense_threshold),
+        ("off", 0),
+    ] {
+        group.bench_function(name, |b| {
+            b.iter(|| {
+                let mut agg = Aggregator::new(
+                    &engine,
+                    AggregatorConfig {
+                        condense_threshold: threshold,
                         ..AggregatorConfig::default()
                     },
                 );
@@ -170,6 +215,7 @@ criterion_group!(
     benches,
     bench_snapshot_cow,
     bench_ingest_with_publish,
-    bench_lru_cap_churn
+    bench_lru_cap_churn,
+    bench_condensation
 );
 criterion_main!(benches);

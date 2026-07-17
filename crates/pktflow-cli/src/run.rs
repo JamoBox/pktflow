@@ -165,6 +165,7 @@ fn aggregator_config(shared: &SharedArgs) -> AggregatorConfig {
     AggregatorConfig {
         eviction,
         rollup_series_max_cap: shared.series_max_cap(),
+        condense_threshold: shared.condense_threshold(),
         ..AggregatorConfig::default()
     }
 }

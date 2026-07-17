@@ -190,15 +190,16 @@ stats, opaque bytes, first/last seen, a bounded distinct-value tally of the vary
 D11 — never lie by omission), and a lifecycle-state histogram where the protocol declares
 one. The first K flows of a group remain ordinary, fully browsable streams.
 
-Which key components may vary is **plugin-declared** (`StreamIdentity::condense`), keeping
-the engine protocol-free: TCP/UDP nominate their port pair; a protocol that declares nothing
-never condenses. Condensation is on by default in every aggregating mode and can be disabled
-per run (`--no-condense`); the threshold is configurable (`AggregatorConfig`). The trigger
-counts in deterministic creation order, so the same input yields the same expanded set and
-the same condensed tallies (PRD §7). What is knowingly given up: per-flow rollups, lifecycle
-detail, and drill-down for flows beyond the first K of a group — the condensed row states
-the loss explicitly (`+49,744 more flows`), and re-running with `--no-condense` or a raised
-threshold recovers full detail.
+Which key components may vary is **plugin-declared** (`LayerPlugin::condense`, a defaulted
+trait method like `claims`/`probe`), keeping the engine protocol-free: TCP/UDP nominate
+their port pair; a protocol that declares nothing never condenses. Condensation is on by
+default in every aggregating mode and can be disabled per run (`--no-condense`); the
+threshold is configurable (`AggregatorConfig`). The trigger counts in deterministic
+creation order, so the same input yields the same expanded set and the same condensed
+tallies (PRD §7). What is knowingly given up: per-flow rollups, lifecycle detail, and
+drill-down for flows beyond the first K of a group — the condensed row states the loss
+explicitly (`× 49,744 flows`), and re-running with `--no-condense` or a raised threshold
+recovers full detail.
 
 ## D17 — Snapshot & rendering scale contract (task 12)
 The D5 snapshot model (deep copy, publish, render from the copy) is correct but was costed
