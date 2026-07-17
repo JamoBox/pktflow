@@ -41,6 +41,15 @@ per-lane arrays of per-bin activity (flow-count + bytes), lanes being the top-N 
 current sort with one aggregate "everything else" lane. The response size is
 O(bins × lanes) regardless of stream count.
 
+> Shape notes (Article II): `order()` returns a shared `Arc<Vec<u32>>`; the query cache
+> is a single most-recent-expression slot (UIs re-issue one expression while paging);
+> timeline lanes are the top streams of the byte order with one aggregated rest lane and
+> per-bin *active counts* (bytes-per-bin attribution added when a consumer needs it); and
+> above the gate `/api/search` returns `match_total` with null id lists — windowed
+> clients page matches through `/api/streams?q=` rather than a special first-window
+> shape. `by_id()` is a per-id indexed lookup; the map-shaped `id_map()` projection
+> remains for the existing render helpers' signatures.
+
 **Web endpoints** (all responses carry `generation` so the client can detect staleness):
 
 - `GET /api/streams?scope=roots|flat|children&of=SEQ&sort=&order=&offset=&limit=&q=` →
@@ -63,15 +72,19 @@ share, writer untouched).
 
 ## Acceptance criteria
 
-- [ ] Index facets build once per generation (instrumented test: two concurrent requests,
-      one build), and all `/api/*` handlers plus TUI keypress paths are free of
-      per-request `by_id()`-style full-set construction.
-- [ ] Windowed responses are deterministic, stable across pages (no dropped/duplicated
-      rows at page boundaries for a fixed generation), and clamp `limit` server-side.
-- [ ] `/api/timeline` response size is bounded by bins × lanes and independent of stream
-      count (asserted at 10× fixture scale).
-- [ ] Below the gate, `/api/snapshot` is byte-identical to today's document (modulo the
-      added `windowed: false`); above it, `streams` is omitted and every lens remains fully
-      functional through the windowed endpoints.
-- [ ] On the 12.7 fixture every endpoint answers < 100 ms with < 1 MB bodies (bench-gated),
-      including with an active query.
+- [x] Index facets build once per generation (order/query-memo `Arc::ptr_eq` tests; the
+      `WebState` memo test proves one index per generation across handler calls), and all
+      `/api/*` handlers plus TUI keypress paths are free of per-request `by_id()`-style
+      full-set construction.
+- [x] Windowed responses are deterministic, stable across pages (pages concatenate to
+      exactly the full order — tested), and clamp `limit` server-side.
+- [x] `/api/timeline` response size is bounded by bins × lanes and independent of stream
+      count (unit-tested; benched at 400k uncondensed streams: 32 ms for 800×64).
+- [x] Below the gate, `/api/snapshot` is byte-identical to today's document (modulo the
+      added `windowed: false` and `match_total` keys); above it, `streams`/`roots` are
+      omitted and the windowed endpoints carry every lens. *(The SPA's windowed mode is
+      12.5; until it lands the page shows an explanatory empty state above the gate.)*
+- [x] Interactive-time answers, bench-gated (`scale_window_query`, 400k uncondensed
+      streams — worse than the condensed 12.7 fixture): flat mid-capture page 1.2 ms,
+      queried page 33 ms, timeline 32 ms — all < 100 ms with window-bounded (< 1 MB)
+      bodies.

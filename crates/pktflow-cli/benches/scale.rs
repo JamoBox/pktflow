@@ -211,11 +211,73 @@ fn bench_condensation(c: &mut Criterion) {
     group.finish();
 }
 
+/// 12.4's gate: windowed queries and bounded timelines answer from the
+/// per-snapshot index in interactive time at high cardinality (raw,
+/// uncondensed store — the worst case the index must absorb).
+fn bench_window_query(c: &mut Criterion) {
+    use pktflow_view::{Scope, SnapshotIndex, SortKey, TimelineSpec, WindowSpec};
+    let engine = Arc::new(pktflow_plugins::default_engine());
+    let agg = aggregator_over(&engine, &spec(400_000, 1));
+    let index = SnapshotIndex::new(Arc::new(agg.snapshot()));
+
+    let mut group = c.benchmark_group("scale_window_query");
+    group.sample_size(20);
+    group.bench_function("flat_bytes_mid_page", |b| {
+        b.iter(|| {
+            black_box(
+                index
+                    .window(&WindowSpec {
+                        scope: Scope::Flat,
+                        query: None,
+                        sort: SortKey::Bytes,
+                        descending: true,
+                        offset: 200_000,
+                        limit: 200,
+                    })
+                    .rows
+                    .len(),
+            )
+        })
+    });
+    group.bench_function("flat_query_page", |b| {
+        b.iter(|| {
+            black_box(
+                index
+                    .window(&WindowSpec {
+                        scope: Scope::Flat,
+                        query: Some("proto == tcp"),
+                        sort: SortKey::Bytes,
+                        descending: true,
+                        offset: 1_000,
+                        limit: 200,
+                    })
+                    .rows
+                    .len(),
+            )
+        })
+    });
+    group.bench_function("timeline_800x64", |b| {
+        b.iter(|| {
+            black_box(
+                index
+                    .timeline(&TimelineSpec {
+                        bins: 800,
+                        lanes: 64,
+                        query: None,
+                    })
+                    .map(|t| t.lanes.len()),
+            )
+        })
+    });
+    group.finish();
+}
+
 criterion_group!(
     benches,
     bench_snapshot_cow,
     bench_ingest_with_publish,
     bench_lru_cap_churn,
-    bench_condensation
+    bench_condensation,
+    bench_window_query
 );
 criterion_main!(benches);

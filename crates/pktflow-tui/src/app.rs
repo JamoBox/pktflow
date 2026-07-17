@@ -2,10 +2,8 @@
 //! every transition is unit-testable without a PTY.
 
 use std::collections::HashSet;
-use std::sync::Arc;
 
-use pktflow_flows::AggregatorSnapshot;
-use pktflow_view::StreamQuery;
+use pktflow_view::{SnapshotIndex, StreamQuery};
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 use crate::tree::{flatten, Sort};
@@ -84,8 +82,15 @@ impl Default for App {
 }
 
 impl App {
-    /// Applies one key press against the snapshot currently on screen.
-    pub fn on_key(&mut self, key: KeyEvent, snapshot: &Arc<AggregatorSnapshot>) {
+    /// The filter text to evaluate, once it parses (a broken expression
+    /// filters nothing — the error banner explains).
+    pub fn active_query(&self) -> Option<&str> {
+        self.query.is_some().then_some(self.filter.as_str())
+    }
+
+    /// Applies one key press against the snapshot currently on screen
+    /// (via its 12.4 view index — cached lookups, no per-key rebuilds).
+    pub fn on_key(&mut self, key: KeyEvent, view: &SnapshotIndex) {
         // Ctrl-C always quits, whatever mode we're in.
         if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('c') {
             self.quit = true;
@@ -146,9 +151,9 @@ impl App {
                 self.filter_editing = true
             }
             _ => match self.tab {
-                Tab::Streams => self.on_streams_key(key, snapshot),
-                Tab::Timeline => self.on_timeline_key(key, snapshot),
-                Tab::Unknown => self.on_unknown_key(key, snapshot),
+                Tab::Streams => self.on_streams_key(key, view),
+                Tab::Timeline => self.on_timeline_key(key, view),
+                Tab::Unknown => self.on_unknown_key(key, view),
                 Tab::Summary => {}
             },
         }
@@ -176,8 +181,8 @@ impl App {
         }
     }
 
-    fn on_streams_key(&mut self, key: KeyEvent, snapshot: &Arc<AggregatorSnapshot>) {
-        let rows = flatten(snapshot, self.sort, &self.collapsed, self.query.as_ref());
+    fn on_streams_key(&mut self, key: KeyEvent, view: &SnapshotIndex) {
+        let rows = flatten(view, self.sort, &self.collapsed, self.active_query());
         let index = self.selected_index(&rows);
         match key.code {
             KeyCode::Up | KeyCode::Char('k') => self.select_row(&rows, index.saturating_sub(1)),
@@ -216,7 +221,8 @@ impl App {
             }
             KeyCode::Char('e') => self.collapsed.clear(),
             KeyCode::Char('c') => {
-                self.collapsed = snapshot
+                self.collapsed = view
+                    .snapshot()
                     .streams
                     .iter()
                     .filter(|s| !s.children.is_empty())
@@ -233,8 +239,8 @@ impl App {
     /// Timeline: ←→ scrub (2% steps), `[`/`]` coarse (10%), Space
     /// plays the playhead across the span, ↑↓ move the lane selection,
     /// Enter opens the selected stream in the Streams tab.
-    fn on_timeline_key(&mut self, key: KeyEvent, snapshot: &Arc<AggregatorSnapshot>) {
-        let rows = flatten(snapshot, self.sort, &self.collapsed, self.query.as_ref());
+    fn on_timeline_key(&mut self, key: KeyEvent, view: &SnapshotIndex) {
+        let rows = flatten(view, self.sort, &self.collapsed, self.active_query());
         let index = self.selected_index(&rows);
         match key.code {
             KeyCode::Left | KeyCode::Char('h') => self.scrub(-0.02),
@@ -273,8 +279,8 @@ impl App {
         }
     }
 
-    fn on_unknown_key(&mut self, key: KeyEvent, snapshot: &Arc<AggregatorSnapshot>) {
-        let count = snapshot.unknowns.len();
+    fn on_unknown_key(&mut self, key: KeyEvent, view: &SnapshotIndex) {
+        let count = view.snapshot().unknowns.len();
         match key.code {
             KeyCode::Up | KeyCode::Char('k') => {
                 self.unknown_index = self.unknown_index.saturating_sub(1)

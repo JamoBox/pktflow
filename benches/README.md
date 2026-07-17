@@ -168,6 +168,10 @@ condensation on by default:
 - `scale_condensation` (65k flows × 3 pkts, replayed dissected packets): default-on
   794 Kelem/s vs. off 746 Kelem/s — the group bookkeeping costs *less* than the stream
   creations it avoids, so condensation is a throughput win too, not a trade.
+- `scale_window_query` (12.4's gate, 400k **uncondensed** streams — worse than the
+  condensed fixture): flat mid-capture page 1.2 ms; queried page (cached evaluation,
+  membership scan) 33 ms; `/api/timeline` at 800 bins × 64 lanes 32 ms. All interactions
+  land far under the 100 ms DoD budget with window-bounded bodies.
 - Unknown-payload diagnostics — every fan-out payload is opaque — now dominates this
   shape (65.7 of 67.4 s vs 21.7 s without). Its per-occurrence probing is the next
   candidate for a bounding knob; out of task-12 scope, noted for a future task.

@@ -3,13 +3,22 @@
 //! per-protocol byte totals for the charts, and unknown groups with their
 //! retained sample bytes hex-encoded for the in-browser dump.
 
+use std::collections::HashMap;
+
 use pktflow_core::StopClass;
 use pktflow_flows::{AggregatorSnapshot, UnknownGroup};
 use pktflow_view::fmt::rfc3339;
 use pktflow_view::json::stream_record;
-use pktflow_view::query::matching_with_ancestors;
-use pktflow_view::{by_id, SnapshotHub, StreamQuery};
+use pktflow_view::{Scope, SnapshotHub, SnapshotIndex, SortKey, TimelineSpec, WindowSpec};
 use serde_json::{json, Value as Json};
+
+/// D17.4's size gate: `/api/snapshot` carries the whole forest only up
+/// to this many live streams; beyond it the document sets
+/// `"windowed": true` and clients drive `/api/streams`/`/api/timeline`.
+pub const FULL_SNAPSHOT_MAX_STREAMS: usize = 20_000;
+
+/// Server-side clamp on one window's `limit`.
+const WINDOW_LIMIT_MAX: usize = 500;
 
 /// JSON key for a stop class (D8 stable names, same as the CLI summary).
 fn stop_class_key(class: StopClass) -> &'static str {
@@ -122,85 +131,178 @@ fn unknown_json(index: usize, g: &UnknownGroup) -> Json {
     })
 }
 
-/// `/api/snapshot`: the whole browsable state in one document — meta,
-/// summary, the stream forest (D8 records + root ids), and the unknown
-/// registry. The client refetches it only on a generation change.
-pub fn snapshot_json(hub: &SnapshotHub) -> Json {
-    let snap = hub.latest();
-    let ids = by_id(&snap);
-    let seq_of = |id| ids.get(&id).map(|s| s.created_seq);
-    let streams: Vec<Json> = snap
-        .streams
-        .iter()
-        .map(|s| Json::Object(stream_record(s, &seq_of)))
-        .collect();
-    let roots: Vec<u64> = snap
-        .roots
-        .iter()
-        .filter_map(|id| ids.get(id).map(|s| s.created_seq))
-        .collect();
+/// `/api/snapshot`: the browsable state in one document — meta, summary,
+/// the stream forest (D8 records + root ids), and the unknown registry.
+/// The client refetches it only on a generation change. Above
+/// [`FULL_SNAPSHOT_MAX_STREAMS`] the forest is omitted and
+/// `"windowed": true` tells the client to drive `/api/streams` and
+/// `/api/timeline` instead (12.4, D17.4).
+pub fn snapshot_json(hub: &SnapshotHub, index: &SnapshotIndex) -> Json {
+    let snap = index.snapshot();
     let unknowns: Vec<Json> = snap
         .unknowns
         .iter()
         .enumerate()
         .map(|(i, g)| unknown_json(i, g))
         .collect();
-    json!({
+    let windowed = snap.streams.len() > FULL_SNAPSHOT_MAX_STREAMS;
+    let mut doc = json!({
         "pktflow": 1,
         "meta": meta_json(hub),
-        "summary": summary_json(&snap),
-        "roots": roots,
-        "streams": streams,
+        "summary": summary_json(snap),
+        "windowed": windowed,
         "unknowns": unknowns,
+    });
+    if !windowed {
+        let seq_of = |id| index.by_id(id).map(|s| s.created_seq);
+        let streams: Vec<Json> = snap
+            .streams
+            .iter()
+            .map(|s| Json::Object(stream_record(s, &seq_of)))
+            .collect();
+        let roots: Vec<u64> = snap.roots.iter().filter_map(|&id| seq_of(id)).collect();
+        doc["streams"] = json!(streams);
+        doc["roots"] = json!(roots);
+    }
+    doc
+}
+
+/// `GET /api/streams` (12.4): one window of D8 records —
+/// `scope=roots|flat|children&of=SEQ`, `sort`, `order=asc|desc`,
+/// `offset`, `limit` (clamped), `q`. Answers from the per-snapshot
+/// index; response size is bounded by the window, never the capture.
+pub fn streams_json(
+    hub: &SnapshotHub,
+    index: &SnapshotIndex,
+    params: &HashMap<String, String>,
+) -> Json {
+    let get = |k: &str| params.get(k).map(String::as_str);
+    let scope = match (get("scope").unwrap_or("roots"), get("of")) {
+        ("flat", _) => Scope::Flat,
+        ("children", Some(of)) => match of.parse() {
+            Ok(seq) => Scope::ChildrenOf(seq),
+            Err(_) => return json!({"error": "children scope needs a numeric ?of="}),
+        },
+        ("children", None) => return json!({"error": "children scope needs ?of=SEQ"}),
+        _ => Scope::Roots,
+    };
+    let sort = get("sort")
+        .and_then(SortKey::parse)
+        .unwrap_or(SortKey::Bytes);
+    let descending = get("order") != Some("asc");
+    let offset = get("offset").and_then(|v| v.parse().ok()).unwrap_or(0);
+    let limit = get("limit")
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(200)
+        .min(WINDOW_LIMIT_MAX);
+    let window = index.window(&WindowSpec {
+        scope,
+        query: get("q"),
+        sort,
+        descending,
+        offset,
+        limit,
+    });
+    let seq_of = |id| index.by_id(id).map(|s| s.created_seq);
+    let rows: Vec<Json> = window
+        .rows
+        .iter()
+        .map(|s| Json::Object(stream_record(s, &seq_of)))
+        .collect();
+    json!({
+        "pktflow": 1,
+        "generation": hub.generation(),
+        "total": window.total,
+        "match_total": window.match_total,
+        "rows": rows,
     })
 }
 
+/// `GET /api/timeline` (12.4): bounded time×lane density —
+/// `bins`, `lanes`, `q`. O(bins × lanes) whatever the stream count.
+pub fn timeline_json(
+    hub: &SnapshotHub,
+    index: &SnapshotIndex,
+    params: &HashMap<String, String>,
+) -> Json {
+    let get = |k: &str| params.get(k).map(String::as_str);
+    let spec = TimelineSpec {
+        bins: get("bins").and_then(|v| v.parse().ok()).unwrap_or(800),
+        lanes: get("lanes").and_then(|v| v.parse().ok()).unwrap_or(64),
+        query: get("q"),
+    };
+    match index.timeline(&spec) {
+        None => json!({
+            "pktflow": 1,
+            "generation": hub.generation(),
+            "lanes": Json::Null,
+        }),
+        Some(bins) => {
+            let lanes: Vec<Json> = bins
+                .lanes
+                .iter()
+                .map(|l| json!({"seq": l.seq, "active": l.active}))
+                .collect();
+            json!({
+                "pktflow": 1,
+                "generation": hub.generation(),
+                "start": rfc3339(bins.start),
+                "end": rfc3339(bins.end),
+                "lanes": lanes,
+            })
+        }
+    }
+}
+
 /// `/api/search?q=…`: evaluate one query expression against the current
-/// snapshot. `matches` are the streams the query selects; `visible` adds
-/// every ancestor of a match so the client can keep results in their
+/// snapshot (served from the index's cached evaluation, 12.4).
+/// `matches` are the streams the query selects; `visible` adds every
+/// ancestor of a match so the client can keep results in their
 /// hierarchy context. A parse failure comes back as `error` with both
-/// lists null — the client keeps showing the unfiltered tree.
-pub fn search_json(hub: &SnapshotHub, q: &str) -> Json {
-    let base = |matches: Json, visible: Json, error: Json| {
+/// lists null. Above the D17.4 gate the exhaustive id lists are
+/// withheld (`matches`/`visible` null) and only `match_total` returns —
+/// windowed clients page matches through `/api/streams?q=`.
+pub fn search_json(hub: &SnapshotHub, index: &SnapshotIndex, q: &str) -> Json {
+    let base = |matches: Json, visible: Json, total: Json, error: Json| {
         json!({
             "pktflow": 1,
             "query": q,
             "generation": hub.generation(),
             "matches": matches,
             "visible": visible,
+            "match_total": total,
             "error": error,
         })
     };
     if q.trim().is_empty() {
-        return base(Json::Null, Json::Null, Json::Null);
+        return base(Json::Null, Json::Null, Json::Null, Json::Null);
     }
-    let query = match StreamQuery::parse(q) {
-        Ok(query) => query,
-        Err(e) => return base(Json::Null, Json::Null, json!(e.to_string())),
+    let Some(sets) = index.query_sets(q) else {
+        let message = pktflow_view::StreamQuery::parse(q)
+            .err()
+            .map_or_else(|| "query error".into(), |e| e.to_string());
+        return base(Json::Null, Json::Null, Json::Null, json!(message));
     };
-    let snap = hub.latest();
-    let ids = by_id(&snap);
-    let mut matches: Vec<u64> = snap
-        .streams
-        .iter()
-        .filter(|s| query.matches(s, &ids))
-        .map(|s| s.created_seq)
-        .collect();
+    let (matches_set, visible_set) = (&sets.0, &sets.1);
+    if index.snapshot().streams.len() > FULL_SNAPSHOT_MAX_STREAMS {
+        return base(Json::Null, Json::Null, json!(matches_set.len()), Json::Null);
+    }
+    let mut matches: Vec<u64> = matches_set.iter().copied().collect();
     matches.sort_unstable();
-    let mut visible: Vec<u64> = matching_with_ancestors(&snap.streams, &ids, &query)
-        .into_iter()
-        .collect();
+    let mut visible: Vec<u64> = visible_set.iter().copied().collect();
     visible.sort_unstable();
-    base(json!(matches), json!(visible), Json::Null)
+    base(
+        json!(matches),
+        json!(visible),
+        json!(matches.len()),
+        Json::Null,
+    )
 }
 
-/// `/api/stream/{id}`: one D8 record by display id.
-pub fn stream_json(hub: &SnapshotHub, seq: u64) -> Option<Json> {
-    let snap = hub.latest();
-    let ids = by_id(&snap);
-    let seq_of = |id| ids.get(&id).map(|s| s.created_seq);
-    snap.streams
-        .iter()
-        .find(|s| s.created_seq == seq)
+/// `/api/stream/{id}`: one D8 record by display id (indexed lookup).
+pub fn stream_json(index: &SnapshotIndex, seq: u64) -> Option<Json> {
+    let seq_of = |id| index.by_id(id).map(|s| s.created_seq);
+    index
+        .by_seq(seq)
         .map(|s| Json::Object(stream_record(s, &seq_of)))
 }

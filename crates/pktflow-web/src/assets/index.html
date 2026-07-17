@@ -702,6 +702,7 @@ async function refetch() {
     const doc = await r.json();
     if (S.source !== null && doc.meta.source !== S.source) resetForNewSource();
     S.source = doc.meta.source;
+    if (doc.windowed) { doc.streams = []; doc.roots = []; }
     S.data = doc;
     updateTimeSpan();
     S.byId = new Map(doc.streams.map(s => [s.id, s]));
@@ -816,7 +817,9 @@ function renderTree() {
   const scroll = host.scrollTop;
   host.replaceChildren();
   if (!S.data.streams.length) {
-    const msg = S.data.summary.packets ? "no streams yet"
+    const msg = S.data.windowed
+      ? `capture too large for the full view (${thousands(S.data.summary.streams_live)} streams) — use the CLI/TUI lenses, or narrow with --where`
+      : S.data.summary.packets ? "no streams yet"
       : S.uploads ? "waiting for packets — or drop a .pcap / .pcapng anywhere to load it"
       : "waiting for packets…";
     host.append(el("div", "empty", msg));

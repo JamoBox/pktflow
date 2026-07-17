@@ -64,6 +64,10 @@ pub struct WebState {
     upload_ns: u64,
     /// Upload size cap in bytes; 0 = unlimited (12.6).
     max_upload_bytes: u64,
+    /// The 12.4 view index, memoized per hub generation: whichever
+    /// request arrives first after a publish builds it; everyone else
+    /// shares the `Arc` (facets inside build lazily).
+    index_memo: Mutex<Option<(u64, Arc<pktflow_view::SnapshotIndex>)>>,
 }
 
 /// Process-wide `WebState` counter feeding `upload_ns`.
@@ -79,7 +83,27 @@ impl WebState {
             upload_seq: AtomicU64::new(0),
             upload_ns: UPLOAD_NS.fetch_add(1, Ordering::Relaxed),
             max_upload_bytes: DEFAULT_MAX_UPLOAD_BYTES,
+            index_memo: Mutex::new(None),
         }
+    }
+
+    /// The current snapshot's view index (12.4): one per generation,
+    /// shared across handlers.
+    pub fn index(&self) -> Arc<pktflow_view::SnapshotIndex> {
+        let hub = self.hub();
+        let generation = hub.generation();
+        if let Ok(guard) = self.index_memo.lock() {
+            if let Some((cached_gen, index)) = guard.as_ref() {
+                if *cached_gen == generation {
+                    return Arc::clone(index);
+                }
+            }
+        }
+        let index = Arc::new(pktflow_view::SnapshotIndex::new(hub.latest()));
+        if let Ok(mut guard) = self.index_memo.lock() {
+            *guard = Some((generation, Arc::clone(&index)));
+        }
+        index
     }
 
     /// Serving with uploads enabled.
@@ -119,6 +143,8 @@ pub fn router(state: Arc<WebState>) -> Router {
         .route("/", get(index))
         .route("/api/meta", get(meta))
         .route("/api/snapshot", get(snapshot))
+        .route("/api/streams", get(streams))
+        .route("/api/timeline", get(timeline))
         .route("/api/stream/{id}", get(stream_detail))
         .route("/api/search", get(search))
         .route("/api/events", get(events))
@@ -150,13 +176,29 @@ async fn meta(State(state): State<Arc<WebState>>) -> Json<serde_json::Value> {
 }
 
 async fn snapshot(State(state): State<Arc<WebState>>) -> Json<serde_json::Value> {
-    let mut doc = api::snapshot_json(&state.hub());
+    let mut doc = api::snapshot_json(&state.hub(), &state.index());
     doc["meta"]["uploads"] = serde_json::json!(state.on_upload.is_some());
     Json(doc)
 }
 
+/// `GET /api/streams` — one window of the forest (12.4).
+async fn streams(
+    State(state): State<Arc<WebState>>,
+    UrlQuery(params): UrlQuery<HashMap<String, String>>,
+) -> Json<serde_json::Value> {
+    Json(api::streams_json(&state.hub(), &state.index(), &params))
+}
+
+/// `GET /api/timeline` — bounded time×lane density (12.4).
+async fn timeline(
+    State(state): State<Arc<WebState>>,
+    UrlQuery(params): UrlQuery<HashMap<String, String>>,
+) -> Json<serde_json::Value> {
+    Json(api::timeline_json(&state.hub(), &state.index(), &params))
+}
+
 async fn stream_detail(State(state): State<Arc<WebState>>, Path(id): Path<u64>) -> Response {
-    match api::stream_json(&state.hub(), id) {
+    match api::stream_json(&state.index(), id) {
         Some(doc) => Json(doc).into_response(),
         None => (
             StatusCode::NOT_FOUND,
@@ -171,7 +213,7 @@ async fn search(
     UrlQuery(params): UrlQuery<HashMap<String, String>>,
 ) -> Json<serde_json::Value> {
     let q = params.get("q").map(String::as_str).unwrap_or("");
-    Json(api::search_json(&state.hub(), q))
+    Json(api::search_json(&state.hub(), &state.index(), q))
 }
 
 async fn events(
@@ -373,7 +415,7 @@ mod tests {
         LinkType, PacketMeta, ParseCtx, ParseError, ParsedLayer, ProtocolName, StopReason,
         StreamIdentity, Value,
     };
-    use pktflow_flows::{Aggregator, AggregatorConfig};
+    use pktflow_flows::{Aggregator, AggregatorConfig, AggregatorSnapshot};
     use pktflow_view::SnapshotHub;
     use tower::ServiceExt;
 
@@ -604,6 +646,67 @@ mod tests {
         let (_, body) = get_body(super::router(state), "/api/meta").await;
         let doc: serde_json::Value = serde_json::from_str(&body).expect("json");
         assert_eq!(doc["source"], "fresh.pcap");
+    }
+
+    // 12.4: /api/streams pages deterministically, respects scope and
+    // query, and clamps limit; /api/timeline is bounded.
+    #[tokio::test]
+    async fn windowed_endpoints_page_and_filter() {
+        let (status, body) = get_body(
+            plain_router(),
+            "/api/streams?scope=flat&sort=bytes&offset=0&limit=10",
+        )
+        .await;
+        assert_eq!(status, 200);
+        let doc: serde_json::Value = serde_json::from_str(&body).expect("json");
+        assert_eq!(doc["total"], 2, "eth + ip");
+        let rows = doc["rows"].as_array().expect("rows");
+        assert_eq!(rows.len(), 2);
+
+        // Children scope expands the eth root to its ip child.
+        let (_, body) = get_body(plain_router(), "/api/streams?scope=children&of=0").await;
+        let doc: serde_json::Value = serde_json::from_str(&body).expect("json");
+        assert_eq!(doc["total"], 1);
+        assert_eq!(doc["rows"][0]["protocol"], "ip");
+
+        // A query narrows and reports match_total.
+        let (_, body) = get_body(plain_router(), "/api/streams?scope=flat&q=proto%20==%20ip").await;
+        let doc: serde_json::Value = serde_json::from_str(&body).expect("json");
+        assert_eq!(doc["match_total"], 1);
+        assert_eq!(doc["rows"][0]["protocol"], "ip");
+
+        let (_, body) = get_body(plain_router(), "/api/timeline?bins=4&lanes=2").await;
+        let doc: serde_json::Value = serde_json::from_str(&body).expect("json");
+        let lanes = doc["lanes"].as_array().expect("lanes");
+        assert!(lanes.len() <= 2);
+        assert!(lanes
+            .iter()
+            .all(|l| l["active"].as_array().is_some_and(|a| a.len() == 4)));
+    }
+
+    // 12.4: one index per generation — repeated handler calls share it;
+    // a new publish replaces it.
+    #[tokio::test]
+    async fn index_is_memoized_per_generation() {
+        let hub = hub_with_streams();
+        let state = Arc::new(WebState::new(Arc::clone(&hub)));
+        let a = state.index();
+        let b = state.index();
+        assert!(Arc::ptr_eq(&a, &b), "same generation, same index");
+        hub.publish(AggregatorSnapshot::clone(&hub.latest()));
+        let c = state.index();
+        assert!(!Arc::ptr_eq(&a, &c), "a publish rebuilds the index");
+    }
+
+    // 12.4/D17.4: below the gate /api/snapshot still carries the whole
+    // forest and says `windowed: false`.
+    #[tokio::test]
+    async fn snapshot_below_the_gate_is_full_and_unwindowed() {
+        let (_, body) = get_body(plain_router(), "/api/snapshot").await;
+        let doc: serde_json::Value = serde_json::from_str(&body).expect("json");
+        assert_eq!(doc["windowed"], false);
+        assert!(doc["streams"].as_array().is_some());
+        assert!(doc["roots"].as_array().is_some());
     }
 
     // 12.6: uploads stream to disk in bounded memory — a body far

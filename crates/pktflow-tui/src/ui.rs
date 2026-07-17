@@ -10,7 +10,7 @@ use pktflow_flows::{AggregatorSnapshot, Rollup, Stream, StreamId, UnknownGroup};
 use pktflow_view::fmt::{hex_dump_lines, human_bytes, human_duration, thousands, time_of_day};
 use pktflow_view::{
     by_id, capture_span, child_chain_str, close_reason_str, condensed_marker, endpoint_sides,
-    endpoints_str, lineage_str, total_bytes, total_packets,
+    endpoints_str, lineage_str, total_bytes, total_packets, SnapshotIndex,
 };
 use ratatui::layout::{Alignment, Constraint, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
@@ -72,7 +72,8 @@ fn bar_str(numer: u64, denom: u64, width: usize) -> String {
     format!("{}{}", "█".repeat(filled), "░".repeat(width - filled))
 }
 
-pub fn draw(frame: &mut Frame, app: &mut App, snapshot: &AggregatorSnapshot, status: &HubStatus) {
+pub fn draw(frame: &mut Frame, app: &mut App, index: &SnapshotIndex, status: &HubStatus) {
+    let snapshot: &AggregatorSnapshot = index.snapshot();
     let [header, tabs, body, footer] = Layout::vertical([
         Constraint::Length(1),
         Constraint::Length(1),
@@ -84,8 +85,8 @@ pub fn draw(frame: &mut Frame, app: &mut App, snapshot: &AggregatorSnapshot, sta
     draw_header(frame, header, snapshot, status);
     draw_tabs(frame, tabs, app);
     match app.tab {
-        Tab::Streams => draw_streams(frame, body, app, snapshot),
-        Tab::Timeline => draw_timeline(frame, body, app, snapshot),
+        Tab::Streams => draw_streams(frame, body, app, index),
+        Tab::Timeline => draw_timeline(frame, body, app, index),
         Tab::Unknown => draw_unknown(frame, body, app, snapshot),
         Tab::Summary => draw_summary(frame, body, snapshot),
     }
@@ -200,8 +201,9 @@ fn draw_footer(frame: &mut Frame, area: Rect, app: &App, status: &HubStatus) {
     frame.render_widget(Paragraph::new(text), area);
 }
 
-fn draw_streams(frame: &mut Frame, area: Rect, app: &mut App, snapshot: &AggregatorSnapshot) {
-    let rows = flatten(snapshot, app.sort, &app.collapsed, app.query.as_ref());
+fn draw_streams(frame: &mut Frame, area: Rect, app: &mut App, index: &SnapshotIndex) {
+    let snapshot: &AggregatorSnapshot = index.snapshot();
+    let rows = flatten(index, app.sort, &app.collapsed, app.active_query());
     if rows.is_empty() {
         let msg = if snapshot.summary.packets == 0 {
             "waiting for packets…"
@@ -561,8 +563,9 @@ fn rollup_lines(
 /// Bars entirely after the playhead haven't been born yet (ghosted),
 /// bars it crosses are active (bright), bars before it are finished
 /// (dimmed) — temporal causality at a glance.
-fn draw_timeline(frame: &mut Frame, area: Rect, app: &mut App, snapshot: &AggregatorSnapshot) {
-    let rows = flatten(snapshot, app.sort, &app.collapsed, app.query.as_ref());
+fn draw_timeline(frame: &mut Frame, area: Rect, app: &mut App, index: &SnapshotIndex) {
+    let snapshot: &AggregatorSnapshot = index.snapshot();
+    let rows = flatten(index, app.sort, &app.collapsed, app.active_query());
     let span = capture_span(snapshot);
     let (Some((span_start, span_end)), false) = (span, rows.is_empty()) else {
         frame.render_widget(

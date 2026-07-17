@@ -9,11 +9,16 @@
 
 pub mod fmt;
 pub mod hub;
+pub mod index;
 pub mod json;
 pub mod query;
 pub mod stream_view;
 
 pub use hub::SnapshotHub;
+pub use index::{
+    Scope, SnapshotIndex, SortKey, TimelineBins, TimelineLane, TimelineSpec, WindowResult,
+    WindowSpec,
+};
 pub use query::{QueryError, StreamQuery};
 pub use stream_view::{
     by_id, capture_span, child_chain_str, close_reason_str, condensed_marker, endpoint_sides,

@@ -31,13 +31,15 @@ pub fn run(hub: Arc<SnapshotHub>) -> io::Result<()> {
 fn event_loop(terminal: &mut ratatui::DefaultTerminal, hub: &Arc<SnapshotHub>) -> io::Result<()> {
     let mut app = app::App::default();
     let mut seen_generation = u64::MAX; // force the first refresh
-    let mut snapshot = hub.latest();
+                                        // One 12.4 view index per published snapshot: keypresses and frames
+                                        // reuse its cached lookups until the next generation.
+    let mut view = pktflow_view::SnapshotIndex::new(hub.latest());
     while !app.quit {
         if !app.paused {
             let generation = hub.generation();
             if generation != seen_generation {
                 seen_generation = generation;
-                snapshot = hub.latest();
+                view = pktflow_view::SnapshotIndex::new(hub.latest());
             }
         }
         let status = ui::HubStatus {
@@ -47,14 +49,14 @@ fn event_loop(terminal: &mut ratatui::DefaultTerminal, hub: &Arc<SnapshotHub>) -
             error: hub.error(),
             paused: app.paused,
         };
-        terminal.draw(|frame| ui::draw(frame, &mut app, &snapshot, &status))?;
+        terminal.draw(|frame| ui::draw(frame, &mut app, &view, &status))?;
         app.tick(); // timeline playback advances with the redraw cadence
 
         // 100 ms tick: snappy keys, ~10 fps refresh while live.
         if event::poll(Duration::from_millis(100))? {
             if let Event::Key(key) = event::read()? {
                 if key.kind != KeyEventKind::Release {
-                    app.on_key(key, &snapshot);
+                    app.on_key(key, &view);
                 }
             }
         }
@@ -76,8 +78,6 @@ mod tests {
     use ratatui::backend::TestBackend;
     use ratatui::crossterm::event::{KeyCode, KeyEvent};
     use ratatui::Terminal;
-
-    use pktflow_view::StreamQuery;
 
     use crate::app::App;
     use crate::tree::{flatten, Sort};
@@ -155,9 +155,13 @@ mod tests {
         agg.snapshot()
     }
 
+    fn view(snap: AggregatorSnapshot) -> pktflow_view::SnapshotIndex {
+        pktflow_view::SnapshotIndex::new(Arc::new(snap))
+    }
+
     #[test]
     fn flatten_walks_roots_then_children_with_glyphs() {
-        let snap = snapshot();
+        let snap = view(snapshot());
         let rows = flatten(&snap, Sort::FirstSeen, &Default::default(), None);
         let labels: Vec<(u64, &str)> = rows
             .iter()
@@ -170,7 +174,7 @@ mod tests {
 
     #[test]
     fn collapse_hides_the_subtree_and_filter_reveals_it() {
-        let snap = snapshot();
+        let snap = view(snapshot());
         let collapsed = std::iter::once(0).collect();
         let rows = flatten(&snap, Sort::FirstSeen, &collapsed, None);
         let seqs: Vec<u64> = rows.iter().map(|r| r.stream.created_seq).collect();
@@ -178,15 +182,14 @@ mod tests {
 
         // The query matches the ip child; its collapsed ancestor is
         // auto-expanded so the match is reachable.
-        let query = StreamQuery::parse("proto == ip").expect("query parses");
-        let rows = flatten(&snap, Sort::FirstSeen, &collapsed, Some(&query));
+        let rows = flatten(&snap, Sort::FirstSeen, &collapsed, Some("proto == ip"));
         let seqs: Vec<u64> = rows.iter().map(|r| r.stream.created_seq).collect();
         assert_eq!(seqs, [0, 1]);
     }
 
     #[test]
     fn keys_move_selection_and_toggle_folds() {
-        let snap = Arc::new(snapshot());
+        let snap = view(snapshot());
         let mut app = App {
             sort: Sort::FirstSeen,
             ..App::default()
@@ -204,7 +207,7 @@ mod tests {
 
     #[test]
     fn timeline_tab_scrubs_and_renders_lanes() {
-        let snap = Arc::new(snapshot());
+        let snap = view(snapshot());
         let mut app = App::default();
         app.on_key(KeyEvent::from(KeyCode::Char('2')), &snap);
         assert_eq!(app.tab, crate::app::Tab::Timeline);
@@ -242,7 +245,7 @@ mod tests {
 
     #[test]
     fn frames_render_streams_unknown_and_summary_tabs() {
-        let snap = Arc::new(snapshot());
+        let snap = view(snapshot());
         let mut app = App::default();
         let status = crate::ui::HubStatus {
             source: "test.pcap".into(),
