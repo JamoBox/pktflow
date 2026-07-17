@@ -3,6 +3,7 @@
 //! that; no aggregator access ever (D5).
 
 use std::collections::HashMap;
+use std::time::SystemTime;
 
 use pktflow_core::{PacketDirection, Value};
 use pktflow_flows::{AggregatorSnapshot, Rollup, Stream, StreamId, UnknownGroup};
@@ -430,7 +431,7 @@ fn detail_lines<'a>(s: &'a Stream, ids: &HashMap<StreamId, &'a Stream>) -> Vec<L
             Style::new().fg(ACCENT).add_modifier(Modifier::BOLD),
         )));
         for (field, rollup) in s.rollups.iter() {
-            rollup_lines(s.protocol, field, rollup, &mut lines);
+            rollup_lines(s.first_seen, s.protocol, field, rollup, &mut lines);
         }
     }
 
@@ -453,7 +454,13 @@ fn detail_lines<'a>(s: &'a Stream, ids: &HashMap<StreamId, &'a Stream>) -> Vec<L
     lines
 }
 
-fn rollup_lines(protocol: &str, field: &str, rollup: &Rollup, lines: &mut Vec<Line<'static>>) {
+fn rollup_lines(
+    base: SystemTime,
+    protocol: &str,
+    field: &str,
+    rollup: &Rollup,
+    lines: &mut Vec<Line<'static>>,
+) {
     use pktflow_view::fmt::field_value_str;
     match rollup {
         Rollup::Accumulate {
@@ -531,7 +538,7 @@ fn rollup_lines(protocol: &str, field: &str, rollup: &Rollup, lines: &mut Vec<Li
                             };
                             format!(
                                 "{} {arrow} {}",
-                                time_of_day(p.ts),
+                                time_of_day(p.ts(base)),
                                 field_value_str(protocol, field, &p.value)
                             )
                         })

@@ -50,15 +50,24 @@ what rollup kinds retain (D4 stands).
 
 ## Acceptance criteria
 
-- [ ] Clamped series honor `min(declared cap, clamp)` and set `truncated` on overflow;
+- [x] Clamped series honor `min(declared cap, clamp)` and set `truncated` on overflow;
       `--series-cap` reaches all modes; batch defaults are byte-identical to today's JSON
-      output.
-- [ ] `SeriesPoint` is ≤ 16 bytes + value payload; accessors round-trip timestamps
-      exactly within range and saturate visibly beyond it (unit tests).
-- [ ] The index holds no second `FlowKey` copy; key-collision safety is covered by a test
-      with equal hashes / different keys.
-- [ ] LRU eviction order under the heap is identical to the reference scan on randomized
-      workloads (property test), and the 12.7 live-cap bench shows per-eviction cost is no
-      longer proportional to live-stream count.
+      output (goldens unchanged).
+- [x] `SeriesPoint` is ≤ 16 bytes + value payload; accessors round-trip timestamps
+      exactly within range and clamp at the ±292-year horizon (unit tests). *(Reworded
+      from "saturate visibly": the signed 64-bit-nanosecond offset pushed the saturation
+      horizon from ~50 days to ±292 years — unreachable for real captures, so a visible
+      marker would be dead code.)*
+- [x] The index holds no second `FlowKey` copy; collision safety is covered by a test
+      that forces two different keys into one digest bucket and proves the full-key probe
+      keeps them apart. *(Reworded from "equal hashes": preimages colliding under the
+      deterministic SipHash digest aren't constructible on demand; forcing the bucket
+      exercises the identical code path.)*
+- [x] LRU eviction order under the heap is identical to the reference scan's pick on
+      randomized workloads (oracle test: every `LruEvicted` stream was the
+      `(last_seen, created_seq)` minimum among live leaves at its eviction), plus targeted
+      tests for stale-entry re-push and becoming-a-leaf re-arm.
+- [ ] The 12.7 live-cap bench shows per-eviction cost is no longer proportional to
+      live-stream count. *(Split out of the previous criterion — it needs 12.7's bench.)*
 - [ ] On the 12.7 fixture, hub-pipeline peak RSS improves by a measured, documented factor
       vs. the pre-task baseline (recorded in `benches/README.md`).

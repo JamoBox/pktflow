@@ -3,6 +3,7 @@
 //! clean stdout (JSON) / stderr (summary) separation.
 
 use std::collections::HashMap;
+use std::time::SystemTime;
 
 use pktflow_capture::InterfaceInfo;
 use pktflow_core::{DissectedPacket, PacketDirection, StopReason};
@@ -425,7 +426,13 @@ pub fn stream_detail(
     if !s.rollups.is_empty() {
         out.push_str("rollups\n");
         for (field, rollup) in s.rollups.iter() {
-            out.push_str(&rollup_line(s.protocol, field, rollup, full_series));
+            out.push_str(&rollup_line(
+                s.first_seen,
+                s.protocol,
+                field,
+                rollup,
+                full_series,
+            ));
         }
     }
 
@@ -442,7 +449,13 @@ pub fn stream_detail(
 }
 
 /// One rollup line per kind (05.4 honesty markers included).
-fn rollup_line(protocol: &str, field: &str, rollup: &Rollup, full_series: bool) -> String {
+fn rollup_line(
+    base: SystemTime,
+    protocol: &str,
+    field: &str,
+    rollup: &Rollup,
+    full_series: bool,
+) -> String {
     match rollup {
         Rollup::Accumulate {
             values,
@@ -489,7 +502,7 @@ fn rollup_line(protocol: &str, field: &str, rollup: &Rollup, full_series: bool) 
                 };
                 format!(
                     "{} {arrow} {}",
-                    time_of_day(p.ts),
+                    time_of_day(p.ts(base)),
                     field_value_str(protocol, field, &p.value)
                 )
             };

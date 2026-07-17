@@ -14,6 +14,7 @@ Options:
       --format <FORMAT>      Output format [default: text] [possible values: text, json]
       --idle-timeout <SECS>  Live mode: seconds of quiet before a stream is evicted
       --max-streams <N>      Live mode: hard cap on concurrently tracked streams
+      --series-cap <N>       Clamp per-stream series rollups to N points (0 = unclamped). Default: unclamped for batch runs; 128 under `tui`/`serve`
       --entry <PLUGIN>       Force the first layer to a named plugin instead of routing by link type — for protocols reached only by direct-by-name encapsulation (06.1's tutorial "pktt" space) or a raw capture of a single known protocol with no link-layer framing
       --full-series          Render every series point (default elides beyond 20)
   -h, --help                 Print help

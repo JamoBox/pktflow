@@ -99,6 +99,7 @@ fn live_aggregator(max_streams: usize) -> (Aggregator, SinkLog) {
                 .push((evicted.stream.protocol, evicted.reason));
         })),
         rollup_series_default_cap: 1024,
+        rollup_series_max_cap: None,
         unknown: UnknownRegistryConfig::default(),
     };
     (Aggregator::new(&engine(), config), log)
@@ -254,6 +255,7 @@ fn offline_finish_retains_closed_streams_for_the_final_report() {
                 .push((evicted.stream.protocol, evicted.reason));
         })),
         rollup_series_default_cap: 1024,
+        rollup_series_max_cap: None,
         unknown: UnknownRegistryConfig::default(),
     };
     let mut agg = Aggregator::new(&engine(), config);

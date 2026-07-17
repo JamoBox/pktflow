@@ -164,6 +164,7 @@ fn aggregator_config(shared: &SharedArgs) -> AggregatorConfig {
     };
     AggregatorConfig {
         eviction,
+        rollup_series_max_cap: shared.series_max_cap(),
         ..AggregatorConfig::default()
     }
 }
@@ -349,6 +350,11 @@ const PUBLISH_INTERVAL: Duration = Duration::from_millis(250);
 /// aggregation thread.
 const ADAPTIVE_PUBLISH_FACTOR: u32 = 8;
 
+/// Default series-rollup clamp for the interactive front-ends (12.2):
+/// a browsable view doesn't need a thousand retained points per stream;
+/// a truncated ring says so (D4). `--series-cap` overrides (0 = off).
+const HUB_SERIES_CLAMP: usize = 128;
+
 /// A hub named for this run's source — the TUI/web header line.
 pub fn hub_for(shared: &SharedArgs) -> SnapshotHub {
     match (&shared.input.read, &shared.input.iface) {
@@ -370,6 +376,12 @@ pub fn spawn_hub_pipeline(
     stop: StopFlags,
     hub: Arc<SnapshotHub>,
 ) -> std::thread::JoinHandle<Result<(), CliError>> {
+    // Interactive default (12.2): clamp series retention unless the user
+    // chose a cap (or explicitly unclamped with `--series-cap 0`).
+    let mut shared = shared;
+    if shared.series_cap.is_none() {
+        shared.series_cap = Some(HUB_SERIES_CLAMP);
+    }
     std::thread::spawn(move || {
         let publish_hub = Arc::clone(&hub);
         let mut next_due: Option<Instant> = None;

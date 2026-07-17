@@ -5,9 +5,11 @@
 use std::cmp::Reverse;
 use std::collections::hash_map::DefaultHasher;
 use std::collections::{BinaryHeap, HashMap};
-use std::hash::BuildHasherDefault;
+use std::hash::{BuildHasherDefault, Hash, Hasher};
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
+
+use smallvec::SmallVec;
 
 use pktflow_core::{
     DissectedPacket, Engine, FieldMap, FlowKey, PacketDirection, ProtocolName, StateName,
@@ -58,6 +60,11 @@ pub struct AggregatorConfig {
     pub sink: Option<Box<dyn FnMut(EvictedStream) + Send>>,
     /// D4 override point for `Series { cap: 0 }`-defaulted rollups.
     pub rollup_series_default_cap: usize,
+    /// 12.2: clamp applied over every series cap, including
+    /// plugin-declared explicit ones; `None` = unclamped (today's
+    /// behavior). Interactive front-ends set this — a browsable view
+    /// doesn't need a thousand retained points per stream.
+    pub rollup_series_max_cap: Option<usize>,
     /// 10.2/D11 bounding knobs for the unknown-occurrence registry.
     pub unknown: UnknownRegistryConfig,
 }
@@ -68,6 +75,7 @@ impl Default for AggregatorConfig {
             eviction: EvictionPolicy::None,
             sink: None,
             rollup_series_default_cap: 1024,
+            rollup_series_max_cap: None,
             unknown: UnknownRegistryConfig::default(),
         }
     }
@@ -238,7 +246,11 @@ pub struct Aggregator {
     engine: Arc<Engine>,
     config: AggregatorConfig,
     slots: Vec<Slot>,
-    index: DetHashMap<(Option<StreamId>, ProtocolName, FlowKey), StreamId>,
+    /// Lookup index, keyed on a deterministic hash of the flow key
+    /// instead of a second full copy (12.2); a hit compares the
+    /// stream's own key, so hash collisions cost a probe, never a
+    /// misattribution.
+    index: DetHashMap<(Option<StreamId>, ProtocolName, u64), SmallVec<[StreamId; 1]>>,
     roots: Vec<StreamId>,
     totals: Totals,
     /// Packet-time clock: max seen timestamp (05.6 determinism).
@@ -258,6 +270,13 @@ pub struct Aggregator {
     /// push time; a popped entry whose stream has a later actual deadline
     /// is re-pushed, making the sweep O(evicted), not O(streams).
     expiry: BinaryHeap<Reverse<(SystemTime, u32, u32)>>,
+    /// Lazy LRU min-heap (12.2): `(last_seen, created_seq, index,
+    /// generation)` — the D2 hard cap's candidate order, same lazy
+    /// discipline as `expiry` (stale entries re-pushed with accurate
+    /// values, non-leaves discarded and re-armed by their last child's
+    /// eviction), so `enforce_max_streams` is O(log n) amortized per
+    /// eviction instead of a full scan.
+    lru: BinaryHeap<Reverse<(SystemTime, u64, u32, u32)>>,
     /// Recyclable slot indices (generation already bumped at evict).
     free: Vec<u32>,
     live_count: usize,
@@ -281,6 +300,7 @@ impl Aggregator {
             live_per_protocol: DetHashMap::default(),
             live_bytes_per_protocol: DetHashMap::default(),
             expiry: BinaryHeap::new(),
+            lru: BinaryHeap::new(),
             free: Vec::new(),
             live_count: 0,
             unknowns: UnknownRegistry::new(),
@@ -298,6 +318,8 @@ impl Aggregator {
 
         // Amortized timeout sweep (05.6): packet time only, no wall clock.
         self.sweep();
+        // Amortized LRU-heap debris bound (12.2); O(1) when under limit.
+        self.compact_lru();
 
         // Local handle so plugin/identity borrows don't pin `self`.
         let engine = Arc::clone(&self.engine);
@@ -359,7 +381,8 @@ impl Aggregator {
                     stream.close_eligible = eligible;
                 }
 
-                stream.rollups.apply(&layer.fields, ts, dir);
+                let base = stream.first_seen;
+                stream.rollups.apply(&layer.fields, base, ts, dir);
             }
             // The linger deadline can undercut the standing idle entry, so
             // arm it eagerly; the lazy heap discards stale entries on pop.
@@ -390,6 +413,15 @@ impl Aggregator {
         self.enforce_max_streams();
     }
 
+    /// Deterministic flow-key digest for the lookup index (12.2):
+    /// `DefaultHasher` from `BuildHasherDefault` has fixed keys, so the
+    /// digest is stable across runs (PRD §7).
+    fn key_hash(key: &FlowKey) -> u64 {
+        let mut hasher = DefaultHasher::default();
+        key.hash(&mut hasher);
+        hasher.finish()
+    }
+
     fn get_or_insert(
         &mut self,
         parent: Option<StreamId>,
@@ -400,8 +432,13 @@ impl Aggregator {
         ts: SystemTime,
     ) -> StreamId {
         let protocol = layer.protocol;
-        if let Some(&id) = self.index.get(&(parent, protocol, key.clone())) {
-            return id;
+        let key_hash = Self::key_hash(&key);
+        if let Some(bucket) = self.index.get(&(parent, protocol, key_hash)) {
+            for &id in bucket {
+                if self.get(id).is_some_and(|s| s.key == key) {
+                    return id;
+                }
+            }
         }
 
         // Decode the key-named endpoint fields for display.
@@ -425,10 +462,11 @@ impl Aggregator {
             None => (u32::try_from(self.slots.len()).unwrap_or(u32::MAX), 0),
         };
         let id = StreamId { index, generation };
+        let created_seq = self.next_seq;
         let stream = Stream {
             id,
             protocol,
-            key: key.clone(),
+            key,
             key_fields,
             parent,
             children: Vec::new(),
@@ -438,11 +476,15 @@ impl Aggregator {
             stats: [DirStats::default(); 2],
             opaque_bytes: 0,
             state: identity.lifecycle.map(|l| l.initial),
-            rollups: RollupSet::new(identity.rollups, self.config.rollup_series_default_cap),
+            rollups: RollupSet::new(
+                identity.rollups,
+                self.config.rollup_series_default_cap,
+                self.config.rollup_series_max_cap,
+            ),
             closed: None,
             close_eligible: false,
             close_eligible_since: None,
-            created_seq: self.next_seq,
+            created_seq,
         };
         self.next_seq += 1;
         self.totals.streams_created += 1;
@@ -456,7 +498,10 @@ impl Aggregator {
                 stream: Some(Arc::new(stream)),
             }),
         }
-        self.index.insert((parent, protocol, key), id);
+        self.index
+            .entry((parent, protocol, key_hash))
+            .or_default()
+            .push(id);
 
         match parent.and_then(|p| self.get_mut(p)) {
             Some(parent_stream) => parent_stream.children.push(id),
@@ -465,6 +510,8 @@ impl Aggregator {
         if let EvictionPolicy::Live { idle_timeout, .. } = self.config.eviction {
             self.expiry
                 .push(Reverse((ts + idle_timeout, id.index, id.generation)));
+            self.lru
+                .push(Reverse((ts, created_seq, id.index, id.generation)));
         }
         id
     }
@@ -528,22 +575,49 @@ impl Aggregator {
 
     /// D2's hard cap: while over `max_streams`, evict the
     /// least-recently-updated leaf (creation order breaks ties
-    /// deterministically).
+    /// deterministically). Candidates come from the lazy `lru` heap
+    /// (12.2): a popped entry with stale ordering values is re-pushed
+    /// with the stream's actual ones, dead and non-leaf entries are
+    /// discarded (a stream is re-armed by its last child's eviction), so
+    /// the pick is O(log n) amortized — never a scan of the live set.
     fn enforce_max_streams(&mut self) {
         let EvictionPolicy::Live { max_streams, .. } = self.config.eviction else {
             return;
         };
         while self.live_count > max_streams {
-            let lru = self
-                .streams()
-                .filter(|s| s.children.is_empty())
-                .min_by_key(|s| (s.last_seen, s.created_seq))
-                .map(|s| s.id);
-            let Some(id) = lru else {
-                return; // no leaves — cannot shrink further
+            let Some(Reverse((entry_seen, entry_seq, index, generation))) = self.lru.pop() else {
+                return; // no leaf candidates — cannot shrink further
             };
+            let id = StreamId { index, generation };
+            let Some(stream) = self.get(id) else {
+                continue; // evicted or recycled since this entry was pushed
+            };
+            if !stream.children.is_empty() {
+                continue; // not a leaf: re-armed when its last child goes
+            }
+            let actual = (stream.last_seen, stream.created_seq);
+            if actual != (entry_seen, entry_seq) {
+                self.lru
+                    .push(Reverse((actual.0, actual.1, index, generation)));
+                continue;
+            }
             self.evict(id, CloseReason::LruEvicted);
         }
+    }
+
+    /// Bounds the lazy LRU heap (12.2): discarded-entry debris (dead,
+    /// non-leaf, superseded-stale) accumulates only until the heap
+    /// doubles past the live set, then one O(live) rebuild from the
+    /// current leaves clears it — amortized O(1) per ingest.
+    fn compact_lru(&mut self) {
+        if self.lru.len() <= 2 * self.live_count + 1024 {
+            return;
+        }
+        self.lru = self
+            .streams()
+            .filter(|s| s.children.is_empty())
+            .map(|s| Reverse((s.last_seen, s.created_seq, s.id.index, s.id.generation)))
+            .collect();
     }
 
     /// Removes one live leaf: index entry gone (recurrence of the key
@@ -572,17 +646,33 @@ impl Aggregator {
         }
         let mut stream = Arc::unwrap_or_clone(shared);
 
-        self.index
-            .remove(&(stream.parent, stream.protocol, stream.key.clone()));
+        let bucket_key = (stream.parent, stream.protocol, Self::key_hash(&stream.key));
+        if let Some(bucket) = self.index.get_mut(&bucket_key) {
+            bucket.retain(|c| *c != id);
+            if bucket.is_empty() {
+                self.index.remove(&bucket_key);
+            }
+        }
         match stream.parent {
             Some(parent_id) => {
                 if let Some(parent) = self.get_mut(parent_id) {
                     parent.children.retain(|c| *c != id);
                 }
-                // The parent may have just become an evictable leaf.
+                // The parent may have just become an evictable leaf:
+                // re-arm it for expiry and as an LRU candidate (its
+                // heap entries may have been discarded while it had
+                // children, 12.2).
                 if let Some(deadline) = self.deadline_of(parent_id) {
                     self.expiry
                         .push(Reverse((deadline, parent_id.index, parent_id.generation)));
+                }
+                if let Some(parent) = self.get(parent_id) {
+                    self.lru.push(Reverse((
+                        parent.last_seen,
+                        parent.created_seq,
+                        parent_id.index,
+                        parent_id.generation,
+                    )));
                 }
             }
             None => self.roots.retain(|r| *r != id),
@@ -1036,6 +1126,174 @@ mod tests {
             generation: 7,
         };
         assert!(agg.get(bogus).is_none());
+    }
+
+    // 12.2: a stale LRU-heap entry (stream touched after arming) must
+    // not get its stream evicted ahead of a genuinely colder one.
+    #[test]
+    fn lru_heap_repushes_stale_entries_instead_of_evicting() {
+        let engine = engine();
+        let mut agg = Aggregator::new(
+            &engine,
+            AggregatorConfig {
+                eviction: EvictionPolicy::Live {
+                    idle_timeout: Duration::from_secs(3600),
+                    close_linger: Duration::from_secs(3600),
+                    max_streams: 2,
+                },
+                ..AggregatorConfig::default()
+            },
+        );
+        agg.ingest(&packet(vec![layer("eth", 1, 2)], 60, 0, 0)); // A @0
+        agg.ingest(&packet(vec![layer("eth", 3, 4)], 60, 0, 1)); // B @1
+        agg.ingest(&packet(vec![layer("eth", 1, 2)], 60, 0, 2)); // A touched @2
+        agg.ingest(&packet(vec![layer("eth", 5, 6)], 60, 0, 3)); // C @3 → over cap
+
+        let live: Vec<u64> = {
+            let mut seqs: Vec<u64> = agg.streams().map(|s| s.created_seq).collect();
+            seqs.sort_unstable();
+            seqs
+        };
+        assert_eq!(live, [0, 2], "B (coldest, seq 1) evicted — not A");
+    }
+
+    // 12.2: a parent whose LRU entry was discarded while it had children
+    // is re-armed by its last child's eviction, staying LRU-evictable.
+    #[test]
+    fn lru_heap_rearms_parents_that_become_leaves() {
+        let engine = engine();
+        let mut agg = Aggregator::new(
+            &engine,
+            AggregatorConfig {
+                eviction: EvictionPolicy::Live {
+                    idle_timeout: Duration::from_secs(3600),
+                    close_linger: Duration::from_secs(3600),
+                    max_streams: 1,
+                },
+                ..AggregatorConfig::default()
+            },
+        );
+        // Parent+child @0: over cap → the ip leaf goes, eth survives as
+        // a fresh leaf (its own heap entry was popped and discarded as a
+        // non-leaf during that same enforcement pass).
+        agg.ingest(&packet(
+            vec![layer("eth", 1, 2), layer("ip", 10, 20)],
+            60,
+            0,
+            0,
+        ));
+        assert_eq!(agg.len(), 1);
+        assert_eq!(agg.streams().next().map(|s| s.protocol), Some("eth"));
+
+        // A younger root @5 → the re-armed eth parent is the LRU leaf.
+        agg.ingest(&packet(vec![layer("eth", 3, 4)], 60, 0, 5));
+        assert_eq!(agg.len(), 1);
+        let survivor = agg.streams().next().expect("one stream");
+        assert_eq!(
+            (survivor.protocol, survivor.last_seen),
+            ("eth", SystemTime::UNIX_EPOCH + Duration::from_millis(5)),
+            "the old parent was evicted via its re-armed entry"
+        );
+    }
+
+    // 12.2: randomized oracle for the lazy LRU heap — every LruEvicted
+    // stream must have been the (last_seen, created_seq) minimum among
+    // live leaves at its eviction, exactly the reference scan's pick.
+    #[test]
+    fn lru_heap_always_evicts_the_reference_scans_pick() {
+        let engine = engine();
+        let log: std::sync::Arc<std::sync::Mutex<Vec<(SystemTime, u64)>>> =
+            std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let sink_log = std::sync::Arc::clone(&log);
+        let mut agg = Aggregator::new(
+            &engine,
+            AggregatorConfig {
+                eviction: EvictionPolicy::Live {
+                    idle_timeout: Duration::from_secs(3600), // LRU cap only
+                    close_linger: Duration::from_secs(3600),
+                    max_streams: 5,
+                },
+                sink: Some(Box::new(move |evicted| {
+                    assert_eq!(evicted.reason, CloseReason::LruEvicted);
+                    if let Ok(mut log) = sink_log.lock() {
+                        log.push((evicted.stream.last_seen, evicted.stream.created_seq));
+                    }
+                })),
+                ..AggregatorConfig::default()
+            },
+        );
+
+        let mut rng: u64 = 0x082e_fa98_ec4e_6c89;
+        let mut checked = 0;
+        for i in 0..400u64 {
+            rng = rng
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            // 12 distinct single-layer keys over a cap of 5: constant
+            // churn, strictly increasing packet time. One ingest touches
+            // one stream, so post-ingest live state is eviction-time
+            // state.
+            let pair = (rng >> 33) % 12;
+            agg.ingest(&packet(
+                vec![layer("eth", 100 + pair, 200 + pair)],
+                60,
+                0,
+                i,
+            ));
+            assert!(agg.len() <= 5, "cap holds at packet {i}");
+
+            let evicted: Vec<(SystemTime, u64)> = log
+                .lock()
+                .map(|mut l| l.drain(..).collect())
+                .unwrap_or_default();
+            for e in evicted {
+                checked += 1;
+                for s in agg.streams() {
+                    assert!(
+                        e < (s.last_seen, s.created_seq),
+                        "packet {i}: evicted {e:?} was not the LRU minimum"
+                    );
+                }
+            }
+        }
+        assert!(checked > 100, "churn actually exercised the cap");
+    }
+
+    // 12.2: the index keys on a key digest; two different keys forced
+    // into one bucket still resolve to their own streams (full-key
+    // compare on probe), never to each other's.
+    #[test]
+    fn index_hash_collisions_probe_by_full_key() {
+        let mut agg = aggregator();
+        agg.ingest(&packet(vec![layer("eth", 1, 2)], 60, 0, 0));
+        agg.ingest(&packet(vec![layer("eth", 3, 4)], 60, 0, 1));
+
+        // Force the two entries into one bucket, simulating a digest
+        // collision (real DefaultHasher collisions aren't constructible
+        // on demand; the probe path is what matters).
+        let buckets: Vec<_> = agg.index.drain().collect();
+        let merged: SmallVec<[StreamId; 2]> = buckets
+            .iter()
+            .flat_map(|(_, ids)| ids.iter().copied())
+            .collect();
+        let mut merged: SmallVec<[StreamId; 1]> = merged.into_iter().collect();
+        merged.sort_by_key(|id| id.index);
+        for (bkey, _) in buckets {
+            agg.index.insert(bkey, merged.clone());
+        }
+
+        // Recurrence of each key must update its own stream, not the
+        // bucket-mate, and create nothing new.
+        agg.ingest(&packet(vec![layer("eth", 2, 1)], 60, 0, 2));
+        agg.ingest(&packet(vec![layer("eth", 4, 3)], 60, 0, 3));
+        assert_eq!(agg.len(), 2, "no phantom stream from a collision");
+        for s in agg.streams() {
+            assert_eq!(
+                s.stats[0].packets + s.stats[1].packets,
+                2,
+                "each key hit its own stream"
+            );
+        }
     }
 
     // 12.1 (D17.1): consecutive snapshots share untouched records

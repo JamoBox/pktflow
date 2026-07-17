@@ -3,6 +3,8 @@
 //! against `pktflow streams --format json` reads `pktflow serve`'s API
 //! unchanged.
 
+use std::time::SystemTime;
+
 use pktflow_core::PacketDirection;
 use pktflow_flows::{CloseReason, Rollup, Stream, StreamId};
 use serde_json::{json, Value as Json};
@@ -93,7 +95,9 @@ pub fn endpoint_json(s: &Stream) -> (Json, Json, Json) {
 }
 
 /// One rollup, D8-shaped: `{"kind": ..., ...}` per [`Rollup`] variant.
-pub fn rollup_json(protocol: &str, field: &str, rollup: &Rollup) -> Json {
+/// `base` is the owning stream's `first_seen` — series points store
+/// timestamps as offsets from it (12.2).
+pub fn rollup_json(base: SystemTime, protocol: &str, field: &str, rollup: &Rollup) -> Json {
     match rollup {
         Rollup::Accumulate {
             values,
@@ -125,7 +129,7 @@ pub fn rollup_json(protocol: &str, field: &str, rollup: &Rollup) -> Json {
                 .iter()
                 .map(|p| {
                     json!({
-                        "ts": rfc3339(p.ts),
+                        "ts": rfc3339(p.ts(base)),
                         "dir": direction_json(p.dir),
                         "value": field_value_str(protocol, field, &p.value),
                     })
@@ -153,7 +157,12 @@ pub fn stream_record(
     let rollups: serde_json::Map<String, Json> = s
         .rollups
         .iter()
-        .map(|(field, rollup)| ((*field).to_string(), rollup_json(s.protocol, field, rollup)))
+        .map(|(field, rollup)| {
+            (
+                (*field).to_string(),
+                rollup_json(s.first_seen, s.protocol, field, rollup),
+            )
+        })
         .collect();
 
     let mut m = serde_json::Map::new();

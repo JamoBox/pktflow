@@ -191,6 +191,10 @@ pub struct SharedArgs {
     /// Live mode: hard cap on concurrently tracked streams
     #[arg(long, value_name = "N")]
     pub max_streams: Option<usize>,
+    /// Clamp per-stream series rollups to N points (0 = unclamped).
+    /// Default: unclamped for batch runs; 128 under `tui`/`serve`.
+    #[arg(long, value_name = "N")]
+    pub series_cap: Option<usize>,
     /// Force the first layer to a named plugin instead of routing by
     /// link type — for protocols reached only by direct-by-name
     /// encapsulation (06.1's tutorial "pktt" space) or a raw capture of
@@ -212,6 +216,16 @@ impl SharedArgs {
 
     pub fn max_streams(&self) -> usize {
         self.max_streams.unwrap_or(1_000_000)
+    }
+
+    /// The 12.2 series clamp: `--series-cap 0` = explicitly unclamped;
+    /// unset = unclamped here (the hub pipelines apply their own
+    /// interactive default before this is read).
+    pub fn series_max_cap(&self) -> Option<usize> {
+        match self.series_cap {
+            Some(0) => None,
+            other => other,
+        }
     }
 }
 
