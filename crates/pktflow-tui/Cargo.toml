@@ -11,5 +11,9 @@ pktflow-flows.workspace = true
 pktflow-view.workspace = true
 ratatui.workspace = true
 
+[dev-dependencies]
+pktflow-plugins.workspace = true
+pktflow-testkit.workspace = true
+
 [lints]
 workspace = true

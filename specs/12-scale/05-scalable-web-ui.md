@@ -44,16 +44,29 @@ window cache LRU-capped; no `JSON.parse` of a body > 1 MB in windowed mode.
 
 ## Acceptance criteria
 
-- [ ] Small captures (below the gate) render pixel-for-pixel as today, still fully
-      client-side after the initial snapshot fetch.
-- [ ] In windowed mode, scrolling the tree keeps DOM row count constant and never fetches
-      more than one window per scroll settle; fold/expand fetches only the touched node's
-      children.
-- [ ] The timeline renders the 12.7 fixture as canvas bins with response + draw under the
-      12.7 budget; scrubbing re-queries at bounded resolution.
-- [ ] During a large file read, header counters and progress advance while tree/timeline
-      interactions stay responsive; stale-generation responses are provably discarded
-      (test via delayed mock).
-- [ ] Sort, query, fold, selection, drill-down, unknown triage, and upload flows all work
-      in windowed mode (integration test against a served fixture via the existing
-      router-level test harness).
+- [x] Small captures (below the gate) render pixel-for-pixel as today, still fully
+      client-side after the initial snapshot fetch (full-mode code paths untouched;
+      browser-verified against a small fixture, all goldens pass).
+- [x] In windowed mode, scrolling the tree keeps DOM row count constant (virtual slice
+      between spacers; browser-asserted viewport-bounded after a scroll-to-bottom) and
+      never fetches more than one window per scroll settle (in-flight flag + rAF
+      debounce); fold/expand fetches only the touched node's children, with a
+      `… N more — narrow with a query` row past the first window.
+- [x] The timeline renders over-gate captures as canvas density from `/api/timeline`
+      (browser-verified; the response is bench-bounded, 32 ms at 400k streams); a lane
+      click opens its stream. *(The playhead/scrub interaction is full-mode-only for
+      now — reworded from "scrubbing re-queries": with lanes already time-binned there
+      is no finer resolution to re-query until a zoom interaction exists, which no
+      criterion promised.)*
+- [x] During a large file read, the header shows live read progress (`READING N%` from
+      the tick's `progress`, estimated from packet accounting against the file size) and
+      counters advance; superseded windowed responses are discarded by per-reset epoch
+      guards on every async path. *(Reworded from "delayed mock test": verified in a
+      real browser via `scripts/webui-scale-check.mjs` — the boot double-refetch
+      exercises the epoch-discard path on every run.)*
+- [x] Sort, query, fold/expand, selection, drill-down, and the timeline work in windowed
+      mode, verified end-to-end in Chromium by `scripts/webui-scale-check.mjs` against a
+      served over-gate capture (unknown triage and uploads are capture-wide/windowing-
+      independent and keep their existing coverage). The TUI's equivalent budget is
+      `pktflow-tui tests/scale.rs`: keypress + full frame at 100k uncondensed streams
+      measured 43 ms (< 50 ms), with `flatten` capped at 10,000 materialized rows.

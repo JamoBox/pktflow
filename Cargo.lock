@@ -1537,6 +1537,8 @@ version = "0.1.0"
 dependencies = [
  "pktflow-core",
  "pktflow-flows",
+ "pktflow-plugins",
+ "pktflow-testkit",
  "pktflow-view",
  "ratatui",
 ]

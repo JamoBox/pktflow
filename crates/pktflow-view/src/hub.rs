@@ -20,6 +20,10 @@ pub struct SnapshotHub {
     error: Mutex<Option<String>>,
     source: String,
     mode: &'static str,
+    /// Read progress over a file source (12.5): bytes consumed and the
+    /// file's size. Total 0 = no progress to report (live capture).
+    progress_read: AtomicU64,
+    progress_total: AtomicU64,
 }
 
 /// The pre-first-publish snapshot: zero of everything.
@@ -58,7 +62,26 @@ impl SnapshotHub {
             error: Mutex::new(None),
             source,
             mode,
+            progress_read: AtomicU64::new(0),
+            progress_total: AtomicU64::new(0),
         }
+    }
+
+    /// Writer side (12.5): how far through the file the read is.
+    /// `total` is set once at open; `read` advances with publishes.
+    pub fn set_progress(&self, read: u64, total: u64) {
+        self.progress_read.store(read, Ordering::Release);
+        self.progress_total.store(total, Ordering::Release);
+    }
+
+    /// Reader side: `(bytes_read, bytes_total)`; `None` until a total is
+    /// known (live captures never report one).
+    pub fn progress(&self) -> Option<(u64, u64)> {
+        let total = self.progress_total.load(Ordering::Acquire);
+        (total > 0).then(|| {
+            let read = self.progress_read.load(Ordering::Acquire).min(total);
+            (read, total)
+        })
     }
 
     /// Writer side: replace the published snapshot and bump the

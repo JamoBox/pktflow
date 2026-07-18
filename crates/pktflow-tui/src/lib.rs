@@ -8,7 +8,7 @@
 
 pub mod app;
 pub mod tree;
-mod ui;
+pub mod ui;
 
 use std::io;
 use std::sync::Arc;

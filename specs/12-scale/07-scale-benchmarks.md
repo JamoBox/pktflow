@@ -65,5 +65,9 @@ vs. hub, condensed vs. not.
       measurement — VmHWM is process-wide) and fails on a 25 % regression over the
       recorded budget (1,625,000 kB; measured 1,299,492 kB, pre-task baseline
       2,606,092 kB).
-- [ ] Every task-12 DoD number (README) is traceable to one of these benches or tests by
-      name.
+- [x] Every task-12 DoD number (README) is traceable to a bench or test by name:
+      API < 100 ms/< 1 MB → `scale_window_query` + the windowed-endpoint tests; TUI
+      keypress < 50 ms → `pktflow-tui tests/scale.rs`; publication < 10 % and RSS < 2×
+      batch → the end-to-end table and RSS ceilings in `benches/README.md`; browser
+      viewport-bounding → `scripts/webui-scale-check.mjs`; determinism → the fixture
+      determinism tests.

@@ -172,6 +172,15 @@ condensation on by default:
   condensed fixture): flat mid-capture page 1.2 ms; queried page (cached evaluation,
   membership scan) 33 ms; `/api/timeline` at 800 bins × 64 lanes 32 ms. All interactions
   land far under the 100 ms DoD budget with window-bounded bodies.
+- TUI keypress budget (12.5, `pktflow-tui tests/scale.rs`, `#[ignore]`d release tier):
+  keypress + full frame at 100k uncondensed streams = **43 ms** (< 50 ms DoD), with
+  `flatten` capped at 10,000 materialized rows. Uncapped it measured 350 ms — the cap is
+  what makes the budget hold, not the index alone.
+- Browser (12.5, `scripts/webui-scale-check.mjs`, manual/scheduled tier — needs
+  `playwright-core` + the preinstalled Chromium): windowed tree pages/expands/queries,
+  timeline draws as canvas density, and the DOM stays viewport-bounded after
+  scroll-to-bottom over a 100k-stream capture; full mode re-verified against a small
+  fixture.
 - Unknown-payload diagnostics — every fan-out payload is opaque — now dominates this
   shape (65.7 of 67.4 s vs 21.7 s without). Its per-occurrence probing is the next
   candidate for a bounding knob; out of task-12 scope, noted for a future task.

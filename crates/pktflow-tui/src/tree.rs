@@ -57,12 +57,18 @@ fn sort_siblings(streams: &mut [&Stream], order: Sort) {
     }
 }
 
+/// Cap on the rows a single flatten materializes (12.5): a keypress
+/// must stay interactive whatever the capture holds, and no terminal
+/// browses ten thousand rows anyway — narrow with a query instead.
+pub const MAX_ROWS: usize = 10_000;
+
 /// Flattens the hierarchy into visible rows. With no query, a collapsed
 /// node hides its subtree. With a query, rows are the matches plus every
 /// ancestor of a match (auto-expanded so results are always reachable).
 /// Resolution and query evaluation come from the per-snapshot
 /// [`SnapshotIndex`] (12.4): a keypress re-flattens, but never rebuilds
-/// an id map or re-evaluates the filter.
+/// an id map or re-evaluates the filter — and never materializes more
+/// than [`MAX_ROWS`] rows.
 pub fn flatten<'a>(
     index: &'a SnapshotIndex,
     sort: Sort,
@@ -86,6 +92,9 @@ pub fn flatten<'a>(
         .collect();
     sort_siblings(&mut roots, sort);
     for root in roots {
+        if rows.len() >= MAX_ROWS {
+            break;
+        }
         push_subtree(root, index, "", sort, collapsed, visible, &mut rows);
     }
     rows
@@ -100,6 +109,9 @@ fn push_subtree<'a>(
     visible: Option<&HashSet<u64>>,
     rows: &mut Vec<TreeRow<'a>>,
 ) {
+    if rows.len() >= MAX_ROWS {
+        return;
+    }
     let mut children: Vec<&Stream> = s
         .children
         .iter()
@@ -126,6 +138,9 @@ fn push_subtree<'a>(
     let bare = prefix.replace("├─ ", "│  ").replace("└─ ", "   ");
     let count = children.len();
     for (i, child) in children.into_iter().enumerate() {
+        if rows.len() >= MAX_ROWS {
+            return;
+        }
         let last = i + 1 == count;
         let branch = if last { "└─ " } else { "├─ " };
         push_subtree(

@@ -383,6 +383,16 @@ pub fn spawn_hub_pipeline(
     if shared.series_cap.is_none() {
         shared.series_cap = Some(HUB_SERIES_CLAMP);
     }
+    // Read progress (12.5): the file's size is the denominator; consumed
+    // bytes are estimated from packet accounting (classic pcap framing:
+    // a 24-byte header plus 16 bytes per record) — an indicator, clamped
+    // by the hub, not an exact offset.
+    let progress_total = shared
+        .input
+        .read
+        .as_ref()
+        .and_then(|p| std::fs::metadata(p).ok())
+        .map_or(0, |m| m.len());
     std::thread::spawn(move || {
         let publish_hub = Arc::clone(&hub);
         let mut next_due: Option<Instant> = None;
@@ -398,6 +408,11 @@ pub fn spawn_hub_pipeline(
                 // (12.1, D17.2) so big captures stay ingest-bound.
                 let now = Instant::now();
                 if next_due.is_none_or(|due| now >= due) {
+                    if progress_total > 0 {
+                        let totals = agg.totals();
+                        publish_hub
+                            .set_progress(24 + totals.bytes + 16 * totals.packets, progress_total);
+                    }
                     publish_hub.publish(agg.snapshot());
                     let cost = now.elapsed();
                     next_due = Some(now + PUBLISH_INTERVAL.max(cost * ADAPTIVE_PUBLISH_FACTOR));
@@ -408,6 +423,9 @@ pub fn spawn_hub_pipeline(
             Ok(outcome) => {
                 if let Some(snapshot) = outcome.snapshot {
                     hub.publish(snapshot);
+                }
+                if progress_total > 0 {
+                    hub.set_progress(progress_total, progress_total);
                 }
                 hub.mark_finished();
                 Ok(())

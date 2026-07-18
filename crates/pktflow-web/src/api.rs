@@ -53,6 +53,11 @@ pub fn tick_json(hub: &SnapshotHub) -> Json {
         "packets": snap.summary.packets,
         "bytes": snap.summary.bytes,
         "streams_live": snap.summary.streams_live,
+        // 12.5: `{read, total}` over a file source, null otherwise.
+        "progress": hub.progress().map(|(read, total)| json!({
+            "read": read,
+            "total": total,
+        })),
     })
 }
 
