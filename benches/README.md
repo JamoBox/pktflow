@@ -176,7 +176,9 @@ condensation on by default:
   condensed fixture): flat mid-capture page 1.2 ms; queried page (cached evaluation,
   membership scan) 33 ms; `/api/timeline` at 800 bins × 64 lanes 32 ms. All interactions
   land far under the 100 ms DoD budget with window-bounded bodies.
-- TUI keypress budget (12.5, `pktflow-tui tests/scale.rs`, `#[ignore]`d release tier):
+- TUI keypress budget (12.5, `pktflow-tui tests/scale.rs`, `#[ignore]`d release tier;
+  the assertion is armed by `PKTFLOW_ASSERT_TUI_BUDGET=1` in the bench workflow, same
+  pattern as the RSS ceilings — debug-build runs measure without gating):
   keypress + full frame at 100k uncondensed streams = **43 ms** (< 50 ms DoD), with
   `flatten` capped at 10,000 materialized rows. Uncapped it measured 350 ms — the cap is
   what makes the budget hold, not the index alone.

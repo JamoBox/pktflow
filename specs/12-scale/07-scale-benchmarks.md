@@ -70,7 +70,9 @@ vs. hub, condensed vs. not.
       1,299,492 kB pre-condensation, 2,606,092 kB pre-task).
 - [x] Every task-12 DoD number (README) is traceable to a bench or test by name:
       API < 100 ms/< 1 MB → `scale_window_query` + the windowed-endpoint tests; TUI
-      keypress < 50 ms → `pktflow-tui tests/scale.rs`; publication < 10 % and RSS < 2×
+      keypress < 50 ms → `pktflow-tui tests/scale.rs` (assertion armed by
+      `PKTFLOW_ASSERT_TUI_BUDGET` in the bench workflow's release run, like the RSS
+      ceilings — debug-tier runs measure and report only); publication < 10 % and RSS < 2×
       batch → the end-to-end table and RSS ceilings in `benches/README.md`; browser
       viewport-bounding → `scripts/webui-scale-check.mjs`; determinism → the fixture
       determinism tests.

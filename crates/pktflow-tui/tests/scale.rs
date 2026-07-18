@@ -3,6 +3,10 @@
 //! even with the store uncondensed. `#[ignore]`d like the RSS ceilings —
 //! a timing assertion belongs to the release-mode scheduled/manual tier
 //! (`cargo test -p pktflow-tui --release --test scale -- --ignored`).
+//! Like those ceilings, the assertion is armed by an env var
+//! (`PKTFLOW_ASSERT_TUI_BUDGET=1`, set by the bench workflow): the
+//! Docker job's blanket `--include-ignored` run is a *debug* build,
+//! where a release-mode wall-clock budget only measures the profile.
 
 use std::sync::Arc;
 use std::time::Instant;
@@ -76,7 +80,11 @@ fn keypress_and_frame_stay_interactive_at_scale() {
             .expect("draw");
     }
     let per_round = started.elapsed() / rounds;
-    println!("keypress+frame: {per_round:?} per round");
+    println!("keypress+frame: {per_round:?} per round (budget 50 ms)");
+    if std::env::var_os("PKTFLOW_ASSERT_TUI_BUDGET").is_none() {
+        println!("PKTFLOW_ASSERT_TUI_BUDGET unset — measured, not gated");
+        return;
+    }
     assert!(
         per_round.as_millis() < 50,
         "keypress+frame took {per_round:?} (budget 50 ms)"
