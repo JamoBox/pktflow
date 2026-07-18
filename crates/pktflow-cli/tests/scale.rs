@@ -93,11 +93,18 @@ fn fan_out_aggregates_to_the_expected_stream_shape() {
 
 mod support;
 
+fn windows_skips() -> bool {
+    cfg!(windows) // pktflow-capture needs the Npcap runtime at process start; CI installs only the SDK (see json_output.rs).
+}
+
 /// D16 end-to-end through the real binary: the tree shows a condensed
 /// row with its member marker, the summary reports the fold, the query
 /// flag selects it — and `--no-condense` reproduces per-flow output.
 #[test]
 fn condensation_flags_work_through_the_binary() {
+    if windows_skips() {
+        return;
+    }
     let spec = FanOutSpec {
         anchors: 1,
         flows_per_anchor: 10,
