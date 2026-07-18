@@ -62,9 +62,12 @@ vs. hub, condensed vs. not.
       LRU-churn, `condensation`, and `window_query` groups); budgets and baselines are
       recorded in `benches/README.md`.
 - [x] The RSS ceiling test runs in the scheduled bench workflow (one process per
-      measurement — VmHWM is process-wide) and fails on a 25 % regression over the
-      recorded budget (1,625,000 kB; measured 1,299,492 kB, pre-task baseline
-      2,606,092 kB).
+      measurement — VmHWM is process-wide, and only that workflow arms the assertion via
+      `PKTFLOW_ASSERT_RSS`; the Docker job's blanket `--include-ignored` run measures and
+      reports without gating, since its tests share a process) and fails past the
+      recorded budget (100,000 kB — deliberately machine-tolerant; the guarded
+      regression is the return toward per-flow behavior: 35,876 kB measured condensed,
+      1,299,492 kB pre-condensation, 2,606,092 kB pre-task).
 - [x] Every task-12 DoD number (README) is traceable to a bench or test by name:
       API < 100 ms/< 1 MB → `scale_window_query` + the windowed-endpoint tests; TUI
       keypress < 50 ms → `pktflow-tui tests/scale.rs`; publication < 10 % and RSS < 2×

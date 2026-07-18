@@ -113,8 +113,12 @@ flows_per_anchor: 125_000, packets_per_flow: 3, payload_len: 32, seed: 0xC0FF_EE
 - 12.2's RSS criterion: hub-style peak improved **2.0×** over the pre-task baseline.
 - Task DoD "hub < 2× batch": **1.21×** — the COW snapshot's held copy adds ~230 MB at
   1M streams instead of the old full deep copy per publish.
-- The `#[ignore]`d budget test (`hub_scale_rss_stays_under_budget`) is pinned at
-  1,625,000 kB (measured + 25%); `.github/workflows/bench.yml` runs it per schedule.
+- The `#[ignore]`d budget test (`hub_scale_rss_stays_under_budget`) always measures and
+  reports; the assertion (budget 100,000 kB — machine-tolerant, guarding the return
+  toward per-flow behavior) arms only under `PKTFLOW_ASSERT_RSS=1`, which
+  `.github/workflows/bench.yml` sets while running each RSS test in its own process.
+  The Docker job's blanket `--include-ignored` run shares one process across both RSS
+  tests (VmHWM is process-wide), so there it reports without gating.
 
 ### `scale` bench (criterion)
 

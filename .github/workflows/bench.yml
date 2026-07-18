@@ -40,7 +40,11 @@ jobs:
           cargo bench -p pktflow-cli --bench scale 2>&1 | tee bench-logs/scale.log
       # One invocation per test: VmHWM is process-wide, so the RSS
       # measurements are meaningless if the tests share a process.
+      # PKTFLOW_ASSERT_RSS arms the budget assertion — only here, where
+      # the one-process-per-measurement contract holds.
       - name: Memory ceiling (12.7)
+        env:
+          PKTFLOW_ASSERT_RSS: "1"
         run: |
           cargo test -p pktflow-cli --release --test scale -- --ignored --exact hub_scale_rss_stays_under_budget --nocapture
           cargo test -p pktflow-cli --release --test scale -- --ignored --exact batch_scale_rss_reference --nocapture
