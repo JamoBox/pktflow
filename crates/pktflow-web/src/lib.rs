@@ -39,10 +39,10 @@ const INDEX_HTML: &str = include_str!("assets/index.html");
 /// enough that a tick rarely reports a stale generation twice.
 const TICK_INTERVAL: Duration = Duration::from_millis(500);
 
-/// Upload cap. Buffered in memory before hitting disk, so bounded well
-/// below "whatever the OS allows" — big enough for any capture worth
-/// browsing interactively.
-const MAX_UPLOAD_BYTES: usize = 512 * 1024 * 1024;
+/// Default upload cap (12.6). Uploads stream to disk one chunk at a
+/// time, so this bounds disk, not memory; `--max-upload-bytes`
+/// overrides (0 = unlimited).
+const DEFAULT_MAX_UPLOAD_BYTES: u64 = 8 * 1024 * 1024 * 1024;
 
 /// Starts a pipeline over an uploaded capture: `(display_name, path)` in,
 /// the new pipeline's hub out (or a message for the 500 response). The
@@ -59,7 +59,19 @@ pub struct WebState {
     /// The previous upload's temp file, deleted when replaced.
     last_upload: Mutex<Option<PathBuf>>,
     upload_seq: AtomicU64,
+    /// Distinguishes this state's temp files from any other `WebState`
+    /// in the same process (each starts `upload_seq` at 0).
+    upload_ns: u64,
+    /// Upload size cap in bytes; 0 = unlimited (12.6).
+    max_upload_bytes: u64,
+    /// The 12.4 view index, memoized per hub generation: whichever
+    /// request arrives first after a publish builds it; everyone else
+    /// shares the `Arc` (facets inside build lazily).
+    index_memo: Mutex<Option<(u64, Arc<pktflow_view::SnapshotIndex>)>>,
 }
+
+/// Process-wide `WebState` counter feeding `upload_ns`.
+static UPLOAD_NS: AtomicU64 = AtomicU64::new(0);
 
 impl WebState {
     /// Read-only serving (tests, embedders without a pipeline spawner).
@@ -69,7 +81,29 @@ impl WebState {
             on_upload: None,
             last_upload: Mutex::new(None),
             upload_seq: AtomicU64::new(0),
+            upload_ns: UPLOAD_NS.fetch_add(1, Ordering::Relaxed),
+            max_upload_bytes: DEFAULT_MAX_UPLOAD_BYTES,
+            index_memo: Mutex::new(None),
         }
+    }
+
+    /// The current snapshot's view index (12.4): one per generation,
+    /// shared across handlers.
+    pub fn index(&self) -> Arc<pktflow_view::SnapshotIndex> {
+        let hub = self.hub();
+        let generation = hub.generation();
+        if let Ok(guard) = self.index_memo.lock() {
+            if let Some((cached_gen, index)) = guard.as_ref() {
+                if *cached_gen == generation {
+                    return Arc::clone(index);
+                }
+            }
+        }
+        let index = Arc::new(pktflow_view::SnapshotIndex::new(hub.latest()));
+        if let Ok(mut guard) = self.index_memo.lock() {
+            *guard = Some((generation, Arc::clone(&index)));
+        }
+        index
     }
 
     /// Serving with uploads enabled.
@@ -78,6 +112,12 @@ impl WebState {
             on_upload: Some(spawner),
             ..Self::new(hub)
         }
+    }
+
+    /// Overrides the upload size cap (12.6); 0 = unlimited.
+    pub fn upload_cap(mut self, bytes: u64) -> Self {
+        self.max_upload_bytes = bytes;
+        self
     }
 
     /// The hub requests render from right now.
@@ -103,12 +143,18 @@ pub fn router(state: Arc<WebState>) -> Router {
         .route("/", get(index))
         .route("/api/meta", get(meta))
         .route("/api/snapshot", get(snapshot))
+        .route("/api/streams", get(streams))
+        .route("/api/timeline", get(timeline))
         .route("/api/stream/{id}", get(stream_detail))
         .route("/api/search", get(search))
         .route("/api/events", get(events))
         .route(
             "/api/upload",
-            post(upload).layer(DefaultBodyLimit::max(MAX_UPLOAD_BYTES)),
+            // The handler streams the body to disk and enforces the
+            // configured cap itself (bytes-written, cleanup on abort) —
+            // a framework-level limit here would just duplicate it with
+            // a worse failure mode (12.6).
+            post(upload).layer(DefaultBodyLimit::disable()),
         )
         .with_state(state)
 }
@@ -130,13 +176,29 @@ async fn meta(State(state): State<Arc<WebState>>) -> Json<serde_json::Value> {
 }
 
 async fn snapshot(State(state): State<Arc<WebState>>) -> Json<serde_json::Value> {
-    let mut doc = api::snapshot_json(&state.hub());
+    let mut doc = api::snapshot_json(&state.hub(), &state.index());
     doc["meta"]["uploads"] = serde_json::json!(state.on_upload.is_some());
     Json(doc)
 }
 
+/// `GET /api/streams` — one window of the forest (12.4).
+async fn streams(
+    State(state): State<Arc<WebState>>,
+    UrlQuery(params): UrlQuery<HashMap<String, String>>,
+) -> Json<serde_json::Value> {
+    Json(api::streams_json(&state.hub(), &state.index(), &params))
+}
+
+/// `GET /api/timeline` — bounded time×lane density (12.4).
+async fn timeline(
+    State(state): State<Arc<WebState>>,
+    UrlQuery(params): UrlQuery<HashMap<String, String>>,
+) -> Json<serde_json::Value> {
+    Json(api::timeline_json(&state.hub(), &state.index(), &params))
+}
+
 async fn stream_detail(State(state): State<Arc<WebState>>, Path(id): Path<u64>) -> Response {
-    match api::stream_json(&state.hub(), id) {
+    match api::stream_json(&state.index(), id) {
         Some(doc) => Json(doc).into_response(),
         None => (
             StatusCode::NOT_FOUND,
@@ -151,7 +213,7 @@ async fn search(
     UrlQuery(params): UrlQuery<HashMap<String, String>>,
 ) -> Json<serde_json::Value> {
     let q = params.get("q").map(String::as_str).unwrap_or("");
-    Json(api::search_json(&state.hub(), q))
+    Json(api::search_json(&state.hub(), &state.index(), q))
 }
 
 async fn events(
@@ -194,42 +256,99 @@ fn upload_err(status: StatusCode, msg: &str) -> Response {
     (status, Json(serde_json::json!({"error": msg}))).into_response()
 }
 
+/// Streams the rest of an upload body (plus the already-read `head`)
+/// into `path`, one chunk in memory at a time (12.6), enforcing `cap`
+/// bytes total (0 = unlimited). Any error means the caller must remove
+/// the partial file.
+async fn spill_upload(
+    stream: &mut (impl Stream<Item = Result<Bytes, axum::Error>> + Unpin),
+    head: &[u8],
+    path: &PathBuf,
+    cap: u64,
+) -> Result<(), (StatusCode, &'static str)> {
+    use tokio::io::AsyncWriteExt;
+    const STORE_FAILED: (StatusCode, &str) =
+        (StatusCode::INTERNAL_SERVER_ERROR, "could not store upload");
+    let over_cap = (
+        StatusCode::PAYLOAD_TOO_LARGE,
+        "upload exceeds the configured size cap",
+    );
+    let mut file = tokio::fs::File::create(path)
+        .await
+        .map_err(|_| STORE_FAILED)?;
+    let mut written = 0u64;
+    file.write_all(head).await.map_err(|_| STORE_FAILED)?;
+    written += head.len() as u64;
+    if cap > 0 && written > cap {
+        return Err(over_cap);
+    }
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk.map_err(|_| (StatusCode::BAD_REQUEST, "upload interrupted"))?;
+        written += chunk.len() as u64;
+        if cap > 0 && written > cap {
+            return Err(over_cap);
+        }
+        file.write_all(&chunk).await.map_err(|_| STORE_FAILED)?;
+    }
+    file.flush().await.map_err(|_| STORE_FAILED)
+}
+
 /// `POST /api/upload?name=FILE` with the raw capture bytes as the body:
-/// validate the magic, spill to a temp file, hand it to the embedder's
-/// spawner, and swap the served hub to the new pipeline's.
+/// validate the magic on the first bytes, stream the rest to a temp
+/// file in bounded memory (12.6), hand it to the embedder's spawner,
+/// and swap the served hub to the new pipeline's.
 async fn upload(
     State(state): State<Arc<WebState>>,
     UrlQuery(params): UrlQuery<HashMap<String, String>>,
-    body: Bytes,
+    body: axum::body::Body,
 ) -> Response {
     let Some(spawner) = &state.on_upload else {
         return upload_err(StatusCode::FORBIDDEN, "uploads are not enabled");
     };
-    if body.is_empty() {
-        return upload_err(StatusCode::BAD_REQUEST, "empty upload");
-    }
-    let Some(ext) = capture_extension(&body) else {
-        return upload_err(
-            StatusCode::BAD_REQUEST,
-            "not a capture file — expected pcap or pcapng",
-        );
-    };
     let name = sanitize_name(params.get("name").map(String::as_str).unwrap_or(""));
 
-    let seq = state.upload_seq.fetch_add(1, Ordering::Relaxed);
-    let path =
-        std::env::temp_dir().join(format!("pktflow-upload-{}-{seq}.{ext}", std::process::id()));
-    let write_path = path.clone();
-    let written = tokio::task::spawn_blocking(move || std::fs::write(&write_path, &body)).await;
-    match written {
-        Ok(Ok(())) => {}
-        Ok(Err(e)) => {
-            return upload_err(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                &format!("could not store upload: {e}"),
-            )
+    // Read just enough to validate the magic before anything durable.
+    let mut stream = body.into_data_stream();
+    let mut head: Vec<u8> = Vec::with_capacity(8);
+    let ext = loop {
+        match stream.next().await {
+            Some(Ok(chunk)) => {
+                head.extend_from_slice(&chunk);
+                if head.len() >= 4 {
+                    match capture_extension(&head) {
+                        Some(ext) => break ext,
+                        None => {
+                            return upload_err(
+                                StatusCode::BAD_REQUEST,
+                                "not a capture file — expected pcap or pcapng",
+                            )
+                        }
+                    }
+                }
+            }
+            Some(Err(_)) => return upload_err(StatusCode::BAD_REQUEST, "upload interrupted"),
+            None if head.is_empty() => return upload_err(StatusCode::BAD_REQUEST, "empty upload"),
+            None => {
+                return upload_err(
+                    StatusCode::BAD_REQUEST,
+                    "not a capture file — expected pcap or pcapng",
+                )
+            }
         }
-        Err(_) => return upload_err(StatusCode::INTERNAL_SERVER_ERROR, "upload task failed"),
+    };
+
+    let seq = state.upload_seq.fetch_add(1, Ordering::Relaxed);
+    let path = std::env::temp_dir().join(format!(
+        "pktflow-upload-{}-{}-{seq}.{ext}",
+        std::process::id(),
+        state.upload_ns,
+    ));
+    if let Err((status, msg)) =
+        spill_upload(&mut stream, &head, &path, state.max_upload_bytes).await
+    {
+        // Over-cap, disconnect, or write failure: no partial file stays.
+        drop(tokio::fs::remove_file(&path).await);
+        return upload_err(status, msg);
     }
 
     match spawner(name.clone(), path.clone()) {
@@ -296,7 +415,7 @@ mod tests {
         LinkType, PacketMeta, ParseCtx, ParseError, ParsedLayer, ProtocolName, StopReason,
         StreamIdentity, Value,
     };
-    use pktflow_flows::{Aggregator, AggregatorConfig};
+    use pktflow_flows::{Aggregator, AggregatorConfig, AggregatorSnapshot};
     use pktflow_view::SnapshotHub;
     use tower::ServiceExt;
 
@@ -527,5 +646,191 @@ mod tests {
         let (_, body) = get_body(super::router(state), "/api/meta").await;
         let doc: serde_json::Value = serde_json::from_str(&body).expect("json");
         assert_eq!(doc["source"], "fresh.pcap");
+    }
+
+    // 12.4: /api/streams pages deterministically, respects scope and
+    // query, and clamps limit; /api/timeline is bounded.
+    #[tokio::test]
+    async fn windowed_endpoints_page_and_filter() {
+        let (status, body) = get_body(
+            plain_router(),
+            "/api/streams?scope=flat&sort=bytes&offset=0&limit=10",
+        )
+        .await;
+        assert_eq!(status, 200);
+        let doc: serde_json::Value = serde_json::from_str(&body).expect("json");
+        assert_eq!(doc["total"], 2, "eth + ip");
+        let rows = doc["rows"].as_array().expect("rows");
+        assert_eq!(rows.len(), 2);
+
+        // Children scope expands the eth root to its ip child.
+        let (_, body) = get_body(plain_router(), "/api/streams?scope=children&of=0").await;
+        let doc: serde_json::Value = serde_json::from_str(&body).expect("json");
+        assert_eq!(doc["total"], 1);
+        assert_eq!(doc["rows"][0]["protocol"], "ip");
+
+        // A query narrows and reports match_total.
+        let (_, body) = get_body(plain_router(), "/api/streams?scope=flat&q=proto%20==%20ip").await;
+        let doc: serde_json::Value = serde_json::from_str(&body).expect("json");
+        assert_eq!(doc["match_total"], 1);
+        assert_eq!(doc["rows"][0]["protocol"], "ip");
+
+        let (_, body) = get_body(plain_router(), "/api/timeline?bins=4&lanes=2").await;
+        let doc: serde_json::Value = serde_json::from_str(&body).expect("json");
+        let lanes = doc["lanes"].as_array().expect("lanes");
+        assert!(lanes.len() <= 2);
+        assert!(lanes
+            .iter()
+            .all(|l| l["active"].as_array().is_some_and(|a| a.len() == 4)));
+    }
+
+    // 12.4: one index per generation — repeated handler calls share it;
+    // a new publish replaces it.
+    #[tokio::test]
+    async fn index_is_memoized_per_generation() {
+        let hub = hub_with_streams();
+        let state = Arc::new(WebState::new(Arc::clone(&hub)));
+        let a = state.index();
+        let b = state.index();
+        assert!(Arc::ptr_eq(&a, &b), "same generation, same index");
+        hub.publish(AggregatorSnapshot::clone(&hub.latest()));
+        let c = state.index();
+        assert!(!Arc::ptr_eq(&a, &c), "a publish rebuilds the index");
+    }
+
+    // 12.4/D17.4: below the gate /api/snapshot still carries the whole
+    // forest and says `windowed: false`.
+    #[tokio::test]
+    async fn snapshot_below_the_gate_is_full_and_unwindowed() {
+        let (_, body) = get_body(plain_router(), "/api/snapshot").await;
+        let doc: serde_json::Value = serde_json::from_str(&body).expect("json");
+        assert_eq!(doc["windowed"], false);
+        assert!(doc["streams"].as_array().is_some());
+        assert!(doc["roots"].as_array().is_some());
+    }
+
+    // 12.6: uploads stream to disk in bounded memory — a body far
+    // larger than any buffered read still lands whole, chunk by chunk.
+    #[tokio::test]
+    async fn upload_streams_large_bodies_to_disk() {
+        let expected_len = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
+        let seen = std::sync::Arc::clone(&expected_len);
+        let state = Arc::new(WebState::with_uploads(
+            hub_with_streams(),
+            Box::new(move |_, path| {
+                let len = std::fs::metadata(&path).expect("spilled file").len();
+                seen.store(len, std::sync::atomic::Ordering::SeqCst);
+                let hub = Arc::new(SnapshotHub::new("big.pcap".into(), "offline"));
+                hub.mark_finished();
+                Ok(hub)
+            }),
+        ));
+        // 64 MiB streamed in 64 KiB chunks — one chunk in memory at a time.
+        let mut first = vec![0xd4, 0xc3, 0xb2, 0xa1];
+        first.resize(64 * 1024, 0xCC);
+        let chunks: Vec<Result<axum::body::Bytes, std::io::Error>> = (0..1024)
+            .map(|i| {
+                Ok(if i == 0 {
+                    axum::body::Bytes::from(first.clone())
+                } else {
+                    axum::body::Bytes::from(vec![0xCC; 64 * 1024])
+                })
+            })
+            .collect();
+        let body = axum::body::Body::from_stream(tokio_stream::iter(chunks));
+        let response = super::router(Arc::clone(&state))
+            .oneshot(
+                axum::http::Request::builder()
+                    .method("POST")
+                    .uri("/api/upload?name=big.pcap")
+                    .body(body)
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+        assert_eq!(response.status().as_u16(), 200);
+        assert_eq!(
+            expected_len.load(std::sync::atomic::Ordering::SeqCst),
+            64 * 1024 * 1024,
+            "every chunk reached disk"
+        );
+    }
+
+    // 12.6: exceeding the configured cap aborts with 413 and leaves no
+    // partial file behind; under-cap succeeds.
+    #[tokio::test]
+    async fn upload_cap_is_enforced_without_partial_files() {
+        let state = Arc::new(
+            WebState::with_uploads(
+                hub_with_streams(),
+                Box::new(|name, _| {
+                    let hub = Arc::new(SnapshotHub::new(name, "offline"));
+                    hub.mark_finished();
+                    Ok(hub)
+                }),
+            )
+            .upload_cap(16),
+        );
+        let ns = state.upload_ns;
+        let mut body = vec![0xd4, 0xc3, 0xb2, 0xa1];
+        body.resize(64, 0);
+        let (status, msg) = post_body(
+            super::router(Arc::clone(&state)),
+            "/api/upload?name=big",
+            body,
+        )
+        .await;
+        assert_eq!(status, 413, "{msg}");
+        assert!(msg.contains("size cap"));
+        assert_eq!(upload_tmp_count(ns), 0, "no partial file left behind");
+
+        let (status, _) = post_body(
+            super::router(state),
+            "/api/upload?name=small",
+            vec![0xd4, 0xc3, 0xb2, 0xa1, 2, 0, 4, 0],
+        )
+        .await;
+        assert_eq!(status, 200, "under the cap still works");
+    }
+
+    // 12.6: a body that errors mid-stream (client disconnect) is a 400
+    // and leaves no partial file.
+    #[tokio::test]
+    async fn upload_disconnect_leaves_no_partial_file() {
+        let state = Arc::new(WebState::with_uploads(
+            hub_with_streams(),
+            Box::new(|_, _| unreachable!("spawner must not run for a broken upload")),
+        ));
+        let ns = state.upload_ns;
+        let chunks: Vec<Result<axum::body::Bytes, std::io::Error>> = vec![
+            Ok(axum::body::Bytes::from_static(&[0xd4, 0xc3, 0xb2, 0xa1])),
+            Err(std::io::Error::other("client went away")),
+        ];
+        let response = super::router(state)
+            .oneshot(
+                axum::http::Request::builder()
+                    .method("POST")
+                    .uri("/api/upload?name=gone.pcap")
+                    .body(axum::body::Body::from_stream(tokio_stream::iter(chunks)))
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+        assert_eq!(response.status().as_u16(), 400);
+        assert_eq!(upload_tmp_count(ns), 0, "no partial file left behind");
+    }
+
+    /// One state's upload temp files (the partial-file leak check) —
+    /// namespaced so parallel tests can't race each other's counts.
+    fn upload_tmp_count(ns: u64) -> usize {
+        let prefix = format!("pktflow-upload-{}-{ns}-", std::process::id());
+        std::fs::read_dir(std::env::temp_dir())
+            .map(|entries| {
+                entries
+                    .filter_map(|e| e.ok())
+                    .filter(|e| e.file_name().to_string_lossy().starts_with(&prefix))
+                    .count()
+            })
+            .unwrap_or(0)
     }
 }

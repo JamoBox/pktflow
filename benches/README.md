@@ -94,6 +94,103 @@ Roughly linear in live-stream count (10x streams, ~14.5x time) — consistent wi
 but would be the first thing to revisit if v2 sharding (D5) becomes necessary at higher
 live-stream counts.
 
+## Task 12 — large-capture scale (12.7)
+
+New corpus: `pktflow_testkit::fan_out_packets` — the high-cardinality fan-out shape
+(a few `addr:443` anchors × many ephemeral peer ports, ~75/25 TCP/UDP, deterministic).
+The **reference fixture** for the numbers below: `FanOutSpec { anchors: 8,
+flows_per_anchor: 125_000, packets_per_flow: 3, payload_len: 32, seed: 0xC0FF_EE }` —
+1,000,000 flows / 3,000,000 packets / 1,000,048 streams, `Depth::Full`.
+
+### Memory ceiling (`tests/scale.rs`, release, one process per test)
+
+| Run | Peak RSS (VmHWM) | Wall time |
+|---|---|---|
+| Pre-task baseline (commit `2bbfbb5`), hub-style publishing | 2,606,092 kB (2.49 GiB) | 27.9 s |
+| **Current, hub-style publishing** (snapshot every 262k pkts, latest held) | **1,299,492 kB (1.24 GiB)** | 21.8 s |
+| Current, batch (no publishing) | 1,069,924 kB (1.02 GiB) | 17.0 s |
+
+- 12.2's RSS criterion: hub-style peak improved **2.0×** over the pre-task baseline.
+- Task DoD "hub < 2× batch": **1.21×** — the COW snapshot's held copy adds ~230 MB at
+  1M streams instead of the old full deep copy per publish.
+- The `#[ignore]`d budget test (`hub_scale_rss_stays_under_budget`) always measures and
+  reports; the assertion (budget 100,000 kB — machine-tolerant, guarding the return
+  toward per-flow behavior) arms only under `PKTFLOW_ASSERT_RSS=1`, which
+  `.github/workflows/bench.yml` sets while running each RSS test in its own process.
+  The Docker job's blanket `--include-ignored` run shares one process across both RSS
+  tests (VmHWM is process-wide), so there it reports without gating.
+
+### `scale` bench (criterion)
+
+| Benchmark | Result |
+|---|---|
+| `snapshot_cow/100000_flows_shared_republish` | 14.1 ms |
+| `snapshot_cow/100000_flows_1pct_touched` (touch 1k flows + publish) | 25.5 ms |
+| `snapshot_cow/400000_flows_shared_republish` | 64.7 ms |
+| `snapshot_cow/400000_flows_1pct_touched` (touch 4k flows + publish) | 129.5 ms |
+| `ingest_with_publish/batch` (262k pkts, 65k flows) | 637 ms (412 Kelem/s) |
+| `ingest_with_publish/publish_every_8k` | 972 ms (270 Kelem/s) |
+| `lru_cap_churn/cap_10000` (eviction per packet) | 69.3 ms / 20k pkts (289 Kelem/s) |
+| `lru_cap_churn/cap_100000` | 1.94 s / 200k pkts (103 Kelem/s) |
+
+- **12.1 snapshot cost:** an all-shared republish at 100k live streams is **14.1 ms vs
+  the 229.8 ms** the pre-task deep copy measured (§ "5. `snapshot_cost`") — **16×** —
+  and stays O(live pointer copies) at 400k. That 09.4 "first thing to revisit" callback
+  is answered.
+- **12.2 LRU gate:** per-eviction cost grew 2.8× across a 10× live-set (3.4 µs → 9.7 µs
+  per packet with one eviction per packet) — sub-linear (heap + cache effects), vs. the
+  ≥10× a per-eviction scan would force. Confirmed no longer proportional to live count.
+- **Publish overhead, raw COW path:** the fixed 8k-packet cadence costs +53% here, and
+  the pre-12.3 adaptive pipeline measured +59% end-to-end. The fan-out shape is COW's
+  worst case — round-major interleaving touches *every* flow between any two publishes,
+  so structural sharing degrades to ~one stream clone per packet no matter the spacing.
+  D16 condensation (12.3) removes exactly that shape; the re-measurement below closed
+  the 12.1 "< 10% of `--batch`" criterion at **+2.6%**. (These COW/publish/LRU benches
+  pin `condense_threshold: 0` so they keep guarding the raw per-stream machinery at
+  their stated live counts; `scale_condensation` covers the default-on path.)
+
+### End-to-end, real binary over the on-disk fixture (297 MB pcap)
+
+`write_reference_fixture` (test-gated writer) → `/tmp/.../scale-1m.pcap`, release build.
+First measured after 12.1/12.2 (pre-condensation), then re-measured with 12.3's D16
+condensation on by default:
+
+| Run | Pre-12.3 | With condensation (default) |
+|---|---|---|
+| `pktflow streams --batch` (no diagnostics, no publish) | 34.4 s | **21.7 s** |
+| `pktflow unknown` (diagnostics, no publish) | 72.5 s | 65.7 s |
+| `pktflow serve` read-to-finished (diagnostics + adaptive publish) | 115.2 s | **67.4 s** |
+| `pktflow serve` peak RSS | 1,984,216 kB | **48,292 kB** |
+| `/api/snapshot` stream records | 1,000,048 | **12,384** |
+
+- **12.1's read-time gate, closed:** publish overhead is now 67.4 vs 65.7 s = **+2.6 %**
+  (< 10 %). Condensation removed the COW worst case: with ~12k live nodes instead of 1M,
+  inter-publish copies are bounded by nodes, not packets.
+- The in-process RSS ceilings collapse accordingly: hub-style **35,876 kB** / batch
+  32,720 kB on the 1M-flow fixture (budget re-pinned at 48,000 kB; waypoints 2,606,092
+  pre-task → 1,299,492 after 12.1/12.2 → 35,876 after 12.3 — **73×** end to end).
+- `scale_condensation` (65k flows × 3 pkts, replayed dissected packets): default-on
+  794 Kelem/s vs. off 746 Kelem/s — the group bookkeeping costs *less* than the stream
+  creations it avoids, so condensation is a throughput win too, not a trade.
+- `scale_window_query` (12.4's gate, 400k **uncondensed** streams — worse than the
+  condensed fixture): flat mid-capture page 1.2 ms; queried page (cached evaluation,
+  membership scan) 33 ms; `/api/timeline` at 800 bins × 64 lanes 32 ms. All interactions
+  land far under the 100 ms DoD budget with window-bounded bodies.
+- TUI keypress budget (12.5, `pktflow-tui tests/scale.rs`, `#[ignore]`d release tier;
+  the assertion is armed by `PKTFLOW_ASSERT_TUI_BUDGET=1` in the bench workflow, same
+  pattern as the RSS ceilings — debug-build runs measure without gating):
+  keypress + full frame at 100k uncondensed streams = **43 ms** (< 50 ms DoD), with
+  `flatten` capped at 10,000 materialized rows. Uncapped it measured 350 ms — the cap is
+  what makes the budget hold, not the index alone.
+- Browser (12.5, `scripts/webui-scale-check.mjs`, manual/scheduled tier — needs
+  `playwright-core` + the preinstalled Chromium): windowed tree pages/expands/queries,
+  timeline draws as canvas density, and the DOM stays viewport-bounded after
+  scroll-to-bottom over a 100k-stream capture; full mode re-verified against a small
+  fixture.
+- Unknown-payload diagnostics — every fan-out payload is opaque — now dominates this
+  shape (65.7 of 67.4 s vs 21.7 s without). Its per-occurrence probing is the next
+  candidate for a bounding knob; out of task-12 scope, noted for a future task.
+
 ## Deferred-tuning callbacks
 
 Two callbacks from earlier specs asked this bench round for data; neither is answered

@@ -3,9 +3,9 @@
 //! correct state machine (no reassembly, D7).
 
 use pktflow_core::{
-    ByteReader, Canonicalize, Confidence, Depth, FieldMap, FieldName, Hint, KeyField, LayerPlugin,
-    LifecycleSpec, PacketDirection, ParseCtx, ParseError, ParsedLayer, ProtocolName, RollupKind,
-    RollupSpec, RouteId, StateName, StreamIdentity, Value,
+    ByteReader, Canonicalize, CondenseSpec, Confidence, Depth, FieldMap, FieldName, Hint, KeyField,
+    LayerPlugin, LifecycleSpec, PacketDirection, ParseCtx, ParseError, ParsedLayer, ProtocolName,
+    RollupKind, RollupSpec, RouteId, StateName, StreamIdentity, Value,
 };
 use smallvec::SmallVec;
 
@@ -177,5 +177,16 @@ impl LayerPlugin for Tcp {
 
     fn stream_identity(&self) -> Option<&StreamIdentity> {
         Some(&IDENTITY)
+    }
+
+    // D16 (12.3): ephemeral-port fan-out condenses on the port pair.
+    fn condense(&self) -> Option<&'static CondenseSpec> {
+        static CONDENSE: CondenseSpec = CondenseSpec {
+            ephemeral: KeyField {
+                a: SRC_PORT,
+                b: Some(DST_PORT),
+            },
+        };
+        Some(&CONDENSE)
     }
 }

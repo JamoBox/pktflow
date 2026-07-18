@@ -164,6 +164,8 @@ fn aggregator_config(shared: &SharedArgs) -> AggregatorConfig {
     };
     AggregatorConfig {
         eviction,
+        rollup_series_max_cap: shared.series_max_cap(),
+        condense_threshold: shared.condense_threshold(),
         ..AggregatorConfig::default()
     }
 }
@@ -340,9 +342,19 @@ pub fn run_observed(
 
 /// How often the hub pipeline publishes a fresh snapshot while packets
 /// are flowing: frequent enough to feel live, cheap enough that the
-/// snapshot copy stays off the hot path (its cost is bounded by
-/// `max_streams`, measured in 09.4).
+/// snapshot copy stays off the hot path (measured in 09.4/12.7).
 const PUBLISH_INTERVAL: Duration = Duration::from_millis(250);
+
+/// Adaptive back-off (12.1, D17.2): a publish that took `t` defers the
+/// next by at least `ADAPTIVE_PUBLISH_FACTOR × t`, so on huge captures
+/// snapshots go briefly stale instead of publication dominating the
+/// aggregation thread.
+const ADAPTIVE_PUBLISH_FACTOR: u32 = 8;
+
+/// Default series-rollup clamp for the interactive front-ends (12.2):
+/// a browsable view doesn't need a thousand retained points per stream;
+/// a truncated ring says so (D4). `--series-cap` overrides (0 = off).
+const HUB_SERIES_CLAMP: usize = 128;
 
 /// A hub named for this run's source — the TUI/web header line.
 pub fn hub_for(shared: &SharedArgs) -> SnapshotHub {
@@ -365,9 +377,25 @@ pub fn spawn_hub_pipeline(
     stop: StopFlags,
     hub: Arc<SnapshotHub>,
 ) -> std::thread::JoinHandle<Result<(), CliError>> {
+    // Interactive default (12.2): clamp series retention unless the user
+    // chose a cap (or explicitly unclamped with `--series-cap 0`).
+    let mut shared = shared;
+    if shared.series_cap.is_none() {
+        shared.series_cap = Some(HUB_SERIES_CLAMP);
+    }
+    // Read progress (12.5): the file's size is the denominator; consumed
+    // bytes are estimated from packet accounting (classic pcap framing:
+    // a 24-byte header plus 16 bytes per record) — an indicator, clamped
+    // by the hub, not an exact offset.
+    let progress_total = shared
+        .input
+        .read
+        .as_ref()
+        .and_then(|p| std::fs::metadata(p).ok())
+        .map_or(0, |m| m.len());
     std::thread::spawn(move || {
         let publish_hub = Arc::clone(&hub);
-        let mut last_publish: Option<Instant> = None;
+        let mut next_due: Option<Instant> = None;
         let result = run_observed(
             &shared,
             &stop,
@@ -375,10 +403,19 @@ pub fn spawn_hub_pipeline(
             true,
             |_, _| {},
             |agg| {
-                // First snapshot ships immediately; then throttled.
-                if last_publish.is_none_or(|t| t.elapsed() >= PUBLISH_INTERVAL) {
-                    last_publish = Some(Instant::now());
+                // First snapshot ships immediately; then throttled, with
+                // the interval stretched by the last publish's own cost
+                // (12.1, D17.2) so big captures stay ingest-bound.
+                let now = Instant::now();
+                if next_due.is_none_or(|due| now >= due) {
+                    if progress_total > 0 {
+                        let totals = agg.totals();
+                        publish_hub
+                            .set_progress(24 + totals.bytes + 16 * totals.packets, progress_total);
+                    }
                     publish_hub.publish(agg.snapshot());
+                    let cost = now.elapsed();
+                    next_due = Some(now + PUBLISH_INTERVAL.max(cost * ADAPTIVE_PUBLISH_FACTOR));
                 }
             },
         );
@@ -386,6 +423,9 @@ pub fn spawn_hub_pipeline(
             Ok(outcome) => {
                 if let Some(snapshot) = outcome.snapshot {
                     hub.publish(snapshot);
+                }
+                if progress_total > 0 {
+                    hub.set_progress(progress_total, progress_total);
                 }
                 hub.mark_finished();
                 Ok(())

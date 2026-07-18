@@ -108,6 +108,21 @@ pub enum RollupKind {
     Series { cap: usize },
 }
 
+/// D16 (12.3): which key component may vary within a condensed group.
+///
+/// Declared by a plugin (via [`crate::LayerPlugin::condense`]) whose
+/// flows fan out across one ephemeral key dimension — TCP/UDP nominate
+/// their port pair. Flows under one parent that agree on every other
+/// key component and on *one side* of this pair (the anchor — e.g.
+/// `:443`) condense into a single stream node once enough of them
+/// accumulate. Only valid alongside [`Canonicalize::EndpointSort`] and
+/// a pair that appears in the identity's `key` (registry-checked).
+#[derive(Clone, Copy, Debug)]
+pub struct CondenseSpec {
+    /// The paired key field whose values vary within a group.
+    pub ephemeral: KeyField,
+}
+
 /// The declaration that makes a dissector a conversation source (02.4).
 ///
 /// A plugin returning `None` from `stream_identity()` dissects normally;

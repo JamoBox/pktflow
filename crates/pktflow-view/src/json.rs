@@ -3,6 +3,8 @@
 //! against `pktflow streams --format json` reads `pktflow serve`'s API
 //! unchanged.
 
+use std::time::SystemTime;
+
 use pktflow_core::PacketDirection;
 use pktflow_flows::{CloseReason, Rollup, Stream, StreamId};
 use serde_json::{json, Value as Json};
@@ -60,6 +62,18 @@ pub fn endpoint_json(s: &Stream) -> (Json, Json, Json) {
     let mut a = serde_json::Map::new();
     let mut b = serde_json::Map::new();
     let mut key = serde_json::Map::new();
+    // D16: a condensed node's A side is its anchor; B is the varying
+    // dimension, rendered `*` (`:*` for ports, via the field name).
+    if let Some(info) = s.condensed.as_deref() {
+        if let Some(value) = s.key_fields.get(info.ephemeral_field) {
+            a.insert(
+                info.ephemeral_field.to_string(),
+                field_value_json(s.protocol, info.ephemeral_field, value),
+            );
+            b.insert(info.ephemeral_field.to_string(), Json::String("*".into()));
+        }
+        return (Json::Object(a), Json::Object(b), Json::Object(key));
+    }
     for (name, value) in s.key_fields.iter() {
         if let Some(suffix) = name.strip_prefix("src_") {
             let dst_name = format!("dst_{suffix}");
@@ -93,7 +107,9 @@ pub fn endpoint_json(s: &Stream) -> (Json, Json, Json) {
 }
 
 /// One rollup, D8-shaped: `{"kind": ..., ...}` per [`Rollup`] variant.
-pub fn rollup_json(protocol: &str, field: &str, rollup: &Rollup) -> Json {
+/// `base` is the owning stream's `first_seen` — series points store
+/// timestamps as offsets from it (12.2).
+pub fn rollup_json(base: SystemTime, protocol: &str, field: &str, rollup: &Rollup) -> Json {
     match rollup {
         Rollup::Accumulate {
             values,
@@ -125,7 +141,7 @@ pub fn rollup_json(protocol: &str, field: &str, rollup: &Rollup) -> Json {
                 .iter()
                 .map(|p| {
                     json!({
-                        "ts": rfc3339(p.ts),
+                        "ts": rfc3339(p.ts(base)),
                         "dir": direction_json(p.dir),
                         "value": field_value_str(protocol, field, &p.value),
                     })
@@ -153,7 +169,12 @@ pub fn stream_record(
     let rollups: serde_json::Map<String, Json> = s
         .rollups
         .iter()
-        .map(|(field, rollup)| ((*field).to_string(), rollup_json(s.protocol, field, rollup)))
+        .map(|(field, rollup)| {
+            (
+                (*field).to_string(),
+                rollup_json(s.first_seen, s.protocol, field, rollup),
+            )
+        })
         .collect();
 
     let mut m = serde_json::Map::new();
@@ -179,5 +200,17 @@ pub fn stream_record(
     );
     m.insert("opaque_bytes".into(), json!(s.opaque_bytes));
     m.insert("rollups".into(), Json::Object(rollups));
+    // D16 (12.3): present only on condensed nodes, so ordinary records
+    // (and their goldens) are unchanged.
+    if let Some(info) = s.condensed.as_deref() {
+        m.insert(
+            "condensed".into(),
+            json!({
+                "member_flows": info.member_flows,
+                "ephemeral_field": info.ephemeral_field,
+                "overflow": info.overflow,
+            }),
+        );
+    }
     m
 }

@@ -615,6 +615,9 @@ const S = {
   source: null,         // current capture name — a change resets view state
   uploads: false,       // server accepts POST /api/upload
   timeFilter: { mode: "none", enabled: false, start: 0, end: 0 },
+  windowed: false,       // 12.4 gate: forest too big for one document
+  progress: null,        // {read, total} while a file is being read
+  win: null,             // windowed-mode caches (see winReset)
 };
 const MAX_TREE_ROWS = 2000;
 const $ = s => document.querySelector(s);
@@ -702,7 +705,10 @@ async function refetch() {
     const doc = await r.json();
     if (S.source !== null && doc.meta.source !== S.source) resetForNewSource();
     S.source = doc.meta.source;
+    if (doc.windowed) { doc.streams = []; doc.roots = []; }
+    S.windowed = !!doc.windowed;
     S.data = doc;
+    if (S.windowed) winReset();
     updateTimeSpan();
     S.byId = new Map(doc.streams.map(s => [s.id, s]));
     S.kids = new Map();
@@ -715,6 +721,217 @@ async function refetch() {
   } catch (e) {
     setConn(false, "fetch failed");
   }
+}
+
+/* ── windowed mode (12.5): the forest is paged, never shipped ──
+   Above the D17.4 gate the snapshot carries no streams; the tree pages
+   /api/streams windows (server-side sort + query), children load on
+   expand, rows render virtualized, details fetch per selection, and
+   the timeline draws /api/timeline density on a canvas. */
+const WIN_ROW_H = 28;          // fixed row height for virtual scrolling
+const WIN_PAGE = 300;          // one fetch per scroll settle
+function winReset() {
+  S.win = {
+    epoch: (S.win ? S.win.epoch : 0) + 1,
+    roots: [], rootTotal: 0, matchTotal: null,
+    kids: new Map(), kidTotals: new Map(), open: new Set(),
+    loading: false, tl: null,
+  };
+  winLoadRoots();
+}
+async function winFetch(scope, of, offset) {
+  const q = S.filter.trim();
+  const params = new URLSearchParams({ scope, sort: S.sort, order: "desc",
+    offset: String(offset), limit: String(WIN_PAGE) });
+  if (scope === "children") params.set("of", String(of));
+  if (q) params.set("q", q);
+  const r = await fetch("/api/streams?" + params);
+  return r.json();
+}
+async function winLoadRoots(append) {
+  if (!S.win || S.win.loading) return;
+  const epoch = S.win.epoch;
+  const q = S.filter.trim();
+  S.win.loading = true;
+  try {
+    const doc = await winFetch("roots", null, append ? S.win.roots.length : 0);
+    if (!S.win || S.win.epoch !== epoch) return; // superseded
+    if (!append) S.win.roots = [];
+    for (const rec of doc.rows) { S.byId.set(rec.id, rec); S.win.roots.push(rec); }
+    S.win.rootTotal = doc.match_total ?? doc.total;
+    if (!append && q) {
+      // The true match count (roots-scope totals only count visible
+      // ancestors); /api/search serves it from the same cached sets.
+      try {
+        const sr = await (await fetch("/api/search?q=" + encodeURIComponent(q))).json();
+        if (S.win && S.win.epoch === epoch) S.win.matchTotal = sr.match_total;
+      } catch (e) {}
+    } else if (!q) { S.win.matchTotal = null; }
+    updateQueryStatus();
+  } catch (e) { setConn(false, "fetch failed"); }
+  finally { if (S.win && S.win.epoch === epoch) S.win.loading = false; }
+  dirty.streams = true;
+  if (S.tab === "streams") { renderWinTree(); }
+}
+async function winToggle(seq) {
+  if (S.win.open.has(seq)) { S.win.open.delete(seq); renderWinTree(); return; }
+  S.win.open.add(seq);
+  if (!S.win.kids.has(seq)) {
+    const epoch = S.win.epoch;
+    try {
+      const doc = await winFetch("children", seq, 0);
+      if (!S.win || S.win.epoch !== epoch) return;
+      for (const rec of doc.rows) S.byId.set(rec.id, rec);
+      S.win.kids.set(seq, doc.rows);
+      S.win.kidTotals.set(seq, doc.match_total ?? doc.total);
+    } catch (e) { setConn(false, "fetch failed"); return; }
+  }
+  renderWinTree();
+}
+async function winSelect(seq) {
+  S.sel = seq;
+  if (!S.byId.has(seq)) {
+    try {
+      const r = await fetch("/api/stream/" + seq);
+      if (r.ok) S.byId.set(seq, await r.json());
+    } catch (e) {}
+  }
+  renderDetail();
+  renderWinTree();
+}
+/* Loaded rows flattened with depth (bounded by what the user expanded). */
+function winRows() {
+  const out = [];
+  const walk = (rec, depth) => {
+    const kids = S.win.kids.get(rec.id) || [];
+    const hasKids = rec.children.length > 0;
+    const expanded = S.win.open.has(rec.id);
+    out.push({ s: rec, depth, hasKids, expanded });
+    if (expanded) {
+      for (const k of kids) walk(k, depth + 1);
+      const missing = (S.win.kidTotals.get(rec.id) ?? kids.length) - kids.length;
+      if (missing > 0) out.push({ more: missing, depth: depth + 1, of: rec.id });
+    }
+  };
+  for (const r of S.win.roots) walk(r, 0);
+  return out;
+}
+function winRowEl(r) {
+  if (r.more !== undefined) {
+    const row = el("div", "row ctx");
+    row.style.paddingLeft = 6 + r.depth * 18 + "px";
+    row.style.height = WIN_ROW_H + "px";
+    row.append(el("span", "eps", `… ${thousands(r.more)} more (narrow with a query)`));
+    return row;
+  }
+  const { s } = r;
+  const row = el("div", "row" + (s.id === S.sel ? " sel" : ""));
+  row.dataset.id = s.id;
+  row.style.paddingLeft = 6 + r.depth * 18 + "px";
+  row.style.height = WIN_ROW_H + "px";
+  const caret = el("span", "caret" + (r.hasKids ? " toggle" : ""), r.hasKids ? (r.expanded ? "▼" : "▶") : "·");
+  if (r.hasKids) caret.onclick = ev => { ev.stopPropagation(); winToggle(s.id); };
+  row.append(caret, protoChip(s.protocol), el("span", "sid", "#" + s.id));
+  const eps = endpointsStr(s);
+  if (eps) row.append(el("span", "eps", eps));
+  if (s.condensed) row.append(el("span", "state-badge",
+    `× ${s.condensed.overflow ? "≥" : ""}${thousands(s.condensed.member_flows)} flows`));
+  if (s.state) row.append(el("span", "state-badge", s.state));
+  const stats = el("span", "stats");
+  const pk = el("span"); pk.innerHTML = `<b>${thousands(tPkts(s))}</b> pkts`;
+  const by = el("span"); by.innerHTML = `<b>${humanBytes(tBytes(s))}</b>`;
+  stats.append(pk, by);
+  row.append(stats);
+  row.onclick = () => winSelect(s.id);
+  row.ondblclick = () => r.hasKids && winToggle(s.id);
+  return row;
+}
+/* Virtual render: spacers + viewport slice only — DOM stays
+   viewport-bounded however much is loaded. */
+function renderWinTree() {
+  const host = $("#tree");
+  const rows = winRows();
+  const viewH = host.clientHeight || 600;
+  const first = Math.max(0, Math.floor(host.scrollTop / WIN_ROW_H) - 10);
+  const count = Math.ceil(viewH / WIN_ROW_H) + 20;
+  const scroll = host.scrollTop;
+  host.replaceChildren();
+  if (!rows.length) {
+    host.append(el("div", "empty", S.win.loading ? "loading…" : "no streams match the query"));
+    return;
+  }
+  const top = el("div"); top.style.height = first * WIN_ROW_H + "px";
+  const bottom = el("div");
+  bottom.style.height = Math.max(0, (rows.length - first - count)) * WIN_ROW_H + "px";
+  host.append(top);
+  for (const r of rows.slice(first, first + count)) host.append(winRowEl(r));
+  host.append(bottom);
+  if (S.win.roots.length < S.win.rootTotal) {
+    const more = el("div", "empty", S.win.loading ? "loading…"
+      : `${thousands(S.win.rootTotal - S.win.roots.length)} more roots — scroll to load`);
+    host.append(more);
+  }
+  host.scrollTop = scroll;
+}
+let winScrollArmed = false;
+$("#tree").addEventListener("scroll", () => {
+  if (!S.windowed || !S.win) return;
+  if (!winScrollArmed) {
+    winScrollArmed = true;
+    requestAnimationFrame(() => {
+      winScrollArmed = false;
+      renderWinTree();
+      const host = $("#tree");
+      const nearEnd = host.scrollTop + host.clientHeight > winRows().length * WIN_ROW_H - 4 * WIN_ROW_H;
+      if (nearEnd && S.win.roots.length < S.win.rootTotal) winLoadRoots(true);
+    });
+  }
+});
+/* Windowed timeline: server-binned density on a canvas — one drawn
+   element per lane, never one per stream. */
+async function renderWinTimeline() {
+  const host = $("#tlScroll");
+  const width = Math.max(200, host.clientWidth - 120);
+  const bins = Math.min(1024, Math.max(100, Math.floor(width / 2)));
+  const q = S.filter.trim();
+  const key = S.gen + "|" + q;
+  if (!S.win.tl || S.win.tl.key !== key) {
+    try {
+      const params = new URLSearchParams({ bins: String(bins), lanes: "48" });
+      if (q) params.set("q", q);
+      const r = await fetch("/api/timeline?" + params);
+      S.win.tl = { key, doc: await r.json() };
+    } catch (e) { return; }
+  }
+  const doc = S.win.tl.doc;
+  host.replaceChildren();
+  if (!doc.lanes) { host.append(el("div", "empty", "no timeline yet")); return; }
+  const laneH = 14;
+  const canvas = document.createElement("canvas");
+  canvas.width = bins * 2; canvas.height = doc.lanes.length * laneH;
+  canvas.style.width = "100%";
+  const ctx = canvas.getContext("2d");
+  const accent = getComputedStyle(document.documentElement).getPropertyValue("--accent") || "#3987e5";
+  doc.lanes.forEach((lane, li) => {
+    const max = Math.max(1, ...lane.active);
+    ctx.fillStyle = accent;
+    lane.active.forEach((v, bi) => {
+      if (!v) return;
+      ctx.globalAlpha = 0.25 + 0.75 * (v / max);
+      ctx.fillRect(bi * 2, li * laneH + 2, 2, laneH - 4);
+    });
+  });
+  ctx.globalAlpha = 1;
+  canvas.onclick = ev => {
+    const rect = canvas.getBoundingClientRect();
+    const li = Math.floor((ev.clientY - rect.top) / rect.height * doc.lanes.length);
+    const lane = doc.lanes[li];
+    if (lane && lane.seq !== null) { activateTab("streams"); winSelect(lane.seq); }
+  };
+  const legend = el("div", "empty",
+    `top ${doc.lanes.filter(l => l.seq !== null).length} streams by bytes` +
+    (doc.lanes.some(l => l.seq === null) ? " + everything else (last lane) — click a lane to open" : " — click a lane to open"));
+  host.append(canvas, legend);
 }
 
 /* ── header / tiles ────────────────────────────────────── */
@@ -747,7 +964,8 @@ function renderTiles() {
   const tiles = [
     ["packets", thousands(sum.packets), ""],
     ["bytes", humanBytes(sum.bytes), ""],
-    ["streams", thousands(sum.streams_created), `${thousands(sum.streams_live)} live`],
+    ["streams", thousands(sum.streams_created),
+      `${thousands(sum.streams_live)} live` + (sum.flows_condensed ? ` · ${thousands(sum.flows_condensed)} condensed` : "")],
     ["protocols", String(sum.per_protocol.length), ""],
     ["unknown groups", String(S.data.unknowns.length), ""],
   ];
@@ -811,11 +1029,14 @@ function visibleRows(ignoreTimeFilter = false) {
 }
 
 function renderTree() {
+  if (S.windowed) { renderWinTree(); return; }
   const host = $("#tree");
   const scroll = host.scrollTop;
   host.replaceChildren();
   if (!S.data.streams.length) {
-    const msg = S.data.summary.packets ? "no streams yet"
+    const msg = S.data.windowed
+      ? `capture too large for the full view (${thousands(S.data.summary.streams_live)} streams) — use the CLI/TUI lenses, or narrow with --where`
+      : S.data.summary.packets ? "no streams yet"
       : S.uploads ? "waiting for packets — or drop a .pcap / .pcapng anywhere to load it"
       : "waiting for packets…";
     host.append(el("div", "empty", msg));
@@ -843,6 +1064,8 @@ function renderTree() {
     row.append(caret, protoChip(s.protocol), el("span", "sid", "#" + s.id));
     const eps = endpointsStr(s);
     if (eps) row.append(el("span", "eps", eps));
+    if (s.condensed) row.append(el("span", "state-badge",
+      `× ${s.condensed.overflow ? "≥" : ""}${thousands(s.condensed.member_flows)} flows`));
     if (s.state) row.append(el("span", "state-badge", s.state));
     if (s.closed) row.append(el("span", "closed", "✕ " + s.closed.replace("_", "-")));
     const stats = el("span", "stats");
@@ -928,6 +1151,8 @@ function renderDetail() {
     card("duration", durationStr(s.first_seen, s.last_seen)),
   );
   if (s.opaque_bytes > 0) cards.append(card("opaque", humanBytes(s.opaque_bytes)));
+  if (s.condensed) cards.append(card("member flows",
+    `${s.condensed.overflow ? "≥" : ""}${thousands(s.condensed.member_flows)}`));
   host.append(cards);
 
   /* direction split — two segments, direct labels both sides */
@@ -1289,6 +1514,7 @@ function fmtClock(ms) {
   return `${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}:${pad(d.getUTCSeconds())}.${pad(d.getUTCMilliseconds(), 3)}`;
 }
 function renderTimeline() {
+  if (S.windowed) { renderWinTimeline(); return; }
   const host = $("#tlScroll");
   const scroll = host.scrollTop;
   host.replaceChildren();
@@ -1907,6 +2133,7 @@ $("#filter").addEventListener("keydown", ev => {
 });
 $("#qhelpBtn").onclick = () => $("#qhelp").classList.toggle("on");
 async function runSearch() {
+  if (S.windowed) { winReset(); dirty.timeline = true; return; }
   const q = S.filter.trim();
   if (!q) {
     S.search = { matches: null, visible: null, error: null };
@@ -1933,6 +2160,13 @@ async function runSearch() {
 }
 function updateQueryStatus() {
   const st = $("#queryStatus");
+  if (S.windowed) {
+    if (S.filter.trim() && S.win && S.win.matchTotal !== null) {
+      st.textContent = `${thousands(S.win.matchTotal)} match${S.win.matchTotal === 1 ? "" : "es"}`;
+      st.className = "qstatus";
+    } else { st.textContent = ""; st.className = "qstatus"; }
+    return;
+  }
   if (S.search.error) {
     st.textContent = "✗ " + S.search.error;
     st.className = "qstatus err";
@@ -1945,7 +2179,12 @@ function updateQueryStatus() {
     st.className = "qstatus";
   }
 }
-$("#sortSel").addEventListener("change", ev => { S.sort = ev.target.value; dirty.timeline = true; renderTree(); });
+$("#sortSel").addEventListener("change", ev => {
+  S.sort = ev.target.value;
+  dirty.timeline = true;
+  if (S.windowed) { winReset(); return; }
+  renderTree();
+});
 const expandAll = () => {
   S.collapsed.clear();
   dirty.timeline = true;
@@ -1984,7 +2223,7 @@ document.addEventListener("keydown", ev => {
     }
     if (ev.key === " ") { $("#tlPlay").click(); ev.preventDefault(); return; }
   }
-  if (S.tab !== "streams" || typing || !S.data) return;
+  if (S.tab !== "streams" || typing || !S.data || S.windowed) return;
   const rows = visibleRows();
   const i = rows.findIndex(r => r.s.id === S.sel);
   if (ev.key === "ArrowDown" && i < rows.length - 1) { select(rows[i + 1].s.id); ev.preventDefault(); }
@@ -2004,7 +2243,12 @@ function connect() {
   const es = new EventSource("/api/events");
   es.addEventListener("tick", ev => {
     const t = JSON.parse(ev.data);
+    S.progress = t.progress || null;
     setConn(true, t.finished ? "capture complete" : "live");
+    const badge = $("#modeBadge");
+    if (!t.finished && S.progress && badge.classList.contains("reading")) {
+      badge.textContent = `READING ${Math.min(100, Math.round(S.progress.read / S.progress.total * 100))}%`;
+    }
     if (t.generation !== S.gen) { S.gen = t.generation; refetch(); }
   });
   es.onerror = () => setConn(false, "reconnecting…");

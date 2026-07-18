@@ -139,6 +139,15 @@ pub trait LayerPlugin: Send + Sync {
     fn stream_identity(&self) -> Option<&StreamIdentity> {
         None
     }
+
+    /// D16 (12.3): opt this protocol's streams into high-cardinality
+    /// condensation by naming the ephemeral key pair (TCP/UDP: their
+    /// port pair). `None` (default) = this protocol never condenses.
+    /// Requires a `stream_identity` using `Canonicalize::EndpointSort`
+    /// whose `key` contains the named pair (registry-checked, 03.2).
+    fn condense(&self) -> Option<&'static crate::CondenseSpec> {
+        None
+    }
 }
 
 #[cfg(test)]

@@ -2,11 +2,11 @@
 //! rows under the current sort, collapse set, and filter. Pure functions
 //! over a snapshot — the render layer never walks the hierarchy itself.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
+use std::sync::Arc;
 
-use pktflow_flows::{AggregatorSnapshot, Stream, StreamId};
-use pktflow_view::query::matching_with_ancestors;
-use pktflow_view::{by_id, total_bytes, total_packets, StreamQuery};
+use pktflow_flows::Stream;
+use pktflow_view::{total_bytes, total_packets, SnapshotIndex};
 
 /// Sibling sort order (mirrors the CLI's `--sort` values).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -57,48 +57,65 @@ fn sort_siblings(streams: &mut [&Stream], order: Sort) {
     }
 }
 
+/// Cap on the rows a single flatten materializes (12.5): a keypress
+/// must stay interactive whatever the capture holds, and no terminal
+/// browses ten thousand rows anyway — narrow with a query instead.
+pub const MAX_ROWS: usize = 10_000;
+
 /// Flattens the hierarchy into visible rows. With no query, a collapsed
 /// node hides its subtree. With a query, rows are the matches plus every
 /// ancestor of a match (auto-expanded so results are always reachable).
+/// Resolution and query evaluation come from the per-snapshot
+/// [`SnapshotIndex`] (12.4): a keypress re-flattens, but never rebuilds
+/// an id map or re-evaluates the filter — and never materializes more
+/// than [`MAX_ROWS`] rows.
 pub fn flatten<'a>(
-    snapshot: &'a AggregatorSnapshot,
+    index: &'a SnapshotIndex,
     sort: Sort,
     collapsed: &HashSet<u64>,
-    query: Option<&StreamQuery>,
+    query: Option<&str>,
 ) -> Vec<TreeRow<'a>> {
-    let ids = by_id(snapshot);
+    // Filtered mode: the visible set is matches ∪ their ancestors
+    // (cached in the index per expression).
+    let sets = query
+        .filter(|q| !q.trim().is_empty())
+        .and_then(|q| index.query_sets(q));
+    let visible: Option<&HashSet<u64>> = sets.as_ref().map(|s| &s.1);
 
-    // Filtered mode: the visible set is matches ∪ their ancestors.
-    let visible: Option<HashSet<u64>> =
-        query.map(|q| matching_with_ancestors(&snapshot.streams, &ids, q));
-
+    let snapshot = Arc::clone(index.snapshot());
     let mut rows = Vec::new();
     let mut roots: Vec<&Stream> = snapshot
         .roots
         .iter()
-        .filter_map(|id| ids.get(id).copied())
-        .filter(|s| visible.as_ref().is_none_or(|v| v.contains(&s.created_seq)))
+        .filter_map(|&id| index.by_id(id))
+        .filter(|s| visible.is_none_or(|v| v.contains(&s.created_seq)))
         .collect();
     sort_siblings(&mut roots, sort);
     for root in roots {
-        push_subtree(root, &ids, "", sort, collapsed, visible.as_ref(), &mut rows);
+        if rows.len() >= MAX_ROWS {
+            break;
+        }
+        push_subtree(root, index, "", sort, collapsed, visible, &mut rows);
     }
     rows
 }
 
 fn push_subtree<'a>(
     s: &'a Stream,
-    ids: &HashMap<StreamId, &'a Stream>,
+    index: &'a SnapshotIndex,
     prefix: &str,
     sort: Sort,
     collapsed: &HashSet<u64>,
     visible: Option<&HashSet<u64>>,
     rows: &mut Vec<TreeRow<'a>>,
 ) {
+    if rows.len() >= MAX_ROWS {
+        return;
+    }
     let mut children: Vec<&Stream> = s
         .children
         .iter()
-        .filter_map(|id| ids.get(id).copied())
+        .filter_map(|&id| index.by_id(id))
         .filter(|c| visible.is_none_or(|v| v.contains(&c.created_seq)))
         .collect();
     sort_siblings(&mut children, sort);
@@ -121,11 +138,14 @@ fn push_subtree<'a>(
     let bare = prefix.replace("├─ ", "│  ").replace("└─ ", "   ");
     let count = children.len();
     for (i, child) in children.into_iter().enumerate() {
+        if rows.len() >= MAX_ROWS {
+            return;
+        }
         let last = i + 1 == count;
         let branch = if last { "└─ " } else { "├─ " };
         push_subtree(
             child,
-            ids,
+            index,
             &format!("{bare}{branch}"),
             sort,
             collapsed,

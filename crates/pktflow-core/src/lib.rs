@@ -29,7 +29,7 @@ pub use plugin::{Confidence, Hint, LayerPlugin, ParsedLayer};
 pub use route::RouteId;
 pub use router::{StepOutcome, MIN_CONFIDENCE, PRIOR_BOOST};
 pub use stream::{
-    Canonicalize, FlowKey, KeyError, KeyField, LifecycleSpec, PacketDirection, RollupKind,
-    RollupSpec, StateName, StreamIdentity,
+    Canonicalize, CondenseSpec, FlowKey, KeyError, KeyField, LifecycleSpec, PacketDirection,
+    RollupKind, RollupSpec, StateName, StreamIdentity,
 };
 pub use value::{FieldMap, FieldName, SmallBytes, Value};

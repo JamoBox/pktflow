@@ -155,6 +155,10 @@ pub struct ServeArgs {
     /// Address to bind the web UI + API on
     #[arg(long, value_name = "ADDR", default_value = "127.0.0.1:8320")]
     pub listen: String,
+    /// Upload size cap in bytes; uploads stream to disk, so this bounds
+    /// disk, not memory (0 = unlimited) [default: 8 GiB]
+    #[arg(long, value_name = "N")]
+    pub max_upload_bytes: Option<u64>,
 }
 
 /// Exactly one input: a capture file or a live interface.
@@ -191,6 +195,18 @@ pub struct SharedArgs {
     /// Live mode: hard cap on concurrently tracked streams
     #[arg(long, value_name = "N")]
     pub max_streams: Option<usize>,
+    /// Clamp per-stream series rollups to N points (0 = unclamped).
+    /// Default: unclamped for batch runs; 128 under `tui`/`serve`.
+    #[arg(long, value_name = "N")]
+    pub series_cap: Option<usize>,
+    /// Show every flow individually: disable high-cardinality
+    /// condensation (D16)
+    #[arg(long)]
+    pub no_condense: bool,
+    /// Live same-anchor flows shown individually before further ones
+    /// condense into one node [default: 256]
+    #[arg(long, value_name = "K", conflicts_with = "no_condense")]
+    pub condense_threshold: Option<usize>,
     /// Force the first layer to a named plugin instead of routing by
     /// link type — for protocols reached only by direct-by-name
     /// encapsulation (06.1's tutorial "pktt" space) or a raw capture of
@@ -212,6 +228,26 @@ impl SharedArgs {
 
     pub fn max_streams(&self) -> usize {
         self.max_streams.unwrap_or(1_000_000)
+    }
+
+    /// The 12.2 series clamp: `--series-cap 0` = explicitly unclamped;
+    /// unset = unclamped here (the hub pipelines apply their own
+    /// interactive default before this is read).
+    pub fn series_max_cap(&self) -> Option<usize> {
+        match self.series_cap {
+            Some(0) => None,
+            other => other,
+        }
+    }
+
+    /// D16's K, with `--no-condense` mapping to 0 (off).
+    pub fn condense_threshold(&self) -> usize {
+        if self.no_condense {
+            0
+        } else {
+            self.condense_threshold
+                .unwrap_or(pktflow_flows::DEFAULT_CONDENSE_THRESHOLD)
+        }
     }
 }
 

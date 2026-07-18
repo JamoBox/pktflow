@@ -37,6 +37,24 @@ jobs:
           cargo bench -p pktflow-cli --bench throughput_floor 2>&1 | tee bench-logs/throughput_floor.log
           cargo bench -p pktflow-cli --bench snapshot_cost 2>&1 | tee bench-logs/snapshot_cost.log
           cargo bench -p pktflow-cli --bench aggregator_memory 2>&1 | tee bench-logs/aggregator_memory.log
+          cargo bench -p pktflow-cli --bench scale 2>&1 | tee bench-logs/scale.log
+      # One invocation per test: VmHWM is process-wide, so the RSS
+      # measurements are meaningless if the tests share a process.
+      # PKTFLOW_ASSERT_RSS arms the budget assertion — only here, where
+      # the one-process-per-measurement contract holds.
+      - name: Memory ceiling (12.7)
+        env:
+          PKTFLOW_ASSERT_RSS: "1"
+        run: |
+          cargo test -p pktflow-cli --release --test scale -- --ignored --exact hub_scale_rss_stays_under_budget --nocapture
+          cargo test -p pktflow-cli --release --test scale -- --ignored --exact batch_scale_rss_reference --nocapture
+      # Same arming pattern as the RSS ceilings: the 50 ms keypress
+      # budget only means something in a release build, so the Docker
+      # job's debug `--include-ignored` run measures without gating.
+      - name: TUI interactivity ceiling (12.5)
+        env:
+          PKTFLOW_ASSERT_TUI_BUDGET: "1"
+        run: cargo test -p pktflow-tui --release --test scale -- --ignored --nocapture
       - name: Save updated baseline
         if: always()
         uses: actions/cache/save@v4

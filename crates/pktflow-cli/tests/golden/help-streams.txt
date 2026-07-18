@@ -3,18 +3,21 @@ Stream hierarchy view — the default lens
 Usage: pktflow streams [OPTIONS] <--read <FILE>|--iface <IFACE>>
 
 Options:
-  -r, --read <FILE>          Read packets from a capture file (offline replay)
-  -i, --iface <IFACE>        Capture live from a named interface
-  -f, --filter <BPF>         Kernel BPF filter string
-  -c, --count <N>            Stop after N packets
-      --depth <DEPTH>        Field extraction depth [default: structural] [possible values: keys, structural, full]
-      --format <FORMAT>      Output format [default: text] [possible values: text, json]
-      --idle-timeout <SECS>  Live mode: seconds of quiet before a stream is evicted
-      --max-streams <N>      Live mode: hard cap on concurrently tracked streams
-      --entry <PLUGIN>       Force the first layer to a named plugin instead of routing by link type — for protocols reached only by direct-by-name encapsulation (06.1's tutorial "pktt" space) or a raw capture of a single known protocol with no link-layer framing
-      --layer <PROTO>        Flat table of one protocol's streams instead of the tree
-      --merged               Fold same-key streams across parents (needs --layer)
-      --batch                Run once and print a single final result instead of the default live view (full-screen text, redrawn every second; NDJSON events for `--format json`)
-      --sort <SORT>          Sibling sort order in the tree [default: bytes] [possible values: bytes, packets, first-seen, duration]
-      --where <QUERY>        Show only streams matching a query expression: free text, /regex/, and field comparisons combined with AND/OR/NOT — e.g. 'proto == dns AND bytes > 10k' (see docs/query-language.md)
-  -h, --help                 Print help
+  -r, --read <FILE>             Read packets from a capture file (offline replay)
+  -i, --iface <IFACE>           Capture live from a named interface
+  -f, --filter <BPF>            Kernel BPF filter string
+  -c, --count <N>               Stop after N packets
+      --depth <DEPTH>           Field extraction depth [default: structural] [possible values: keys, structural, full]
+      --format <FORMAT>         Output format [default: text] [possible values: text, json]
+      --idle-timeout <SECS>     Live mode: seconds of quiet before a stream is evicted
+      --max-streams <N>         Live mode: hard cap on concurrently tracked streams
+      --series-cap <N>          Clamp per-stream series rollups to N points (0 = unclamped). Default: unclamped for batch runs; 128 under `tui`/`serve`
+      --no-condense             Show every flow individually: disable high-cardinality condensation (D16)
+      --condense-threshold <K>  Live same-anchor flows shown individually before further ones condense into one node [default: 256]
+      --entry <PLUGIN>          Force the first layer to a named plugin instead of routing by link type — for protocols reached only by direct-by-name encapsulation (06.1's tutorial "pktt" space) or a raw capture of a single known protocol with no link-layer framing
+      --layer <PROTO>           Flat table of one protocol's streams instead of the tree
+      --merged                  Fold same-key streams across parents (needs --layer)
+      --batch                   Run once and print a single final result instead of the default live view (full-screen text, redrawn every second; NDJSON events for `--format json`)
+      --sort <SORT>             Sibling sort order in the tree [default: bytes] [possible values: bytes, packets, first-seen, duration]
+      --where <QUERY>           Show only streams matching a query expression: free text, /regex/, and field comparisons combined with AND/OR/NOT — e.g. 'proto == dns AND bytes > 10k' (see docs/query-language.md)
+  -h, --help                    Print help

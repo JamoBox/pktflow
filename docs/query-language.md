@@ -55,7 +55,7 @@ streams-view row shows), case-insensitively. A bare `/regex/` does the
 same as a case-insensitive regex; escape a literal slash as `\/`.
 
 **Flags** — bare `closed`, `live` (alias `open`), `root` (no parent),
-`leaf` (no children).
+`leaf` (no children), `condensed` (a folded fan-out group, D16).
 
 **Comparisons** — `field op value`. String equality is case-insensitive;
 `contains` is substring; `=~` / `!~` compile the value as a

@@ -157,6 +157,37 @@ impl EngineBuilder {
             }
         }
 
+        // 5. Condensation declarations (D16, 12.3): the aggregator's
+        // anchor grouping assumes EndpointSort keys and needs the named
+        // pair to actually be a key component.
+        for p in &plugins {
+            let Some(spec) = p.condense() else {
+                continue;
+            };
+            let Some(identity) = p.stream_identity() else {
+                return Err(RegistryError::InvalidIdentity {
+                    plugin: p.name(),
+                    reason: "condense requires a stream identity",
+                });
+            };
+            if !matches!(identity.canonicalize, crate::Canonicalize::EndpointSort) {
+                return Err(RegistryError::InvalidIdentity {
+                    plugin: p.name(),
+                    reason: "condense requires EndpointSort canonicalization",
+                });
+            }
+            let pair_in_key = identity
+                .key
+                .iter()
+                .any(|kf| kf.a == spec.ephemeral.a && kf.b == spec.ephemeral.b);
+            if !pair_in_key || spec.ephemeral.b.is_none() {
+                return Err(RegistryError::InvalidIdentity {
+                    plugin: p.name(),
+                    reason: "condense ephemeral must be a paired key component",
+                });
+            }
+        }
+
         // Fallback pool: every plugin with a probe, registration order
         // (the determinism tiebreak, 03.3).
         let fallback_pool = plugins

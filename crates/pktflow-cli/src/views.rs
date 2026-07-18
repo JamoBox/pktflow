@@ -3,6 +3,7 @@
 //! clean stdout (JSON) / stderr (summary) separation.
 
 use std::collections::HashMap;
+use std::time::SystemTime;
 
 use pktflow_capture::InterfaceInfo;
 use pktflow_core::{DissectedPacket, PacketDirection, StopReason};
@@ -11,8 +12,8 @@ use pktflow_view::json::{close_reason_json, stream_record};
 use pktflow_view::query::matching_with_ancestors;
 use pktflow_view::StreamQuery;
 use pktflow_view::{
-    by_id, child_chain_str, close_reason_str, endpoint_sides, endpoints_str, lineage_str,
-    total_bytes, total_packets,
+    by_id, child_chain_str, close_reason_str, condensed_marker, endpoint_sides, endpoints_str,
+    lineage_str, total_bytes, total_packets,
 };
 use serde_json::{json, Value as Json};
 
@@ -51,6 +52,10 @@ fn stream_row(prefix: &str, s: &Stream, first_seen_col: bool) -> Row {
     if !endpoints.is_empty() {
         label.push_str("  ");
         label.push_str(&endpoints);
+    }
+    if let Some(marker) = condensed_marker(s) {
+        label.push_str("  ");
+        label.push_str(&marker);
     }
     label.push_str(&state);
 
@@ -274,6 +279,7 @@ pub fn resolve_selector<'a>(
         return snapshot
             .streams
             .iter()
+            .map(|s| &**s)
             .find(|s| s.created_seq == seq)
             .ok_or_else(|| CliError::NotFound(format!("no stream #{seq} in this capture")));
     }
@@ -289,6 +295,7 @@ pub fn resolve_selector<'a>(
     let candidates: Vec<&Stream> = snapshot
         .streams
         .iter()
+        .map(|s| &**s)
         .filter(|s| s.protocol == *proto)
         .filter(|s| {
             let (a, b, _) = endpoint_sides(s);
@@ -423,7 +430,13 @@ pub fn stream_detail(
     if !s.rollups.is_empty() {
         out.push_str("rollups\n");
         for (field, rollup) in s.rollups.iter() {
-            out.push_str(&rollup_line(s.protocol, field, rollup, full_series));
+            out.push_str(&rollup_line(
+                s.first_seen,
+                s.protocol,
+                field,
+                rollup,
+                full_series,
+            ));
         }
     }
 
@@ -440,7 +453,13 @@ pub fn stream_detail(
 }
 
 /// One rollup line per kind (05.4 honesty markers included).
-fn rollup_line(protocol: &str, field: &str, rollup: &Rollup, full_series: bool) -> String {
+fn rollup_line(
+    base: SystemTime,
+    protocol: &str,
+    field: &str,
+    rollup: &Rollup,
+    full_series: bool,
+) -> String {
     match rollup {
         Rollup::Accumulate {
             values,
@@ -487,7 +506,7 @@ fn rollup_line(protocol: &str, field: &str, rollup: &Rollup, full_series: bool) 
                 };
                 format!(
                     "{} {arrow} {}",
-                    time_of_day(p.ts),
+                    time_of_day(p.ts(base)),
                     field_value_str(protocol, field, &p.value)
                 )
             };
@@ -692,6 +711,12 @@ fn summary_json(
     m.insert("bytes".into(), json!(snapshot.summary.bytes));
     m.insert("stop_classes".into(), Json::Object(stop_classes));
     m.insert("streams".into(), Json::Object(per_protocol));
+    if snapshot.summary.flows_condensed > 0 {
+        m.insert(
+            "flows_condensed".into(),
+            json!(snapshot.summary.flows_condensed),
+        );
+    }
     m.insert(
         "capture_drops".into(),
         json!(outcome.report.stats.dropped_kernel + outcome.report.stats.dropped_iface),

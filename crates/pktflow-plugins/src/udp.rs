@@ -3,8 +3,9 @@
 //! exactly what keeps encrypted payloads from fabricating streams.
 
 use pktflow_core::{
-    ByteReader, Canonicalize, Depth, FieldMap, FieldName, Hint, KeyField, LayerPlugin, ParseCtx,
-    ParseError, ParsedLayer, ProtocolName, RollupKind, RollupSpec, RouteId, StreamIdentity, Value,
+    ByteReader, Canonicalize, CondenseSpec, Depth, FieldMap, FieldName, Hint, KeyField,
+    LayerPlugin, ParseCtx, ParseError, ParsedLayer, ProtocolName, RollupKind, RollupSpec, RouteId,
+    StreamIdentity, Value,
 };
 use smallvec::SmallVec;
 
@@ -73,5 +74,16 @@ impl LayerPlugin for Udp {
 
     fn stream_identity(&self) -> Option<&StreamIdentity> {
         Some(&IDENTITY)
+    }
+
+    // D16 (12.3): ephemeral-port fan-out condenses on the port pair.
+    fn condense(&self) -> Option<&'static CondenseSpec> {
+        static CONDENSE: CondenseSpec = CondenseSpec {
+            ephemeral: KeyField {
+                a: SRC_PORT,
+                b: Some(DST_PORT),
+            },
+        };
+        Some(&CONDENSE)
     }
 }

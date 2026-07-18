@@ -33,6 +33,13 @@ with near-miss scores and real sample bytes. `pktflow unknown '#n' --scaffold NA
    (`app = Str("dns")`). You get exactly one child stream per transport
    stream: a clean home for rollups without inventing endpoint
    semantics. See dns.rs.
+
+   **Fan-out-prone protocols** (D16): if one of your key pairs is an
+   ephemeral dimension — many short flows differing only in that pair's
+   value on one side, like TCP/UDP's port pair — also override
+   `condense()` to name it. Beyond a threshold, same-anchor flows fold
+   into one condensed node instead of drowning the view. Requires an
+   `EndpointSort` identity whose `key` contains the pair; see tcp.rs.
 5. **Register it.** Add one `.plugin(your_protocol::YourProtocol)` line to
    `default_engine()` in `crates/pktflow-plugins/src/lib.rs`. Duplicate
    names or route claims fail the build with an error naming both parties.

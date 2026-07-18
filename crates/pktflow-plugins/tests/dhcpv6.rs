@@ -102,7 +102,7 @@ fn dhcpv6_dora_series_preserves_order() {
             assert!(!truncated);
             for point in ring {
                 match &point.value {
-                    Value::U64(v) => observed.push((point.ts, *v)),
+                    Value::U64(v) => observed.push((point.ts(s.first_seen), *v)),
                     other => panic!("unexpected {other:?}"),
                 }
             }

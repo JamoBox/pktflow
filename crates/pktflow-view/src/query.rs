@@ -23,13 +23,14 @@
 //!   (any ancestor protocol). Any other name resolves against the
 //!   stream's key fields and rollup values (`vni == 100`,
 //!   `qname =~ /google/`).
-//! - **Flags**: bare `closed`, `live`, `root`, `leaf`.
+//! - **Flags**: bare `closed`, `live`, `root`, `leaf`, `condensed`.
 //! - **Values**: numbers take magnitude suffixes on byte/count fields
 //!   (`10k`, `1.5M`, `2g`) and time suffixes on `duration` (`500ms`,
 //!   `90s`, `5m`, `1h`). String comparisons are case-insensitive; `=~`
 //!   compiles a case-insensitive regex.
 
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use pktflow_flows::{Rollup, Stream, StreamId};
 use regex::{Regex, RegexBuilder};
@@ -82,6 +83,8 @@ enum Flag {
     Live,
     Root,
     Leaf,
+    /// D16 (12.3): the stream is a condensed fan-out group.
+    Condensed,
 }
 
 #[derive(Clone, PartialEq, Eq, Debug)]
@@ -458,6 +461,7 @@ impl Parser {
                     "live" | "open" => Ok(Expr::Flag(Flag::Live)),
                     "root" => Ok(Expr::Flag(Flag::Root)),
                     "leaf" => Ok(Expr::Flag(Flag::Leaf)),
+                    "condensed" => Ok(Expr::Flag(Flag::Condensed)),
                     _ => Ok(Expr::FreeText(w.to_lowercase())),
                 }
             }
@@ -600,6 +604,7 @@ fn eval(e: &Expr, s: &Stream, ids: &HashMap<StreamId, &Stream>) -> bool {
             Flag::Live => s.closed.is_none(),
             Flag::Root => s.parent.is_none(),
             Flag::Leaf => s.children.is_empty(),
+            Flag::Condensed => s.condensed.is_some(),
         },
         Expr::Cmp { field, op, value } => {
             let candidates = field_candidates(field, s, ids);
@@ -765,12 +770,12 @@ fn compare(c: &Candidate, op: CmpOp, value: &Literal, field: &Field) -> bool {
 /// match — the visible set both UIs display, so results always sit in
 /// their hierarchy context.
 pub fn matching_with_ancestors(
-    streams: &[Stream],
+    streams: &[Arc<Stream>],
     ids: &HashMap<StreamId, &Stream>,
     query: &StreamQuery,
 ) -> std::collections::HashSet<u64> {
     let mut keep = std::collections::HashSet::new();
-    for s in streams {
+    for s in streams.iter().map(|s| &**s) {
         if query.matches(s, ids) {
             keep.insert(s.created_seq);
             let mut cursor = s.parent;

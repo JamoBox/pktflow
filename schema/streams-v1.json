@@ -33,6 +33,7 @@
           "type": "object",
           "additionalProperties": { "type": "integer", "minimum": 0 }
         },
+        "flows_condensed": { "type": "integer", "minimum": 0 },
         "capture_drops": { "type": "integer", "minimum": 0 }
       }
     },
@@ -64,6 +65,15 @@
         "rollups": {
           "type": "object",
           "additionalProperties": { "$ref": "#/$defs/rollup" }
+        },
+        "condensed": {
+          "type": "object",
+          "required": ["member_flows", "ephemeral_field", "overflow"],
+          "properties": {
+            "member_flows": { "type": "integer", "minimum": 0 },
+            "ephemeral_field": { "type": "string" },
+            "overflow": { "type": "boolean" }
+          }
         },
         "event": {
           "enum": ["stream_new", "stream_update", "stream_closed"]
