@@ -8,6 +8,7 @@ use pktflow_core::{Hint, RouteId, Value};
 use pktflow_plugins::ah::Ah;
 use pktflow_plugins::arp::Arp;
 use pktflow_plugins::bacnet_ip::BacnetIp;
+use pktflow_plugins::bfd::Bfd;
 use pktflow_plugins::bgp::Bgp;
 use pktflow_plugins::cdp::Cdp;
 use pktflow_plugins::dhcp::Dhcp;
@@ -17,6 +18,7 @@ use pktflow_plugins::dns::Dns;
 use pktflow_plugins::dot11::Dot11;
 use pktflow_plugins::eapol::Eapol;
 use pktflow_plugins::enip::Enip;
+use pktflow_plugins::erspan::Erspan;
 use pktflow_plugins::esp::Esp;
 use pktflow_plugins::ethernet::Ethernet;
 use pktflow_plugins::geneve::Geneve;
@@ -38,14 +40,17 @@ use pktflow_plugins::llmnr::Llmnr;
 use pktflow_plugins::mdns::Mdns;
 use pktflow_plugins::mld::Mld;
 use pktflow_plugins::modbus::Modbus;
+use pktflow_plugins::mpls::Mpls;
 use pktflow_plugins::mqtt::Mqtt;
 use pktflow_plugins::ndp::Ndp;
 use pktflow_plugins::netflow9::Netflow9;
 use pktflow_plugins::ntp::Ntp;
 use pktflow_plugins::ospf::Ospf;
+use pktflow_plugins::ptp::Ptp;
 use pktflow_plugins::pvst_plus::PvstPlus;
 use pktflow_plugins::radiotap::Radiotap;
 use pktflow_plugins::radius::Radius;
+use pktflow_plugins::rocev2::Rocev2;
 use pktflow_plugins::sctp::Sctp;
 use pktflow_plugins::snmp::Snmp;
 use pktflow_plugins::ssdp::Ssdp;
@@ -3063,6 +3068,193 @@ fn tls_conforms() {
             ],
             expected_hint: Hint::Terminal,
         }],
+        outer_ctx: Vec::new(),
+    });
+}
+
+#[test]
+fn mpls_conforms() {
+    run_conformance(&ConformanceCase {
+        plugin: Box::new(Mpls),
+        good: vec![
+            // RFC 3032: single entry — label 16 (first unreserved), TC 5,
+            // bottom of stack, TTL 64.
+            GoodPacket {
+                bytes: vec![0x00, 0x01, 0x0B, 0x40],
+                expected_header_len: 4,
+                expected_full_fields: vec![
+                    ("label", Value::U64(16)),
+                    ("tc", Value::U64(5)),
+                    ("ttl", Value::U64(64)),
+                    ("stack_depth", Value::U64(1)),
+                    ("labels", Value::List(vec![Value::U64(16)])),
+                ],
+                expected_hint: Hint::Unknown,
+            },
+            // Transport label 100 over service label 200 (S only on the
+            // bottom entry): top-entry fields, both labels listed.
+            GoodPacket {
+                bytes: vec![0x00, 0x06, 0x40, 0xFF, 0x00, 0x0C, 0x81, 0xFF],
+                expected_header_len: 8,
+                expected_full_fields: vec![
+                    ("label", Value::U64(100)),
+                    ("tc", Value::U64(0)),
+                    ("ttl", Value::U64(255)),
+                    ("stack_depth", Value::U64(2)),
+                    (
+                        "labels",
+                        Value::List(vec![Value::U64(100), Value::U64(200)]),
+                    ),
+                ],
+                expected_hint: Hint::Unknown,
+            },
+        ],
+        outer_ctx: Vec::new(),
+    });
+}
+
+#[test]
+fn bfd_conforms() {
+    // RFC 5880 §4.1 control packet: state Up (3), no flags, detect mult 3,
+    // discriminator pair 7/9, 100ms tx/rx intervals, no echo.
+    let mut bytes = vec![0x20, 0xC0, 3, 24];
+    bytes.extend_from_slice(&7u32.to_be_bytes());
+    bytes.extend_from_slice(&9u32.to_be_bytes());
+    bytes.extend_from_slice(&100_000u32.to_be_bytes());
+    bytes.extend_from_slice(&100_000u32.to_be_bytes());
+    bytes.extend_from_slice(&0u32.to_be_bytes());
+    run_conformance(&ConformanceCase {
+        plugin: Box::new(Bfd),
+        good: vec![GoodPacket {
+            bytes,
+            expected_header_len: 24,
+            expected_full_fields: vec![
+                ("my_discriminator", Value::U64(7)),
+                ("your_discriminator", Value::U64(9)),
+                ("version", Value::U64(1)),
+                ("diag", Value::U64(0)),
+                ("state", Value::U64(3)),
+                ("flags", Value::U64(0)),
+                ("detect_mult", Value::U64(3)),
+                ("length", Value::U64(24)),
+                ("desired_min_tx", Value::U64(100_000)),
+                ("required_min_rx", Value::U64(100_000)),
+                ("required_min_echo_rx", Value::U64(0)),
+            ],
+            expected_hint: Hint::Terminal,
+        }],
+        outer_ctx: Vec::new(),
+    });
+}
+
+#[test]
+fn rocev2_conforms() {
+    // IBTA BTH: RC RDMA WRITE First (opcode 6), SE set, tver 0, default
+    // pkey, dest QP 0xD2, ACK requested, PSN 0x123456.
+    run_conformance(&ConformanceCase {
+        plugin: Box::new(Rocev2),
+        good: vec![GoodPacket {
+            bytes: vec![
+                6, 0x80, 0xFF, 0xFF, 0x00, 0x00, 0x00, 0xD2, 0x80, 0x12, 0x34, 0x56,
+            ],
+            expected_header_len: 12,
+            expected_full_fields: vec![
+                ("dest_qp", Value::U64(0xD2)),
+                ("opcode", Value::U64(6)),
+                ("pkey", Value::U64(0xFFFF)),
+                ("psn", Value::U64(0x123456)),
+                ("pad_count", Value::U64(0)),
+                ("solicited", Value::Bool(true)),
+                ("mig_req", Value::Bool(false)),
+                ("ack_req", Value::Bool(true)),
+            ],
+            expected_hint: Hint::Terminal,
+        }],
+        outer_ctx: Vec::new(),
+    });
+}
+
+#[test]
+fn ptp_conforms() {
+    // IEEE 1588-2008 §13.3 Sync (type 0), domain 0, twoStepFlag, sequence
+    // 0x1234, logMessageInterval -1, 10-byte originTimestamp body.
+    let mut bytes = vec![0x00, 0x02];
+    bytes.extend_from_slice(&44u16.to_be_bytes());
+    bytes.extend_from_slice(&[0, 0]); // domain, reserved
+    bytes.extend_from_slice(&0x0200u16.to_be_bytes()); // flags
+    bytes.extend_from_slice(&0u64.to_be_bytes()); // correction
+    bytes.extend_from_slice(&0u32.to_be_bytes()); // reserved
+    bytes.extend_from_slice(&[0x00, 0x1B, 0x19, 0xFF, 0xFE, 0x00, 0x01, 0x02]);
+    bytes.extend_from_slice(&1u16.to_be_bytes()); // source port id
+    bytes.extend_from_slice(&0x1234u16.to_be_bytes());
+    bytes.push(0); // control
+    bytes.push(0xFF); // logMessageInterval -1
+    bytes.extend_from_slice(&[0u8; 10]); // originTimestamp
+    run_conformance(&ConformanceCase {
+        plugin: Box::new(Ptp),
+        good: vec![GoodPacket {
+            bytes,
+            expected_header_len: 44,
+            expected_full_fields: vec![
+                ("domain", Value::U64(0)),
+                ("msg_type", Value::U64(0)),
+                ("version", Value::U64(2)),
+                ("sequence_id", Value::U64(0x1234)),
+                (
+                    "clock_identity",
+                    Value::from(&[0x00, 0x1B, 0x19, 0xFF, 0xFE, 0x00, 0x01, 0x02][..]),
+                ),
+                ("source_port_id", Value::U64(1)),
+                ("message_length", Value::U64(44)),
+                ("flags", Value::U64(0x0200)),
+                ("correction", Value::U64(0)),
+                ("log_message_interval", Value::I64(-1)),
+            ],
+            expected_hint: Hint::Terminal,
+        }],
+        outer_ctx: Vec::new(),
+    });
+}
+
+#[test]
+fn erspan_conforms() {
+    run_conformance(&ConformanceCase {
+        plugin: Box::new(Erspan),
+        good: vec![
+            // Type II: VLAN 100, CoS 3, session 42, index 7.
+            GoodPacket {
+                bytes: vec![0x10, 0x64, 0x60, 0x2A, 0x00, 0x00, 0x00, 0x07],
+                expected_header_len: 8,
+                expected_full_fields: vec![
+                    ("session_id", Value::U64(42)),
+                    ("version", Value::U64(1)),
+                    ("vlan", Value::U64(100)),
+                    ("cos", Value::U64(3)),
+                    ("index", Value::U64(7)),
+                    ("truncated", Value::Bool(false)),
+                ],
+                expected_hint: Hint::ByProtocol("ethernet"),
+            },
+            // Type III: hardware timestamp, SGT 5, frame type Ethernet,
+            // no platform subheader.
+            GoodPacket {
+                bytes: vec![
+                    0x20, 0x64, 0x60, 0x2A, 0xDE, 0xAD, 0xBE, 0xEF, 0x00, 0x05, 0x00, 0x00,
+                ],
+                expected_header_len: 12,
+                expected_full_fields: vec![
+                    ("session_id", Value::U64(42)),
+                    ("version", Value::U64(2)),
+                    ("vlan", Value::U64(100)),
+                    ("cos", Value::U64(3)),
+                    ("timestamp", Value::U64(0xDEAD_BEEF)),
+                    ("sgt", Value::U64(5)),
+                    ("frame_type", Value::U64(0)),
+                    ("truncated", Value::Bool(false)),
+                ],
+                expected_hint: Hint::ByProtocol("ethernet"),
+            },
+        ],
         outer_ctx: Vec::new(),
     });
 }

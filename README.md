@@ -39,8 +39,12 @@ picture, not just decoding bytes. See [`PRD.md`](PRD.md) for the full product ra
   per-stream lifetime lanes with a scrubbable/playable playhead, so temporal causality
   (the DNS lookup firing just before the TCP session opens) is visible at a glance.
   Both work offline and live. See [`docs/tui-and-web.md`](docs/tui-and-web.md).
-- 13 reference protocol plugins today: Ethernet, 802.1Q VLAN, ARP, IPv4, IPv6, ICMPv4, IGMP,
-  TCP, UDP, GRE, VXLAN, DNS, DHCP, NTP.
+- 59 reference protocol plugins today, spanning link (Ethernet, 802.1Q VLAN, LLDP, LACP,
+  STP), network (ARP, IPv4, IPv6, ICMP, IGMP, OSPF, BGP), transport (TCP, UDP, SCTP),
+  tunnels and overlays (GRE, VXLAN, Geneve, MPLS, ERSPAN, GTP-U, IPsec, WireGuard),
+  data-center control and fabric planes (BFD, VRRP, HSRP, RoCEv2, PTP), applications
+  (DNS, DHCP, NTP, HTTP, TLS, SNMP, syslog), Wi-Fi (radiotap, 802.11), and
+  industrial/IoT (Modbus, DNP3, MQTT, BACnet/IP).
 
 ## Screenshots
 

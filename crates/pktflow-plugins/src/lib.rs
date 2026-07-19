@@ -8,6 +8,7 @@ use pktflow_core::Engine;
 pub mod ah;
 pub mod arp;
 pub mod bacnet_ip;
+pub mod bfd;
 pub mod bgp;
 pub mod cdp;
 pub mod dhcp;
@@ -17,6 +18,7 @@ pub mod dns;
 pub mod dot11;
 pub mod eapol;
 pub mod enip;
+pub mod erspan;
 pub mod esp;
 pub mod ethernet;
 pub mod geneve;
@@ -38,14 +40,17 @@ pub mod llmnr;
 pub mod mdns;
 pub mod mld;
 pub mod modbus;
+pub mod mpls;
 pub mod mqtt;
 pub mod ndp;
 pub mod netflow9;
 pub mod ntp;
 pub mod ospf;
+pub mod ptp;
 pub mod pvst_plus;
 pub mod radiotap;
 pub mod radius;
+pub mod rocev2;
 pub mod sctp;
 pub mod snmp;
 pub mod ssdp;
@@ -79,11 +84,14 @@ pub fn default_engine() -> Engine {
         .plugin(vrrp::Vrrp)
         .plugin(hsrp::Hsrp)
         .plugin(ospf::Ospf)
+        .plugin(bfd::Bfd)
         .plugin(tcp::Tcp)
         .plugin(udp::Udp)
         .plugin(sctp::Sctp)
         .plugin(bgp::Bgp)
         .plugin(gre::Gre)
+        .plugin(erspan::Erspan)
+        .plugin(mpls::Mpls)
         .plugin(vxlan::Vxlan)
         .plugin(gtp_u::GtpU)
         .plugin(geneve::Geneve)
@@ -97,6 +105,8 @@ pub fn default_engine() -> Engine {
         .plugin(dhcp::Dhcp)
         .plugin(dhcpv6::Dhcpv6)
         .plugin(ntp::Ntp)
+        .plugin(ptp::Ptp)
+        .plugin(rocev2::Rocev2)
         .plugin(lldp::Lldp)
         .plugin(llc::Llc)
         .plugin(lacp::Lacp)
