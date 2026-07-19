@@ -168,6 +168,28 @@ fn mpls_stack_hands_off_to_ipv4_heuristically() {
     assert_eq!(chain(&agg), ["ethernet", "mpls", "ipv4", "udp", "bfd"]);
 }
 
+/// An IPv4 Explicit NULL bottom label (RFC 3032 §2.1) is a definitive
+/// protocol indicator: dissection dispatches straight to `ipv4` with no
+/// heuristic in the loop. Proven by corrupting the IPv4 checksum — the
+/// heuristic probe would decline this payload, so only the explicit
+/// dispatch can have reached it.
+#[test]
+fn mpls_explicit_null_dispatches_without_heuristics() {
+    let engine = Arc::new(default_engine());
+
+    let mut inner = ipv4(17, [10, 0, 0, 1], [10, 0, 0, 2], 8);
+    inner[10..12].copy_from_slice(&[0xBA, 0xAD]); // invalid checksum
+    let mut frame = eth(MAC_B, MAC_A, 0x8847);
+    frame.extend_from_slice(&mpls_entry(100, false, 255));
+    frame.extend_from_slice(&mpls_entry(0, true, 255)); // IPv4 Explicit NULL
+    frame.extend_from_slice(&inner);
+    frame.extend_from_slice(&udp(50000, 60000, 0)); // unclaimed ports
+
+    let packet = engine.dissect(&frame, meta(frame.len(), 0), ParseOpts::default());
+    let protocols: Vec<ProtocolName> = packet.layers.iter().map(|l| l.protocol).collect();
+    assert_eq!(protocols, ["ethernet", "mpls", "ipv4", "udp"]);
+}
+
 /// A truncated or absent bottom-of-stack payload must stop cleanly, not
 /// guess: an LSP carrying an EoMPLS pseudowire (control word first) looks
 /// like nothing any probe recognizes.

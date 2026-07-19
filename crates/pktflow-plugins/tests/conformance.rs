@@ -3108,6 +3108,20 @@ fn mpls_conforms() {
                 ],
                 expected_hint: Hint::Unknown,
             },
+            // Transport label over IPv4 Explicit NULL (RFC 3032 §2.1 /
+            // RFC 4182): the bottom label names the payload protocol.
+            GoodPacket {
+                bytes: vec![0x00, 0x06, 0x40, 0xFF, 0x00, 0x00, 0x01, 0xFF],
+                expected_header_len: 8,
+                expected_full_fields: vec![
+                    ("label", Value::U64(100)),
+                    ("tc", Value::U64(0)),
+                    ("ttl", Value::U64(255)),
+                    ("stack_depth", Value::U64(2)),
+                    ("labels", Value::List(vec![Value::U64(100), Value::U64(0)])),
+                ],
+                expected_hint: Hint::ByProtocol("ipv4"),
+            },
         ],
         outer_ctx: Vec::new(),
     });

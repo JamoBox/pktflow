@@ -4,14 +4,18 @@
 //! not one layer per label (the VLAN precedent of one plugin per tagging
 //! scheme, not per tag).
 //!
-//! MPLS famously has **no next-protocol field**: what follows the bottom
-//! label is whatever the LSP's endpoints agreed on out of band. The wire
-//! itself names nothing, so the honest hint is [`Hint::Unknown`] — the
-//! gated heuristic fallback (03.4) then lets `ipv4`/`ipv6` claim the
-//! payload via their first-nibble probes, which covers the dominant
-//! IP-over-MPLS case without this plugin peeking past its own header
-//! (contract rule 1). Pseudowire payloads (EoMPLS with a control word)
-//! stay unknown rather than guessed.
+//! MPLS famously has **no next-protocol field** — with one exception the
+//! header itself provides: the reserved Explicit NULL labels (RFC 3032
+//! §2.1, RFC 4182). A bottom-of-stack label 0 (IPv4 Explicit NULL) or 2
+//! (IPv6 Explicit NULL) *names* the payload protocol, so those dispatch
+//! directly by name (the most explicit hint the header allows, 02.1).
+//! Any other bottom label names nothing: what follows is whatever the
+//! LSP's endpoints agreed on out of band, so the honest hint is
+//! [`Hint::Unknown`] — the gated heuristic fallback (03.4) then lets
+//! `ipv4`/`ipv6` claim the payload via their probes, which covers the
+//! dominant IP-over-MPLS case without this plugin peeking past its own
+//! header (contract rule 1). Pseudowire payloads (EoMPLS with a control
+//! word) stay unknown rather than guessed.
 //!
 //! Stream identity follows the GRE-`key`/VXLAN-`vni` shared-qualifier
 //! shape (06.5): one stream per top label — the label *is* the LSP as far
@@ -31,6 +35,11 @@ const LABELS: FieldName = "labels";
 /// Real stacks run a handful of labels (transport + service + entropy);
 /// anything past this is hostile or corrupt, not an LSP.
 const MAX_LABELS: usize = 16;
+
+/// RFC 3032 §2.1 reserved labels that name the payload protocol when
+/// they sit at the bottom of the stack.
+const IPV4_EXPLICIT_NULL: u64 = 0;
+const IPV6_EXPLICIT_NULL: u64 = 2;
 
 static KEY: &[KeyField] = &[KeyField {
     a: LABEL,
@@ -54,7 +63,7 @@ impl LayerPlugin for Mpls {
         let mut r = ByteReader::new(bytes);
         let mut entries: Vec<Value> = Vec::new();
         let (mut top_label, mut top_tc, mut top_ttl) = (0u64, 0u64, 0u64);
-        loop {
+        let bottom_label = loop {
             if entries.len() == MAX_LABELS {
                 return Err(ParseError::Malformed("MPLS: label stack too deep"));
             }
@@ -67,9 +76,9 @@ impl LayerPlugin for Mpls {
             }
             entries.push(Value::U64(label));
             if entry & 0x100 != 0 {
-                break; // bottom of stack
+                break label; // bottom of stack
             }
-        }
+        };
 
         let mut fields = FieldMap::new();
         if ctx.depth() >= Depth::Keys {
@@ -85,12 +94,18 @@ impl LayerPlugin for Mpls {
             fields.insert(LABELS, Value::List(entries));
         }
 
+        // An Explicit NULL at the bottom is the one case where the stack
+        // itself names its payload (module doc); everything else defers
+        // to the gated heuristics instead of guessing.
+        let hint = match bottom_label {
+            IPV4_EXPLICIT_NULL => Hint::ByProtocol("ipv4"),
+            IPV6_EXPLICIT_NULL => Hint::ByProtocol("ipv6"),
+            _ => Hint::Unknown,
+        };
         Ok(ParsedLayer {
             header_len,
             fields,
-            // No next-protocol field on the wire (module doc): let the
-            // gated heuristics score the payload instead of guessing.
-            hint: Hint::Unknown,
+            hint,
         })
     }
 
@@ -165,6 +180,34 @@ mod tests {
             parsed.fields.get(LABELS),
             Some(&Value::List(vec![Value::U64(100), Value::U64(200)]))
         );
+    }
+
+    #[test]
+    fn ipv4_explicit_null_at_bottom_names_the_payload() {
+        // Transport label over IPv4 Explicit NULL (RFC 4182's stack shape):
+        // the bottom label is a definitive protocol indicator.
+        let mut bytes = entry(100, 0, false, 255).to_vec();
+        bytes.extend_from_slice(&entry(0, 0, true, 255));
+        let parsed = parse(&bytes).expect("valid explicit-null stack");
+        assert_eq!(parsed.hint, Hint::ByProtocol("ipv4"));
+        assert_eq!(parsed.fields.get(LABEL), Some(&Value::U64(100)));
+    }
+
+    #[test]
+    fn ipv6_explicit_null_at_bottom_names_the_payload() {
+        let bytes = entry(2, 0, true, 64);
+        let parsed = parse(&bytes).expect("valid explicit-null stack");
+        assert_eq!(parsed.hint, Hint::ByProtocol("ipv6"));
+    }
+
+    #[test]
+    fn explicit_null_above_the_bottom_is_not_a_protocol_indicator() {
+        // Label 0 in a non-bottom position doesn't name the payload —
+        // only the bottom entry sits next to it.
+        let mut bytes = entry(0, 0, false, 255).to_vec();
+        bytes.extend_from_slice(&entry(200, 0, true, 255));
+        let parsed = parse(&bytes).expect("valid stack");
+        assert_eq!(parsed.hint, Hint::Unknown);
     }
 
     #[test]
