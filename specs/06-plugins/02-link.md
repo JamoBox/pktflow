@@ -14,7 +14,7 @@ pass-through layer (VLAN).
 |---|---|
 | Claims | `LinkType(1 /* DLT_EN10MB */)` |
 | Fields | `Keys`: `src_mac`, `dst_mac` (Bytes, 6) · `Structural`: `ethertype` (U64) |
-| Hint | `Route(EtherType(ethertype))`; ethertype < 0x0600 (802.3 length) → `Unknown` |
+| Hint | `Route(EtherType(ethertype))`; ethertype < 0x0600 (802.3 length, IEEE 802.3-2018 §3.2.6 — deterministic, never a real EtherType) → `Route(Custom{space:"eth_llc_frame", id:0})`, claimed by `llc` (11.1) |
 | Probe | none (link entry is explicit by link type) |
 | Identity | key `[{src_mac, dst_mac}]`, `EndpointSort` → **MAC conversation** (FR-21) |
 | Rollups | `Accumulate` on `ethertype` (protocols seen inside this MAC pair) |
@@ -35,6 +35,8 @@ returns the inner one (01.4 innermost-wins — this is the spec's stacked-repeat
 ## Acceptance criteria
 - [x] Real-frame fixtures parse with exact expected fields; truncation tests at 13 and
       17 bytes (mid-tag).
+- [x] `ethertype < 0x0600` (802.3 length) hints the explicit `Custom{"eth_llc_frame", 0}`
+      route, not `Unknown` — `llc` (11.1) claims it directly, no heuristic guessing involved.
 - [x] MAC conversation forms with folded directions on an A↔B fixture (FR-21 item 1).
 - [x] eth ▸ vlan ▸ ipv4 packet: IP stream's parent is the **eth** stream (identity-less
       bridge, 05.2 criterion).

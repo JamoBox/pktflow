@@ -181,13 +181,10 @@ fn stp_config_bpdu() -> Vec<u8> {
 }
 
 #[test]
-fn eth_802_3_length_field_falls_back_through_llc_to_stp_end_to_end() {
+fn eth_802_3_length_field_routes_through_llc_to_stp_end_to_end() {
     // ethertype's low value is an 802.3 *length* (< 0x0600), so ethernet
-    // (06.2) emits Hint::Unknown rather than guessing; llc (11.1) wins
-    // the fallback pool and routes dsap 0x42 to stp via the llc_dsap
-    // Custom space. Bridge Group Address destination (STP's fixed
-    // multicast target) also exercises llc's cross-layer dst_mac probe
-    // boost along the way.
+    // (06.2) routes explicitly to llc's eth_llc_frame claim (11.1); llc
+    // in turn routes dsap 0x42 to stp via the llc_dsap Custom space.
     const IEEE_BRIDGE_GROUP: [u8; 6] = [0x01, 0x80, 0xC2, 0x00, 0x00, 0x00];
 
     let engine = Arc::new(default_engine());
@@ -203,6 +200,21 @@ fn eth_802_3_length_field_falls_back_through_llc_to_stp_end_to_end() {
     pkt.extend_from_slice(&bpdu);
 
     let m = meta(pkt.len(), 0);
+
+    // Routing-tier check first: llc must resolve via the explicit tier
+    // now (claims(), not probe()'s heuristic fallback pool), even though
+    // the destination is still a Bridge Group Address that would also
+    // have won the fallback pool on its own.
+    let via_heuristic: Vec<_> = engine
+        .layers(&pkt, &m, ParseOpts::default())
+        .map(|step| (step.record.protocol, step.via_heuristic))
+        .collect();
+    assert_eq!(
+        via_heuristic,
+        [("ethernet", false), ("llc", false), ("stp", false)],
+        "llc resolves via ethernet's explicit eth_llc_frame route, not the heuristic pool"
+    );
+
     let packet = engine.dissect(&pkt, m, ParseOpts::default());
     let protocols: Vec<_> = packet.layers.iter().map(|l| l.protocol).collect();
     assert_eq!(protocols, ["ethernet", "llc", "stp"]);
@@ -243,7 +255,8 @@ fn cdp_pdu() -> Vec<u8> {
 fn eth_802_3_length_field_falls_back_through_llc_to_cdp_end_to_end() {
     // Cisco's multicast control-plane destination, and a SNAP frame
     // (OUI 00-00-0C Cisco, PID 0x2000 CDP) — the snap_pid Custom space
-    // llc mints, now claimed by cdp.
+    // llc mints, now claimed by cdp. ethernet routes to llc explicitly
+    // (eth_llc_frame), same as the stp fixture above.
     const CISCO_MULTICAST: [u8; 6] = [0x01, 0x00, 0x0C, 0xCC, 0xCC, 0xCC];
 
     let engine = Arc::new(default_engine());
@@ -487,24 +500,36 @@ fn pvst_plus_forms_no_stream_of_its_own() {
 }
 
 #[test]
-fn eth_802_3_length_field_with_unrecognized_saps_declines_rather_than_misrouting() {
-    // A well-formed-looking 802.3-length frame whose LLC-shaped bytes
-    // have neither a recognized SAP pair nor a reserved dst_mac: llc's
-    // probe correctly scores nothing, no other fallback-pool plugin
-    // claims these bytes either, so dissection honestly stops at
-    // ethernet rather than fabricating a layer.
+fn eth_802_3_length_field_with_an_unclaimed_dsap_parses_llc_then_declines_honestly() {
+    // ethertype < 0x0600 is deterministically 802.3-length + LLC-framed
+    // (IEEE 802.3-2018 §3.2.6, no guessing involved), so ethernet routes
+    // explicitly to llc's `eth_llc_frame` claim regardless of which DSAP
+    // shows up — llc structurally parses this header even though 0x01
+    // isn't one of this domain's well-known SAPs. Only the *next* hop
+    // (llc's own `Custom{"llc_dsap", 1}` route) is unclaimed, so
+    // dissection honestly stops one layer later than before, never
+    // fabricating a layer beyond what the wire format actually names.
     let engine = Arc::new(default_engine());
-    let mut pkt = eth_frame(MAC_B, MAC_A, 0x0004);
+    let mut pkt = eth_frame(MAC_B, MAC_A, 0x0005);
     pkt.extend_from_slice(&[0x01, 0x01, 0x00, 0x00]); // dsap/ssap 0x01: not in the well-known set
+    pkt.push(0xFF); // trailing payload so llc's route is actually resolved
 
     let m = meta(pkt.len(), 0);
     let packet = engine.dissect(&pkt, m, ParseOpts::default());
     assert_eq!(
         packet.layers.iter().map(|l| l.protocol).collect::<Vec<_>>(),
-        ["ethernet"],
-        "no fallback-pool plugin mis-routes unrecognized SAPs"
+        ["ethernet", "llc"],
+        "llc's structural header parses via the explicit eth_llc_frame route"
     );
-    assert_eq!(packet.stop, StopReason::UnknownHint);
+    assert_eq!(packet.layers[1].fields.get("dsap"), Some(&Value::U64(0x01)));
+    assert_eq!(
+        packet.stop,
+        StopReason::UnclaimedRoute(RouteId::Custom {
+            space: "llc_dsap",
+            id: 0x01
+        }),
+        "no plugin claims dsap 0x01, so dissection stops honestly rather than mis-routing"
+    );
 }
 
 // ---- 11.2: 802.11 link entry ----

@@ -18,16 +18,18 @@ merely corroborating (see "Destination-MAC recognition").
 **Standard:** IEEE 802.2-1998 (LLC); SNAP extension per IEEE 802 / RFC 1042.
 
 STP and CDP predate EtherType-based demultiplexing and are carried in classic 802.3 LLC
-frames (Ethernet II's `ethertype` field repurposed as a length, so 06.2's ethernet plugin
-correctly emits `Hint::Unknown` for these — the 802.3-length case it explicitly declines to
-guess about). Routing them requires an `llc` plugin in the heuristic fallback pool:
+frames (Ethernet II's `ethertype` field repurposed as a length). That threshold is
+deterministic — IEEE 802.3-2018 §3.2.6: a value below `0x0600` is never a real EtherType, it
+is *always* an 802.3 length field, meaning the frame is *always* LLC-framed — so 06.2's
+ethernet plugin names an explicit route (`Custom{space:"eth_llc_frame", id:0}`) for it rather
+than guessing, and `llc` claims that route directly:
 
 | Item | Spec |
 |---|---|
-| Claims | none (see Probe) |
+| Claims | `Custom{space:"eth_llc_frame", id:0}` (06.2's explicit route for `ethertype < 0x0600`) |
 | Fields | `Structural`: `dsap`, `ssap`, `control` · `Full`: `oui` (present only if SNAP: dsap=ssap=0xAA), `pid` |
 | Hint | SNAP with OUI `0x000000` (RFC 1042 encapsulation — the PID *is* an EtherType) → `Route(EtherType(pid))`, reusing the real EtherType space exactly like GRE reuses it (06.5); SNAP with any other OUI → `Route(Custom{space:"snap_pid", id: (oui<<16)\|pid})`; non-SNAP → `Route(Custom{space:"llc_dsap", id: dsap})` |
-| Probe | Base signal: `dsap`/`ssap` one of the well-known values (0x42 STP, 0xAA SNAP, 0xE0 IPX, 0xF0 NetBIOS) and `control` is 0x03 (unnumbered) or a valid I/S-frame encoding → 55. **Cross-layer boost** (FR-17, reading `ctx.field("ethernet", "dst_mac")` — the parent layer's already-parsed field, exactly what cross-layer context exists for): `dst_mac` in the IEEE Bridge Group block (`01:80:C2:00:00:00`–`0F`) or the Cisco block (`01:00:0C:CC:CC:CC`/`CD`) → 90, regardless of the base DSAP signal — a reserved-multicast destination is a far stronger, standards-grounded signal than DSAP pattern-matching alone, and this is the one place in the domain where `dst_mac` is load-bearing rather than confirmatory (see the note above) |
+| Probe | Kept as defense-in-depth for any other future producer of raw 802.3-length-field-shaped bytes that only offers `Hint::Unknown` (`llc`'s own entry from `ethernet` now resolves via `Claims` above, not this). Base signal: `dsap`/`ssap` one of the well-known values (0x42 STP, 0xAA SNAP, 0xE0 IPX, 0xF0 NetBIOS) and `control` is 0x03 (unnumbered) or a valid I/S-frame encoding → 55. **Cross-layer boost** (FR-17, reading `ctx.field("ethernet", "dst_mac")` — the parent layer's already-parsed field, exactly what cross-layer context exists for): `dst_mac` in the IEEE Bridge Group block (`01:80:C2:00:00:00`–`0F`) or the Cisco block (`01:00:0C:CC:CC:CC`/`CD`) → 90, regardless of the base DSAP signal |
 | Expected predecessors | `expected_predecessors: ["ethernet", "dot11"]` |
 | Identity | None — a demux layer, not a conversation |
 | Payoff | The RFC 1042 branch means **no existing EtherType-claiming plugin needs to change** to work over LLC/SNAP-encapsulated media — notably 11.2's 802.11 data frames, which carry EAPOL (11.1's `eapol`, `EtherType(0x888E)`) and IP traffic this same way |
@@ -73,18 +75,18 @@ misattribute a frame) but not a design defect here.
 Two different roles fall out of this, and it's worth being precise about which is which
 rather than treating "check the dst_mac" as one undifferentiated improvement:
 
-1. **Load-bearing, for `llc`'s own entry.** `llc` currently reaches the router only via
-   `probe()` in the fallback pool (its outer layer, `ethernet`, emits `Hint::Unknown` for
-   the 802.3-length case it declines to name a route for, 06.2). A `dst_mac` match against
-   the IEEE or Cisco block is a far stronger, standards-grounded signal than the DSAP/
-   control-byte pattern-matching `llc`'s `probe()` used alone — this is the one place in the
-   domain where using `dst_mac` materially changes confidence, not just corroborates it. See
-   the updated `llc` Probe row below. **Deferred, documented rather than done:** since
+1. **No longer load-bearing for `llc`'s own entry — promoted to the explicit tier.**
    `ethertype < 0x0600` is itself a deterministic IEEE 802.3 signal (never a real EtherType,
-   always LLC-framed), `ethernet` (06.2) could in principle emit an explicit `Route` there
-   instead of `Unknown`, promoting `llc` to the explicit tier entirely. Left as `Unknown` for
-   now — that would mean editing an already-specified/built task-06 file, out of scope for
-   this purely-additive task unless a later PR decides it's worth it.
+   always LLC-framed, IEEE 802.3-2018 §3.2.6), so `ethernet` (06.2) names it explicitly as
+   `Custom{"eth_llc_frame", 0}` instead of `Hint::Unknown`, and `llc` claims that route
+   directly (see `llc`'s Claims row above) rather than reaching the router only through
+   `probe()` in the fallback pool. `dst_mac`'s IEEE-Bridge-Group/Cisco-multicast boost was
+   the strongest signal available while `llc` had no `Claims` and depended entirely on
+   `probe()`; it no longer changes *whether* `llc` is reached at all (per the routing table,
+   03.4: an explicit `Route` to a claiming plugin never consults the fallback pool). `probe()`
+   and its `dst_mac` boost stay in place regardless — defense-in-depth for any other future
+   producer of raw 802.3-length-field-shaped bytes that only offers `Hint::Unknown` without
+   an `eth_llc_frame`-shaped explicit route of its own.
 2. **Confirmatory only, for everything already explicitly routed — and correctly absent from
    `Claims`, not just deprioritized.** `lldp`/`eapol`/`lacp` already route deterministically
    via `EtherType` (the explicit tier, PRD §4.B.3); `stp`/`cdp` already route deterministically
@@ -95,8 +97,10 @@ rather than treating "check the dst_mac" as one undifferentiated improvement:
    up — its `Hint::Route(EtherType(ethertype))` never inspects `dst_mac` at all. A `Custom`
    dst-mac-keyed claim on `eapol` would be unreachable dead code (the same reasoning that kept
    `rtp` from getting a pointless `probe()`, 11.10/D15), not a weaker version of routing —
-   `llc` is different only because *it* has no `Claims` at all and reaches the router purely
-   through `probe()`, where `dst_mac` genuinely can move the needle.
+   `llc` is different only because its `dst_mac`-boosted `probe()` still exists as
+   defense-in-depth for any future producer of raw 802.3-length-field-shaped bytes that
+   reaches the fallback pool by a path other than `ethernet`'s own explicit `eth_llc_frame`
+   route (item 1 above).
 
    `dst_mac` still has a real, but strictly diagnostic, role here: a mismatch is *sometimes*
    worth surfacing, but the exact expectation differs per protocol, and it's worth being
@@ -201,13 +205,19 @@ note).
 
 ## Acceptance criteria
 - [x] `llc` real-frame fixtures (STP-carrying and CDP-carrying) route to `stp`/`cdp`
-      correctly via both `llc_dsap` and `snap_pid` `Custom` spaces; a non-LLC 802.3-length
-      frame (bad dsap/ssap) declines from the fallback pool rather than mis-routing.
-- [x] `llc` probe cross-layer boost: a fixture with a reserved `dst_mac` (either block) but a
-      slightly atypical DSAP/control byte still wins the fallback pool (90 beats other
-      candidates' base-signal scores); a fixture with a well-formed DSAP/control pattern but
-      an *unreserved* `dst_mac` still gets in via the base 55 score — the boost is additive
-      confidence, not a hard requirement, tested as both cases independently.
+      correctly via both `llc_dsap` and `snap_pid` `Custom` spaces; a frame with an
+      unrecognized DSAP still parses `llc`'s structural header honestly (deterministically
+      LLC-framed per 06.2) and only declines one hop later, at the unclaimed `llc_dsap`
+      route, rather than mis-routing.
+- [x] `llc` resolves via the explicit tier: `ethernet`'s `eth_llc_frame` route reaches `llc`
+      through `claims()`, not the heuristic fallback pool, verified via the router/parser's
+      `via_heuristic` introspection (`Engine::layers`) on an end-to-end STP fixture.
+- [x] `llc` probe cross-layer boost (defense-in-depth, since `ethernet`'s own 802.3-length
+      frames no longer reach `llc` via `probe()`): a fixture with a reserved `dst_mac` (either
+      block) but a slightly atypical DSAP/control byte still wins the fallback pool (90 beats
+      other candidates' base-signal scores); a fixture with a well-formed DSAP/control pattern
+      but an *unreserved* `dst_mac` still gets in via the base 55 score — the boost is
+      additive confidence, not a hard requirement, tested as both cases independently.
 - [x] `stp`, `pvst+`, `cdp`, `lldp` fixtures parse to exact expected fields; each contributes
       stats to its parent MAC conversation with no stream of its own (identity-less pattern
       verified, matching 06.3's ARP precedent). `pvst+` fixture specifically verifies
