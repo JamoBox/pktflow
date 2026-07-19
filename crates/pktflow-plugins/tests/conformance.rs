@@ -130,7 +130,9 @@ fn ethernet_conforms() {
                 ],
                 expected_hint: Hint::Route(RouteId::EtherType(0x0800)),
             },
-            // 802.3 length field (46): names nothing routable.
+            // 802.3 length field (46): deterministically LLC-framed, so
+            // it names an explicit route rather than nothing (11.1's
+            // `llc` claims it).
             GoodPacket {
                 bytes: vec![
                     0x00, 0x1B, 0x44, 0x11, 0x3A, 0xB7, //
@@ -149,7 +151,10 @@ fn ethernet_conforms() {
                     ),
                     ("ethertype", Value::U64(0x2E)),
                 ],
-                expected_hint: Hint::Unknown,
+                expected_hint: Hint::Route(RouteId::Custom {
+                    space: "eth_llc_frame",
+                    id: 0,
+                }),
             },
         ],
         outer_ctx: Vec::new(),

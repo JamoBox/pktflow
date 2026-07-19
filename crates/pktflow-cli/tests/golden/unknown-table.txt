@@ -2,4 +2,4 @@ UNKNOWN PROTOCOLS / STREAMS   (2 groups, 3 packets, 80 B unclassified)
 
 #  CONTEXT               KIND                 COUNT  BYTES  FIRST → LAST                 NEAR MISSES
 1  udp → udp_port:55555  unclaimed route          2   40 B  00:01:40.000 → 00:01:41.000  tcp(60)
-2  ethernet              no heuristic winner      1   40 B  00:01:42.000 → 00:01:42.000  ipv6(75)
+2  mpls                  no heuristic winner      1   40 B  00:01:42.000 → 00:01:42.000  ipv6(75)

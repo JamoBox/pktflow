@@ -2,12 +2,15 @@
 //! RFC 1042 encapsulation): infrastructure the rest of 11.1 needs, not a
 //! named protocol from the taxonomy itself. STP and CDP predate
 //! EtherType-based demultiplexing and arrive in classic 802.3 LLC frames
-//! — ethernet (06.2) already emits `Hint::Unknown` for the 802.3-length
-//! case (`ethertype < 0x0600`) rather than guessing at it, so this plugin
-//! joins the heuristic fallback pool to route that traffic on. The RFC
-//! 1042 branch (SNAP, OUI 0) reuses the real `EtherType` space, so no
-//! existing EtherType-claiming plugin needs to change to work over
-//! LLC/SNAP-encapsulated media (notably 802.11 data frames, task 11.2).
+//! — the 802.3-length case (`ethertype < 0x0600`) IEEE 802.3-2018 §3.2.6
+//! makes deterministic, never a guess, so ethernet (06.2) names it
+//! explicitly as `Custom{"eth_llc_frame", 0}` and this plugin claims that
+//! route directly. `probe()` stays as defense-in-depth for any other
+//! future producer of raw 802.3-length-field-shaped bytes reaching the
+//! heuristic fallback pool by a different path. The RFC 1042 branch
+//! (SNAP, OUI 0) reuses the real `EtherType` space, so no existing
+//! EtherType-claiming plugin needs to change to work over LLC/SNAP-
+//! encapsulated media (notably 802.11 data frames, task 11.2).
 
 use pktflow_core::{
     ByteReader, Confidence, Depth, FieldMap, FieldName, Hint, LayerPlugin, ParseCtx, ParseError,
@@ -110,6 +113,13 @@ impl LayerPlugin for Llc {
         })
     }
 
+    fn claims(&self) -> &'static [RouteId] {
+        &[RouteId::Custom {
+            space: "eth_llc_frame",
+            id: 0,
+        }]
+    }
+
     fn expected_predecessors(&self) -> &'static [ProtocolName] {
         &["ethernet", "dot11"]
     }
@@ -123,9 +133,10 @@ impl LayerPlugin for Llc {
     /// already-parsed `dst_mac`): a reserved-multicast destination → 90
     /// regardless of the base signal — a far stronger, standards-grounded
     /// signal than SAP pattern-matching alone (11.1's "Destination-MAC
-    /// recognition": this is the one plugin in the domain where `dst_mac`
-    /// is load-bearing rather than merely confirmatory, since `llc` has
-    /// no `Claims` and reaches the router purely through `probe()`).
+    /// recognition"). `ethernet`'s own 802.3-length frames now reach
+    /// `llc` through `claims()` above rather than this probe; kept as
+    /// defense-in-depth for any other future producer of raw
+    /// 802.3-length-field-shaped bytes that only offers `Hint::Unknown`.
     fn probe(&self, bytes: &[u8], ctx: &ParseCtx) -> Option<Confidence> {
         let &[dsap, ssap, control_first, ..] = bytes else {
             return None;
@@ -194,6 +205,17 @@ mod tests {
     /// reuses the real EtherType space.
     fn rfc1042_ip() -> Vec<u8> {
         vec![0xAA, 0xAA, 0x03, 0x00, 0x00, 0x00, 0x08, 0x00]
+    }
+
+    #[test]
+    fn claims_the_eth_llc_frame_route() {
+        assert_eq!(
+            Llc.claims(),
+            &[RouteId::Custom {
+                space: "eth_llc_frame",
+                id: 0
+            }]
+        );
     }
 
     #[test]

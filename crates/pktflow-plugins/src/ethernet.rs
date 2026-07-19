@@ -51,12 +51,17 @@ impl LayerPlugin for Ethernet {
             fields.insert(ETHERTYPE, Value::U64(u64::from(ethertype)));
         }
 
-        // A length field names nothing routable: 802.3 payloads go to the
-        // (gated) heuristics, never to a fabricated route.
+        // Below 0x0600 the type/length slot is deterministically an 802.3
+        // length (IEEE 802.3-2018 §3.2.6), never a real EtherType: the
+        // frame is always LLC-framed, so this names a route rather than
+        // guessing (`llc`, 11.1, claims `eth_llc_frame`).
         let hint = if ethertype >= MIN_ETHERTYPE {
             Hint::Route(RouteId::EtherType(ethertype))
         } else {
-            Hint::Unknown
+            Hint::Route(RouteId::Custom {
+                space: "eth_llc_frame",
+                id: 0,
+            })
         };
         Ok(ParsedLayer {
             header_len: 14,
@@ -121,10 +126,16 @@ mod tests {
     }
 
     #[test]
-    fn ieee_802_3_length_field_hints_unknown() {
+    fn ieee_802_3_length_field_routes_to_the_llc_frame_space() {
         let mut frame = FRAME;
         frame[12] = 0x00;
         frame[13] = 0x2E; // 46: a length, not an EtherType
-        assert_eq!(parse(&frame).expect("parses").hint, Hint::Unknown);
+        assert_eq!(
+            parse(&frame).expect("parses").hint,
+            Hint::Route(RouteId::Custom {
+                space: "eth_llc_frame",
+                id: 0
+            })
+        );
     }
 }

@@ -4,9 +4,10 @@
 //! which always fills in a routable EtherType) so we can engineer both
 //! unknown-stop shapes precisely, each with a genuine near-miss: an
 //! unclaimed UDP port whose payload is TCP-header-shaped (tcp's probe
-//! scores it 60 without ever routing there), and a raw 802.3 length-typed
-//! Ethernet frame whose payload passes ipv6's probe but fails its parse
-//! (see `no_heuristic_winner_frame` for exactly how).
+//! scores it 60 without ever routing there), and an MPLS label stack whose
+//! bottom label isn't Explicit NULL (mpls's own `Hint::Unknown` case —
+//! `mpls.rs`'s module doc) wrapping a payload that passes ipv6's probe but
+//! fails its parse (see `no_heuristic_winner_frame` for exactly how).
 
 mod support;
 
@@ -89,17 +90,19 @@ fn unclaimed_udp_with_tcp_shaped_payload(sport: u16) -> Vec<u8> {
     frame
 }
 
-/// A raw 802.3 length-typed Ethernet frame (EtherType field < 0x0600):
-/// `Hint::Unknown`. The 40-byte payload is a genuine `NoHeuristicWinner`
-/// *with* a near-miss: it passes ipv6's probe (version nibble 6, a
-/// `Hop-by-Hop` next-header, payload_len 0 fitting the 40-byte minimum —
-/// scoring 75) but then fails ipv6's `parse()`, which — unlike the probe —
-/// walks into that Hop-by-Hop extension header and runs out of bytes
-/// reading it. `heuristic_fallback` tries its one candidate, drops the
-/// failed winner, and reaches `UnknownHint` with the score still recorded
-/// as a near-miss (10.1). Neither tcp (data_offset nibble reads as 0 from
-/// the zeroed address fields) nor template (its length field reads > the
-/// 40-byte buffer) score anything on these same bytes.
+/// An Ethernet frame carrying a single-label MPLS stack whose bottom (only)
+/// label isn't Explicit NULL: mpls's own `Hint::Unknown` case — the label
+/// names no payload protocol, so the gated heuristics get a look. The
+/// 40-byte payload is a genuine `NoHeuristicWinner` *with* a near-miss: it
+/// passes ipv6's probe (version nibble 6, a `Hop-by-Hop` next-header,
+/// payload_len 0 fitting the 40-byte minimum — scoring 75) but then fails
+/// ipv6's `parse()`, which — unlike the probe — walks into that Hop-by-Hop
+/// extension header and runs out of bytes reading it. `heuristic_fallback`
+/// tries its one candidate, drops the failed winner, and reaches
+/// `UnknownHint` with the score still recorded as a near-miss (10.1).
+/// Neither tcp (data_offset nibble reads as 0 from the zeroed address
+/// fields) nor template (its length field reads > the 40-byte buffer)
+/// score anything on these same bytes.
 fn no_heuristic_winner_frame() -> Vec<u8> {
     let mut payload = vec![0x60, 0x00, 0x00, 0x00]; // version 6, traffic class/flow label 0
     payload.extend_from_slice(&0u16.to_be_bytes()); // payload_len = 0
@@ -113,9 +116,15 @@ fn no_heuristic_winner_frame() -> Vec<u8> {
         "exactly the fixed ipv6 header, no room for the ext header body"
     );
 
+    // label 16 (first non-reserved label, RFC 3032 §2.1), tc 0, S=1
+    // (bottom of stack, single-entry stack), ttl 64 — anything other than
+    // the reserved Explicit NULL labels (0, 2) names no payload protocol.
+    let mpls_entry: u32 = (16 << 12) | 0x100 | 64;
+
     let mut frame = vec![0xBBu8; 6];
     frame.extend_from_slice(&[0xAAu8; 6]);
-    frame.extend_from_slice(&0x0028u16.to_be_bytes()); // 802.3 length (40), not an EtherType
+    frame.extend_from_slice(&0x8847u16.to_be_bytes()); // MPLS unicast EtherType
+    frame.extend_from_slice(&mpls_entry.to_be_bytes());
     frame.extend_from_slice(&payload);
     frame
 }
@@ -191,7 +200,7 @@ fn table_lists_both_group_kinds_each_with_a_near_miss() {
     assert!(text.contains("UNKNOWN PROTOCOLS"));
     assert!(text.contains("udp → udp_port:55555"));
     assert!(text.contains("unclaimed route"));
-    assert!(text.contains("ethernet"));
+    assert!(text.contains("mpls"));
     assert!(text.contains("no heuristic winner"));
     assert!(text.contains("tcp(60)"), "the tcp-shaped payload near-miss");
     assert!(
