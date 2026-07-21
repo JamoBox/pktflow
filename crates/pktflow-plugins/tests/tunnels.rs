@@ -110,6 +110,21 @@ fn l2tpv3_ip_data(session_id: u32) -> Vec<u8> {
     session_id.to_be_bytes().to_vec()
 }
 
+/// RFC 2516 §4.4: PPPoE Session data — the 6-byte header, then a PPP
+/// frame (HDLC framing/FCS already stripped) as the payload.
+fn pppoe_session(session_id: u16, ppp_payload: &[u8]) -> Vec<u8> {
+    let mut p = vec![0x11, 0x00]; // Ver=1, Type=1, Code=0x00 (session data)
+    p.extend_from_slice(&session_id.to_be_bytes());
+    p.extend_from_slice(&(ppp_payload.len() as u16).to_be_bytes());
+    p.extend_from_slice(ppp_payload);
+    p
+}
+
+/// RFC 1332 §1: PPP's uncompressed Protocol field for IPv4.
+fn ppp_ipv4() -> Vec<u8> {
+    vec![0x00, 0x21]
+}
+
 /// ESP header (RFC 4303 §2): SPI + Sequence Number, then `ciphertext` —
 /// bytes this plugin must never look inside, however plausible they look.
 fn esp(spi: u32, sequence: u32, ciphertext: &[u8]) -> Vec<u8> {
@@ -634,4 +649,67 @@ fn inner_direction_stays_canonical_when_outer_disagrees() {
     assert!(inner_ip.stats.iter().all(|s| s.packets == 1));
     let session = agg.at_layer("tcp")[0];
     assert!(session.stats.iter().all(|s| s.packets == 1));
+}
+
+#[test]
+fn pppoe_session_fixture_hierarchy_node_by_node() {
+    // eth ▸ pppoe ▸ ppp ▸ ipv4 ▸ tcp (11.5's normative hierarchy): the raw
+    // per-packet chain names `ppp` explicitly, proving the translation
+    // hint fires end-to-end into the **unmodified** 06.3 `ipv4` plugin —
+    // no `claims()` diff there, the specific zero-touch-reuse claim 11.5
+    // makes for `ppp` (the same move `llc`'s RFC 1042 branch makes for
+    // 11.1). `ppp` itself never forms an aggregator stream node (`None`
+    // identity, the `llc` precedent again), so the *stream* chain skips
+    // straight from `pppoe` to `ipv4`.
+    let engine = Arc::new(default_engine());
+    let mut agg = Aggregator::new(&engine, AggregatorConfig::default());
+
+    let mut inner = ppp_ipv4();
+    inner.extend_from_slice(&ipv4(6, [172, 17, 0, 2], [172, 17, 0, 3]));
+    inner.extend_from_slice(&tcp(34567, 443));
+
+    let mut frame = eth(MAC_B, MAC_A, 0x8864); // PPPoE Session EtherType
+    frame.extend_from_slice(&pppoe_session(9001, &inner));
+
+    let packet = engine.dissect(&frame, meta(frame.len(), 0), ParseOpts::default());
+    assert_eq!(
+        packet.layers.iter().map(|l| l.protocol).collect::<Vec<_>>(),
+        ["ethernet", "pppoe", "ppp", "ipv4", "tcp"],
+        "the raw per-packet chain names ppp explicitly"
+    );
+
+    agg.ingest(&packet);
+    assert_eq!(
+        chain(&agg),
+        ["ethernet", "pppoe", "ipv4", "tcp"],
+        "ppp is a translation layer: it qualifies its parent, never its own stream node"
+    );
+}
+
+#[test]
+fn two_session_ids_over_one_outer_ethernet_are_sibling_pppoe_streams() {
+    // Mirrors l2tpv3/vxlan/geneve's two-ids-one-outer-stream test (11.5
+    // acceptance criteria): same outer Ethernet MAC conversation, two
+    // PPPoE session ids -> two sibling streams (shared-qualifier key
+    // shape, 06.5/11.5).
+    let engine = Arc::new(default_engine());
+    let mut agg = Aggregator::new(&engine, AggregatorConfig::default());
+
+    for (ms, session_id) in [(0u64, 100u16), (1, 200)] {
+        let mut inner = ppp_ipv4();
+        inner.extend_from_slice(&ipv4(6, [172, 17, 0, 2], [172, 17, 0, 3]));
+        inner.extend_from_slice(&tcp(34567, 443));
+        let mut frame = eth(MAC_B, MAC_A, 0x8864);
+        frame.extend_from_slice(&pppoe_session(session_id, &inner));
+        agg.ingest(&engine.dissect(&frame, meta(frame.len(), ms), ParseOpts::default()));
+    }
+
+    let outer_eth = agg.at_layer("ethernet")[0];
+    let streams = agg.at_layer("pppoe");
+    assert_eq!(
+        streams.len(),
+        2,
+        "one stream per session id (shared-qualifier key)"
+    );
+    assert!(streams.iter().all(|s| s.parent == Some(outer_eth.id)));
 }
