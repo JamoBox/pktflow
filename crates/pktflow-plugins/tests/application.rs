@@ -459,6 +459,71 @@ fn llmnr_response_reports_conflict_and_tentative_bits() {
     );
 }
 
+/// RFC 1001 §14.1 first-level encoding of a 16-byte (space-padded) name.
+fn netbios_encode_first_level(raw: &[u8; 16]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(32);
+    for &b in raw {
+        out.push(b'A' + (b >> 4));
+        out.push(b'A' + (b & 0x0F));
+    }
+    out
+}
+
+/// RFC 1002 §4.2.2 Name Query Request for `name` (space-padded/truncated
+/// to 15 bytes), suffix `0x00`, NB record type.
+fn netbios_ns_query(id: u16, name: &str) -> Vec<u8> {
+    let mut raw = [b' '; 16];
+    let bytes = name.as_bytes();
+    let n = bytes.len().min(15);
+    raw[..n].copy_from_slice(&bytes[..n]);
+    let mut m = vec![(id >> 8) as u8, id as u8];
+    m.extend_from_slice(&[0x01, 0x10]); // opcode=0, nm_flags: RD+B set
+    m.extend_from_slice(&[0, 1, 0, 0, 0, 0, 0, 0]); // QDCOUNT=1, rest 0
+    m.push(32);
+    m.extend_from_slice(&netbios_encode_first_level(&raw));
+    m.push(0); // name terminator, no scope id
+    m.extend_from_slice(&[0, 0x20, 0, 1]); // type NB, class IN
+    m
+}
+
+#[test]
+fn netbios_ns_app_stream_is_distinct_from_dns_and_accumulates_names() {
+    let engine = Arc::new(default_engine());
+    let mut agg = Aggregator::new(&engine, AggregatorConfig::default());
+
+    for (i, name) in ["WORKSTATION1", "FILESERVER", "WORKSTATION1"]
+        .iter()
+        .enumerate()
+    {
+        let msg = netbios_ns_query(0x0000, name);
+        let mut frame = eth();
+        frame.extend_from_slice(&ipv4_udp([10, 0, 0, 5], [10, 0, 0, 255], 137, 137, &msg));
+        agg.ingest(&engine.dissect(&frame, meta(frame.len(), i as u64), ParseOpts::default()));
+    }
+
+    let netbios_streams = agg.at_layer("netbios_ns");
+    assert_eq!(
+        netbios_streams.len(),
+        1,
+        "one app-stream per transport stream"
+    );
+    assert!(
+        agg.at_layer("dns").is_empty(),
+        "netbios_ns must not fold into dns's app-stream constant"
+    );
+
+    match netbios_streams[0].rollups.get("name") {
+        Some(Rollup::Accumulate { values, count, .. }) => {
+            assert_eq!(*count, 3);
+            assert_eq!(
+                values.as_slice(),
+                [Value::from("WORKSTATION1"), Value::from("FILESERVER")]
+            );
+        }
+        other => panic!("wrong rollup: {other:?}"),
+    }
+}
+
 /// BOOTP + magic cookie + options (53 = msg_type, then END).
 fn dhcp_msg(op: u8, xid: u32, msg_type: u8) -> Vec<u8> {
     let mut m = vec![op, 1, 6, 0];

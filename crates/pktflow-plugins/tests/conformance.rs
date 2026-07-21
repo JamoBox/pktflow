@@ -43,9 +43,12 @@ use pktflow_plugins::modbus::Modbus;
 use pktflow_plugins::mpls::Mpls;
 use pktflow_plugins::mqtt::Mqtt;
 use pktflow_plugins::ndp::Ndp;
+use pktflow_plugins::netbios_ns::NetbiosNs;
 use pktflow_plugins::netflow9::Netflow9;
 use pktflow_plugins::ntp::Ntp;
 use pktflow_plugins::ospf::Ospf;
+use pktflow_plugins::ppp::Ppp;
+use pktflow_plugins::pppoe::Pppoe;
 use pktflow_plugins::ptp::Ptp;
 use pktflow_plugins::pvst_plus::PvstPlus;
 use pktflow_plugins::radiotap::Radiotap;
@@ -1442,6 +1445,93 @@ fn l2tpv3_over_ip_data_conforms() {
         outer_ctx: vec![ipv4_predecessor_layer()],
     });
 }
+
+#[test]
+fn ppp_conforms() {
+    run_conformance(&ConformanceCase {
+        plugin: Box::new(Ppp),
+        good: vec![
+            // RFC 1332 §1: uncompressed Protocol field, IPv4 — translates
+            // to the real ipv4 EtherType route (module doc), not a reuse.
+            GoodPacket {
+                bytes: vec![0x00, 0x21, 0x45, 0x00],
+                expected_header_len: 2,
+                expected_full_fields: vec![("protocol", Value::U64(0x0021))],
+                expected_hint: Hint::Route(RouteId::EtherType(0x0800)),
+            },
+            // RFC 1661 §6.5: compressed one-octet form of the same value.
+            GoodPacket {
+                bytes: vec![0x21, 0x45, 0x00],
+                expected_header_len: 1,
+                expected_full_fields: vec![("protocol", Value::U64(0x0021))],
+                expected_hint: Hint::Route(RouteId::EtherType(0x0800)),
+            },
+            // LCP (RFC 1661 §5.1) — control protocol, decoding it is
+            // Tier 2 (11.5), stops Terminal.
+            GoodPacket {
+                bytes: vec![0xC0, 0x21, 0x01, 0x00],
+                expected_header_len: 2,
+                expected_full_fields: vec![("protocol", Value::U64(0xC021))],
+                expected_hint: Hint::Terminal,
+            },
+        ],
+        outer_ctx: Vec::new(),
+    });
+}
+
+fn pppoe_tag(tag_type: u16, value: &[u8]) -> Vec<u8> {
+    let mut b = tag_type.to_be_bytes().to_vec();
+    b.extend_from_slice(&(value.len() as u16).to_be_bytes());
+    b.extend_from_slice(value);
+    b
+}
+
+#[test]
+fn pppoe_conforms() {
+    // RFC 2516 §5: PADI with a Service-Name tag naming "internet".
+    let tags = pppoe_tag(0x0101 /* Service-Name */, b"internet");
+    let mut padi = vec![0x11, 0x09, 0x00, 0x00]; // Ver=1,Type=1, Code=PADI, session_id=0
+    padi.extend_from_slice(&(tags.len() as u16).to_be_bytes());
+    padi.extend_from_slice(&tags);
+
+    // RFC 2516 §4.4: Session data — 6-byte header, then a PPP frame
+    // (Protocol=0x0021 IPv4) handed off untouched.
+    let mut session = vec![0x11, 0x00]; // Code=0x00 (session data)
+    session.extend_from_slice(&0x1234u16.to_be_bytes()); // session_id
+    session.extend_from_slice(&4u16.to_be_bytes()); // Length
+    session.extend_from_slice(&[0x00, 0x21, 0x45, 0x00]);
+
+    run_conformance(&ConformanceCase {
+        plugin: Box::new(Pppoe),
+        good: vec![
+            GoodPacket {
+                expected_header_len: padi.len(),
+                bytes: padi,
+                expected_full_fields: vec![
+                    ("version", Value::U64(1)),
+                    ("type", Value::U64(1)),
+                    ("code", Value::U64(0x09)),
+                    ("session_id", Value::U64(0)),
+                    ("service_name", Value::from("internet")),
+                ],
+                expected_hint: Hint::Terminal,
+            },
+            GoodPacket {
+                expected_header_len: 6,
+                bytes: session,
+                expected_full_fields: vec![
+                    ("version", Value::U64(1)),
+                    ("type", Value::U64(1)),
+                    ("code", Value::U64(0)),
+                    ("session_id", Value::U64(0x1234)),
+                ],
+                expected_hint: Hint::ByProtocol("ppp"),
+            },
+        ],
+        outer_ctx: Vec::new(),
+    });
+}
+
 /// RFC 1035 standard query for example.com (A, IN), RD set.
 fn dns_query_bytes() -> Vec<u8> {
     let mut m = vec![0x12, 0x34, 0x01, 0x00, 0, 1, 0, 0, 0, 0, 0, 0];
@@ -1593,6 +1683,58 @@ fn llmnr_conforms() {
                 ("qname", Value::from("host-a")),
                 ("qtype", Value::U64(1)),
                 ("answers", Value::List(vec![Value::from("192.0.2.5")])),
+            ],
+            expected_hint: Hint::Terminal,
+        }],
+        outer_ctx: Vec::new(),
+    });
+}
+
+/// RFC 1001 §14.1 encodes each half-octet as `'A' + nibble`.
+fn netbios_encode_first_level(raw: &[u8; 16]) -> [u8; 32] {
+    let mut out = [0u8; 32];
+    for (i, &b) in raw.iter().enumerate() {
+        out[2 * i] = b'A' + (b >> 4);
+        out[2 * i + 1] = b'A' + (b & 0x0F);
+    }
+    out
+}
+
+#[test]
+fn netbios_ns_conforms() {
+    // RFC 1002 §4.2.2: Name Query Request for "WORKSTATION1" (padded to
+    // 15 bytes), suffix 0x00 (Workstation Service), NB record type.
+    let mut name = [b' '; 16];
+    name[..12].copy_from_slice(b"WORKSTATION1");
+    name[15] = 0x00;
+
+    let mut bytes = vec![0x1A, 0x2B]; // NAME_TRN_ID
+    bytes.extend_from_slice(&0x0100u16.to_be_bytes()); // opcode=0, nm_flags=0x10, rcode=0
+    bytes.extend_from_slice(&1u16.to_be_bytes()); // QDCOUNT
+    bytes.extend_from_slice(&0u16.to_be_bytes()); // ANCOUNT
+    bytes.extend_from_slice(&0u16.to_be_bytes()); // NSCOUNT
+    bytes.extend_from_slice(&0u16.to_be_bytes()); // ARCOUNT
+    bytes.push(32); // first-level-encoded label length
+    bytes.extend_from_slice(&netbios_encode_first_level(&name));
+    bytes.push(0x00); // name terminator, no scope id
+    bytes.extend_from_slice(&0x0020u16.to_be_bytes()); // QUESTION_TYPE = NB
+    bytes.extend_from_slice(&0x0001u16.to_be_bytes()); // QUESTION_CLASS = IN
+
+    run_conformance(&ConformanceCase {
+        plugin: Box::new(NetbiosNs),
+        good: vec![GoodPacket {
+            expected_header_len: bytes.len(),
+            bytes,
+            expected_full_fields: vec![
+                ("app", Value::from("netbios_ns")),
+                ("opcode", Value::U64(0)),
+                ("nm_flags", Value::U64(0x10)),
+                ("rcode", Value::U64(0)),
+                ("question_count", Value::U64(1)),
+                ("answer_count", Value::U64(0)),
+                ("name", Value::from("WORKSTATION1")),
+                ("name_type", Value::U64(0)),
+                ("rr_type", Value::U64(0x0020)),
             ],
             expected_hint: Hint::Terminal,
         }],

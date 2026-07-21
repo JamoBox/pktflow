@@ -80,14 +80,14 @@ this plugin owns its own name decoder.
 | WS-Discovery | OASIS WS-Discovery standard | SOAP/XML-over-UDP, enterprise device discovery (printers, ONVIF cameras) |
 
 ## Acceptance criteria
-- [ ] `mdns`/`llmnr` fixtures parse identically to equivalent `dns` fixtures for the shared
+- [x] `mdns`/`llmnr` fixtures parse identically to equivalent `dns` fixtures for the shared
       fields, proving the reused-routine claim (same test vectors through both call paths
       where the wire bytes are format-identical) plus their own extra bits/fields correctly.
-- [ ] `ssdp` fixtures cover M-SEARCH, NOTIFY (`ssdp:alive` and `ssdp:byebye`), and a search
+- [x] `ssdp` fixtures cover M-SEARCH, NOTIFY (`ssdp:alive` and `ssdp:byebye`), and a search
       response; `location` extracted exactly.
-- [ ] `netbios_ns` fixture decodes a real first-level-encoded name (the classic
-      `"FACFCEECFCEFFCFGEFGEFCCACACACACA"`-style 32-char encoded form) to its correct
-      plaintext NetBIOS name and type suffix.
-- [ ] Each plugin's app-stream child stream forms correctly under its UDP stream (06.6
+- [x] `netbios_ns` fixture decodes a real first-level-encoded name (a 32-char encoded form,
+      e.g. `"WORKSTATION1"` padded and suffixed) to its correct plaintext NetBIOS name and
+      type suffix.
+- [x] Each plugin's app-stream child stream forms correctly under its UDP stream (06.6
       pattern), with `qname`/`name`/`st` accumulation verified across a multi-message
       fixture per protocol.
