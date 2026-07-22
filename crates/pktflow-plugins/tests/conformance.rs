@@ -6,6 +6,7 @@ mod kit;
 use pktflow_core::{Canonicalize, FieldMap, KeyField, LayerRecord, StreamIdentity};
 use pktflow_core::{Hint, RouteId, Value};
 use pktflow_plugins::ah::Ah;
+use pktflow_plugins::amqp::Amqp;
 use pktflow_plugins::arp::Arp;
 use pktflow_plugins::bacnet_ip::BacnetIp;
 use pktflow_plugins::bfd::Bfd;
@@ -21,14 +22,17 @@ use pktflow_plugins::enip::Enip;
 use pktflow_plugins::erspan::Erspan;
 use pktflow_plugins::esp::Esp;
 use pktflow_plugins::ethernet::Ethernet;
+use pktflow_plugins::ftp::Ftp;
 use pktflow_plugins::geneve::Geneve;
 use pktflow_plugins::gre::Gre;
+use pktflow_plugins::gtp_c::GtpC;
 use pktflow_plugins::gtp_u::GtpU;
 use pktflow_plugins::hsrp::Hsrp;
 use pktflow_plugins::http::Http;
 use pktflow_plugins::icmpv4::Icmpv4;
 use pktflow_plugins::icmpv6::Icmpv6;
 use pktflow_plugins::igmp::Igmp;
+use pktflow_plugins::imap::Imap;
 use pktflow_plugins::ipfix::Ipfix;
 use pktflow_plugins::ipv4::{internet_checksum, Ipv4};
 use pktflow_plugins::ipv6::Ipv6;
@@ -47,20 +51,28 @@ use pktflow_plugins::netbios_ns::NetbiosNs;
 use pktflow_plugins::netflow9::Netflow9;
 use pktflow_plugins::ntp::Ntp;
 use pktflow_plugins::ospf::Ospf;
+use pktflow_plugins::pop3::Pop3;
 use pktflow_plugins::ppp::Ppp;
 use pktflow_plugins::pppoe::Pppoe;
 use pktflow_plugins::ptp::Ptp;
 use pktflow_plugins::pvst_plus::PvstPlus;
 use pktflow_plugins::radiotap::Radiotap;
 use pktflow_plugins::radius::Radius;
+use pktflow_plugins::redis::Redis;
 use pktflow_plugins::rocev2::Rocev2;
+use pktflow_plugins::rtcp::Rtcp;
+use pktflow_plugins::rtp::Rtp;
 use pktflow_plugins::sctp::Sctp;
+use pktflow_plugins::sip::Sip;
+use pktflow_plugins::smtp::Smtp;
 use pktflow_plugins::snmp::Snmp;
 use pktflow_plugins::ssdp::Ssdp;
 use pktflow_plugins::stp::Stp;
+use pktflow_plugins::stun::Stun;
 use pktflow_plugins::syslog::Syslog;
 use pktflow_plugins::tcp::Tcp;
 use pktflow_plugins::template::Template;
+use pktflow_plugins::tftp::Tftp;
 use pktflow_plugins::tls::Tls;
 use pktflow_plugins::udp::Udp;
 use pktflow_plugins::vlan::Vlan;
@@ -1156,6 +1168,80 @@ fn gtp_u_conforms() {
                     ("flags", Value::U64(0x32)),
                     ("length", Value::U64(4)),
                     ("sequence_number", Value::U64(0x1234)),
+                ],
+                expected_hint: Hint::Terminal,
+            },
+        ],
+        outer_ctx: Vec::new(),
+    });
+}
+
+/// TS 23.003 §9.1 label-length-prefixed APN encoding.
+fn gtp_c_apn(label: &str) -> Vec<u8> {
+    let mut out = vec![label.len() as u8];
+    out.extend_from_slice(label.as_bytes());
+    out
+}
+
+#[test]
+fn gtp_c_conforms() {
+    const IMSI_BYTES: [u8; 8] = [0x21, 0x43, 0x65, 0x87, 0x09, 0x21, 0x43, 0xF5];
+
+    // GTPv1-C Create-PDP-Context Request (TS 29.060 §7.5.1): IMSI (TV,
+    // type 2) then APN "internet" (TLV, type 131).
+    let mut v1_bytes = vec![0x30, 0x10, 0x00, 0x00, 0xAA, 0xBB, 0xCC, 0xDD];
+    v1_bytes.push(2);
+    v1_bytes.extend_from_slice(&IMSI_BYTES);
+    let apn = gtp_c_apn("internet");
+    v1_bytes.push(131);
+    v1_bytes.extend_from_slice(&(apn.len() as u16).to_be_bytes());
+    v1_bytes.extend_from_slice(&apn);
+    let v1_ie_len = (v1_bytes.len() - 8) as u16;
+    v1_bytes[2..4].copy_from_slice(&v1_ie_len.to_be_bytes());
+
+    // GTPv2-C Create-Session Request (TS 29.274 §7.2.1): T=1, IMSI then
+    // APN "internet", both TLIV (type+length+instance+value).
+    let mut v2_rest = Vec::new();
+    v2_rest.extend_from_slice(&0x0A0B_0C0Du32.to_be_bytes()); // TEID
+    v2_rest.extend_from_slice(&[0x00, 0x00, 0x01, 0x00]); // sequence + spare
+    v2_rest.push(1); // IMSI type
+    v2_rest.extend_from_slice(&8u16.to_be_bytes());
+    v2_rest.push(0); // instance
+    v2_rest.extend_from_slice(&IMSI_BYTES);
+    v2_rest.push(71); // APN type
+    v2_rest.extend_from_slice(&(apn.len() as u16).to_be_bytes());
+    v2_rest.push(0); // instance
+    v2_rest.extend_from_slice(&apn);
+    let mut v2_bytes = vec![0x48, 0x20]; // version=2, T=1; message type 32
+    v2_bytes.extend_from_slice(&(v2_rest.len() as u16).to_be_bytes());
+    v2_bytes.extend_from_slice(&v2_rest);
+
+    run_conformance(&ConformanceCase {
+        plugin: Box::new(GtpC),
+        good: vec![
+            GoodPacket {
+                bytes: v1_bytes.clone(),
+                expected_header_len: v1_bytes.len(),
+                expected_full_fields: vec![
+                    ("teid", Value::U64(0xAABB_CCDD)),
+                    ("version", Value::U64(1)),
+                    ("message_type", Value::U64(16)),
+                    ("length", Value::U64(v1_ie_len as u64)),
+                    ("imsi", Value::from(&IMSI_BYTES[..])),
+                    ("apn", Value::from("internet")),
+                ],
+                expected_hint: Hint::Terminal,
+            },
+            GoodPacket {
+                bytes: v2_bytes.clone(),
+                expected_header_len: v2_bytes.len(),
+                expected_full_fields: vec![
+                    ("teid", Value::U64(0x0A0B_0C0D)),
+                    ("version", Value::U64(2)),
+                    ("message_type", Value::U64(32)),
+                    ("length", Value::U64(v2_rest.len() as u64)),
+                    ("imsi", Value::from(&IMSI_BYTES[..])),
+                    ("apn", Value::from("internet")),
                 ],
                 expected_hint: Hint::Terminal,
             },
@@ -3414,6 +3500,529 @@ fn erspan_conforms() {
                     ("truncated", Value::Bool(false)),
                 ],
                 expected_hint: Hint::ByProtocol("ethernet"),
+            },
+        ],
+        outer_ctx: Vec::new(),
+    });
+}
+
+#[test]
+fn sip_conforms() {
+    let invite = b"INVITE sip:bob@biloxi.example.com SIP/2.0\r\n\
+Via: SIP/2.0/UDP pc33.atlanta.example.com;branch=z9hG4bK776asdhds\r\n\
+To: Bob <sip:bob@biloxi.example.com>\r\n\
+From: Alice <sip:alice@atlanta.example.com>;tag=1928301774\r\n\
+Call-ID: a84b4c76e66710@pc33.atlanta.example.com\r\n\
+CSeq: 314159 INVITE\r\n\
+\r\n"
+        .to_vec();
+
+    // A second request, not a response: the sole rollup (`method`) must be
+    // present on every good sample (rule 3), so — the same convention
+    // `http_conforms` follows for its own `method`/`status_code` split —
+    // the response side is exercised only by sip.rs's own unit tests.
+    let bye = b"BYE sip:bob@biloxi.example.com SIP/2.0\r\n\
+Via: SIP/2.0/UDP pc33.atlanta.example.com;branch=z9hG4bKnashds8\r\n\
+To: Bob <sip:bob@biloxi.example.com>;tag=8321234356\r\n\
+From: Alice <sip:alice@atlanta.example.com>;tag=1928301774\r\n\
+Call-ID: a84b4c76e66710@pc33.atlanta.example.com\r\n\
+CSeq: 315 BYE\r\n\
+\r\n"
+        .to_vec();
+
+    run_conformance(&ConformanceCase {
+        plugin: Box::new(Sip),
+        good: vec![
+            GoodPacket {
+                expected_header_len: invite.len(),
+                bytes: invite,
+                expected_full_fields: vec![
+                    (
+                        "call_id",
+                        Value::from("a84b4c76e66710@pc33.atlanta.example.com"),
+                    ),
+                    ("is_request", Value::Bool(true)),
+                    ("method", Value::from("INVITE")),
+                    (
+                        "from",
+                        Value::from("Alice <sip:alice@atlanta.example.com>;tag=1928301774"),
+                    ),
+                    ("to", Value::from("Bob <sip:bob@biloxi.example.com>")),
+                    (
+                        "via",
+                        Value::from("SIP/2.0/UDP pc33.atlanta.example.com;branch=z9hG4bK776asdhds"),
+                    ),
+                    ("cseq", Value::from("314159 INVITE")),
+                ],
+                expected_hint: Hint::Terminal,
+            },
+            GoodPacket {
+                expected_header_len: bye.len(),
+                bytes: bye,
+                expected_full_fields: vec![
+                    (
+                        "call_id",
+                        Value::from("a84b4c76e66710@pc33.atlanta.example.com"),
+                    ),
+                    ("is_request", Value::Bool(true)),
+                    ("method", Value::from("BYE")),
+                    (
+                        "from",
+                        Value::from("Alice <sip:alice@atlanta.example.com>;tag=1928301774"),
+                    ),
+                    (
+                        "to",
+                        Value::from("Bob <sip:bob@biloxi.example.com>;tag=8321234356"),
+                    ),
+                    (
+                        "via",
+                        Value::from("SIP/2.0/UDP pc33.atlanta.example.com;branch=z9hG4bKnashds8"),
+                    ),
+                    ("cseq", Value::from("315 BYE")),
+                ],
+                expected_hint: Hint::Terminal,
+            },
+        ],
+        outer_ctx: Vec::new(),
+    });
+}
+
+#[test]
+fn rtp_conforms() {
+    // V=2, no padding/extension, CC=1 (one CSRC), M=1, PT=8 (PCMA).
+    let bytes = {
+        let mut b = vec![0x81, 0x88]; // CC=1; M=1, PT=8
+        b.extend_from_slice(&1000u16.to_be_bytes()); // sequence number
+        b.extend_from_slice(&0xAABB_CCDDu32.to_be_bytes()); // timestamp
+        b.extend_from_slice(&0x1234_5678u32.to_be_bytes()); // SSRC
+        b.extend_from_slice(&0x9999_9999u32.to_be_bytes()); // CSRC
+        b
+    };
+    run_conformance(&ConformanceCase {
+        plugin: Box::new(Rtp),
+        good: vec![GoodPacket {
+            expected_header_len: bytes.len(),
+            bytes: bytes.clone(),
+            expected_full_fields: vec![
+                ("ssrc", Value::U64(0x1234_5678)),
+                ("version", Value::U64(2)),
+                ("payload_type", Value::U64(8)),
+                ("sequence_number", Value::U64(1000)),
+                ("timestamp", Value::U64(0xAABB_CCDD)),
+                ("marker_bit", Value::Bool(true)),
+                ("csrc_list", Value::List(vec![Value::U64(0x9999_9999)])),
+            ],
+            expected_hint: Hint::Terminal,
+        }],
+        outer_ctx: Vec::new(),
+    });
+}
+
+#[test]
+fn rtcp_conforms() {
+    // A Sender Report (§6.4.1): SSRC, NTP/RTP timestamps, packet/octet
+    // counts, RC=0.
+    let bytes = {
+        let mut b = vec![0x80, 200]; // V=2, RC=0; PT=SR
+        b.extend_from_slice(&6u16.to_be_bytes()); // length: 7 words - 1
+        b.extend_from_slice(&0x1234_5678u32.to_be_bytes()); // SSRC
+        b.extend_from_slice(&0x1111_1111u32.to_be_bytes()); // NTP MSW
+        b.extend_from_slice(&0x2222_2222u32.to_be_bytes()); // NTP LSW
+        b.extend_from_slice(&0x3333_3333u32.to_be_bytes()); // RTP timestamp
+        b.extend_from_slice(&10u32.to_be_bytes()); // packet count
+        b.extend_from_slice(&2000u32.to_be_bytes()); // octet count
+        b
+    };
+    run_conformance(&ConformanceCase {
+        plugin: Box::new(Rtcp),
+        good: vec![GoodPacket {
+            expected_header_len: bytes.len(),
+            bytes: bytes.clone(),
+            expected_full_fields: vec![
+                ("ssrc", Value::U64(0x1234_5678)),
+                ("packet_type", Value::U64(200)),
+                ("ntp_timestamp", Value::U64(0x1111_1111_2222_2222)),
+                ("rtp_timestamp", Value::U64(0x3333_3333)),
+                ("packet_count", Value::U64(10)),
+                ("octet_count", Value::U64(2000)),
+            ],
+            expected_hint: Hint::Terminal,
+        }],
+        outer_ctx: Vec::new(),
+    });
+}
+
+#[test]
+fn redis_conforms() {
+    fn bulk(s: &str) -> Vec<u8> {
+        format!("${}\r\n{}\r\n", s.len(), s).into_bytes()
+    }
+    fn command_array(parts: &[&str]) -> Vec<u8> {
+        let mut b = format!("*{}\r\n", parts.len()).into_bytes();
+        for p in parts {
+            b.extend_from_slice(&bulk(p));
+        }
+        b
+    }
+
+    let set_cmd = command_array(&["SET", "foo", "bar"]);
+    let get_cmd = command_array(&["GET", "foo"]);
+
+    run_conformance(&ConformanceCase {
+        plugin: Box::new(Redis),
+        good: vec![
+            GoodPacket {
+                expected_header_len: set_cmd.len(),
+                bytes: set_cmd,
+                expected_full_fields: vec![
+                    ("app", Value::from("redis")),
+                    ("resp_type", Value::U64(u64::from(b'*'))),
+                    ("command", Value::from("SET")),
+                    ("arg_count", Value::U64(3)),
+                ],
+                expected_hint: Hint::Terminal,
+            },
+            GoodPacket {
+                expected_header_len: get_cmd.len(),
+                bytes: get_cmd,
+                expected_full_fields: vec![
+                    ("app", Value::from("redis")),
+                    ("resp_type", Value::U64(u64::from(b'*'))),
+                    ("command", Value::from("GET")),
+                    ("arg_count", Value::U64(2)),
+                ],
+                expected_hint: Hint::Terminal,
+            },
+        ],
+        outer_ctx: Vec::new(),
+    });
+}
+
+#[test]
+fn amqp_conforms() {
+    fn frame(frame_type: u8, channel: u16, payload: &[u8]) -> Vec<u8> {
+        let mut b = vec![frame_type];
+        b.extend_from_slice(&channel.to_be_bytes());
+        b.extend_from_slice(&(payload.len() as u32).to_be_bytes());
+        b.extend_from_slice(payload);
+        b.push(0xCE); // frame-end marker
+        b
+    }
+
+    // Method frames only in the shared kit test (rule 3: `class_id` is a
+    // declared rollup, only present on Method frames) — Header/Body/
+    // Heartbeat coverage lives in amqp.rs's own unit tests, the same
+    // convention `http_conforms`/`sip_conforms` use for their own
+    // request-only rollup fields.
+    let connection_start = frame(1, 0, &[0x00, 10, 0x00, 10]); // class 10 (connection), method 10 (Start)
+    let basic_publish = frame(1, 1, &[0x00, 60, 0x00, 40]); // class 60 (basic), method 40 (Publish)
+
+    run_conformance(&ConformanceCase {
+        plugin: Box::new(Amqp),
+        good: vec![
+            GoodPacket {
+                expected_header_len: connection_start.len(),
+                bytes: connection_start,
+                expected_full_fields: vec![
+                    ("app", Value::from("amqp")),
+                    ("frame_type", Value::U64(1)),
+                    ("channel", Value::U64(0)),
+                    ("size", Value::U64(4)),
+                    ("class_id", Value::U64(10)),
+                    ("method_id", Value::U64(10)),
+                ],
+                expected_hint: Hint::Terminal,
+            },
+            GoodPacket {
+                expected_header_len: basic_publish.len(),
+                bytes: basic_publish,
+                expected_full_fields: vec![
+                    ("app", Value::from("amqp")),
+                    ("frame_type", Value::U64(1)),
+                    ("channel", Value::U64(1)),
+                    ("size", Value::U64(4)),
+                    ("class_id", Value::U64(60)),
+                    ("method_id", Value::U64(40)),
+                ],
+                expected_hint: Hint::Terminal,
+            },
+        ],
+        outer_ctx: Vec::new(),
+    });
+}
+
+#[test]
+fn stun_conforms() {
+    const MAGIC_COOKIE: u32 = 0x2112_A442;
+    const BINDING: u16 = 0x0001;
+    const XOR_MAPPED_ADDRESS: u16 = 0x0020;
+
+    fn message_type(method: u16, class: u16) -> u16 {
+        let c0 = (class & 0x1) << 4;
+        let c1 = (class & 0x2) << 7;
+        let m_low = method & 0x000F;
+        let m_mid = (method & 0x0070) << 1;
+        let m_high = (method & 0x0F80) << 2;
+        m_low | m_mid | m_high | c0 | c1
+    }
+
+    fn attr(ty: u16, value: &[u8]) -> Vec<u8> {
+        let mut out = ty.to_be_bytes().to_vec();
+        out.extend_from_slice(&(value.len() as u16).to_be_bytes());
+        out.extend_from_slice(value);
+        while !out.len().is_multiple_of(4) {
+            out.push(0);
+        }
+        out
+    }
+
+    fn xor_mapped_address_attr(port: u16, addr: [u8; 4]) -> Vec<u8> {
+        let cookie = MAGIC_COOKIE.to_be_bytes();
+        let xport = port ^ ((MAGIC_COOKIE >> 16) as u16);
+        let mut value = vec![0x00, 0x01]; // family = IPv4
+        value.extend_from_slice(&xport.to_be_bytes());
+        for i in 0..4 {
+            value.push(addr[i] ^ cookie[i]);
+        }
+        attr(XOR_MAPPED_ADDRESS, &value)
+    }
+
+    fn header(method: u16, class: u16, transaction_id: [u8; 12], attrs: &[u8]) -> Vec<u8> {
+        let mut b = message_type(method, class).to_be_bytes().to_vec();
+        b.extend_from_slice(&(attrs.len() as u16).to_be_bytes());
+        b.extend_from_slice(&MAGIC_COOKIE.to_be_bytes());
+        b.extend_from_slice(&transaction_id);
+        b.extend_from_slice(attrs);
+        b
+    }
+
+    // Both good samples are Success Responses: `xor_mapped_address` is a
+    // declared (`Sample`) rollup, so — the same convention `http_conforms`/
+    // `sip_conforms` follow — every good sample here carries it; a bare
+    // Binding Request (no attributes) is covered by stun.rs's own tests.
+    let first = header(
+        BINDING,
+        0b10,
+        [0xAA; 12],
+        &xor_mapped_address_attr(1234, [203, 0, 113, 1]),
+    );
+    let second = header(
+        BINDING,
+        0b10,
+        [0xBB; 12],
+        &xor_mapped_address_attr(5678, [203, 0, 113, 2]),
+    );
+
+    run_conformance(&ConformanceCase {
+        plugin: Box::new(Stun),
+        good: vec![
+            GoodPacket {
+                expected_header_len: first.len(),
+                bytes: first,
+                expected_full_fields: vec![
+                    ("app", Value::from("stun")),
+                    ("message_class", Value::U64(2)),
+                    ("message_method", Value::U64(u64::from(BINDING))),
+                    ("message_length", Value::U64(12)),
+                    ("xor_mapped_address", Value::from(&[203u8, 0, 113, 1][..])),
+                ],
+                expected_hint: Hint::Terminal,
+            },
+            GoodPacket {
+                expected_header_len: second.len(),
+                bytes: second,
+                expected_full_fields: vec![
+                    ("app", Value::from("stun")),
+                    ("message_class", Value::U64(2)),
+                    ("message_method", Value::U64(u64::from(BINDING))),
+                    ("message_length", Value::U64(12)),
+                    ("xor_mapped_address", Value::from(&[203u8, 0, 113, 2][..])),
+                ],
+                expected_hint: Hint::Terminal,
+            },
+        ],
+        outer_ctx: Vec::new(),
+    });
+}
+
+#[test]
+fn ftp_conforms() {
+    fn line(s: &str) -> Vec<u8> {
+        format!("{s}\r\n").into_bytes()
+    }
+    let user = line("USER anonymous");
+    let retr = line("RETR file.txt");
+
+    run_conformance(&ConformanceCase {
+        plugin: Box::new(Ftp),
+        good: vec![
+            GoodPacket {
+                expected_header_len: user.len(),
+                bytes: user,
+                expected_full_fields: vec![
+                    ("app", Value::from("ftp")),
+                    ("is_request", Value::Bool(true)),
+                    ("command", Value::from("USER")),
+                    ("arg", Value::from("anonymous")),
+                ],
+                expected_hint: Hint::Terminal,
+            },
+            GoodPacket {
+                expected_header_len: retr.len(),
+                bytes: retr,
+                expected_full_fields: vec![
+                    ("app", Value::from("ftp")),
+                    ("is_request", Value::Bool(true)),
+                    ("command", Value::from("RETR")),
+                    ("arg", Value::from("file.txt")),
+                ],
+                expected_hint: Hint::Terminal,
+            },
+        ],
+        outer_ctx: Vec::new(),
+    });
+}
+
+#[test]
+fn tftp_conforms() {
+    fn cstr(s: &str) -> Vec<u8> {
+        let mut v = s.as_bytes().to_vec();
+        v.push(0);
+        v
+    }
+    let rrq = {
+        let mut b = 1u16.to_be_bytes().to_vec(); // RRQ
+        b.extend_from_slice(&cstr("boot.img"));
+        b.extend_from_slice(&cstr("octet"));
+        b
+    };
+
+    run_conformance(&ConformanceCase {
+        plugin: Box::new(Tftp),
+        good: vec![GoodPacket {
+            expected_header_len: rrq.len(),
+            bytes: rrq,
+            expected_full_fields: vec![
+                ("opcode", Value::U64(1)),
+                ("filename", Value::from("boot.img")),
+                ("mode", Value::from("octet")),
+            ],
+            expected_hint: Hint::Terminal,
+        }],
+        outer_ctx: Vec::new(),
+    });
+}
+
+#[test]
+fn smtp_conforms() {
+    fn line(s: &str) -> Vec<u8> {
+        format!("{s}\r\n").into_bytes()
+    }
+    let ehlo = line("EHLO client.example.com");
+    let mail = line("MAIL FROM:<alice@example.com>");
+
+    run_conformance(&ConformanceCase {
+        plugin: Box::new(Smtp),
+        good: vec![
+            GoodPacket {
+                expected_header_len: ehlo.len(),
+                bytes: ehlo,
+                expected_full_fields: vec![
+                    ("app", Value::from("smtp")),
+                    ("is_request", Value::Bool(true)),
+                    ("command", Value::from("EHLO")),
+                    ("arg", Value::from("client.example.com")),
+                ],
+                expected_hint: Hint::Terminal,
+            },
+            GoodPacket {
+                expected_header_len: mail.len(),
+                bytes: mail,
+                expected_full_fields: vec![
+                    ("app", Value::from("smtp")),
+                    ("is_request", Value::Bool(true)),
+                    ("command", Value::from("MAIL")),
+                    ("arg", Value::from("FROM:<alice@example.com>")),
+                ],
+                expected_hint: Hint::Terminal,
+            },
+        ],
+        outer_ctx: Vec::new(),
+    });
+}
+
+#[test]
+fn pop3_conforms() {
+    fn line(s: &str) -> Vec<u8> {
+        format!("{s}\r\n").into_bytes()
+    }
+    let user = line("USER alice");
+    let stat = line("STAT");
+
+    run_conformance(&ConformanceCase {
+        plugin: Box::new(Pop3),
+        good: vec![
+            GoodPacket {
+                expected_header_len: user.len(),
+                bytes: user,
+                expected_full_fields: vec![
+                    ("app", Value::from("pop3")),
+                    ("is_request", Value::Bool(true)),
+                    ("command", Value::from("USER")),
+                    ("arg", Value::from("alice")),
+                ],
+                expected_hint: Hint::Terminal,
+            },
+            GoodPacket {
+                expected_header_len: stat.len(),
+                bytes: stat,
+                expected_full_fields: vec![
+                    ("app", Value::from("pop3")),
+                    ("is_request", Value::Bool(true)),
+                    ("command", Value::from("STAT")),
+                    ("arg", Value::from("")),
+                ],
+                expected_hint: Hint::Terminal,
+            },
+        ],
+        outer_ctx: Vec::new(),
+    });
+}
+
+#[test]
+fn imap_conforms() {
+    fn line(s: &str) -> Vec<u8> {
+        format!("{s}\r\n").into_bytes()
+    }
+    let login = line("a001 LOGIN alice password");
+    let select = line("a002 SELECT INBOX");
+
+    run_conformance(&ConformanceCase {
+        plugin: Box::new(Imap),
+        good: vec![
+            GoodPacket {
+                expected_header_len: login.len(),
+                bytes: login,
+                expected_full_fields: vec![
+                    ("app", Value::from("imap")),
+                    ("tag", Value::from("a001")),
+                    ("is_response", Value::Bool(false)),
+                    ("command", Value::from("LOGIN")),
+                    ("args", Value::from("alice password")),
+                ],
+                expected_hint: Hint::Terminal,
+            },
+            GoodPacket {
+                expected_header_len: select.len(),
+                bytes: select,
+                expected_full_fields: vec![
+                    ("app", Value::from("imap")),
+                    ("tag", Value::from("a002")),
+                    ("is_response", Value::Bool(false)),
+                    ("command", Value::from("SELECT")),
+                    ("args", Value::from("INBOX")),
+                ],
+                expected_hint: Hint::Terminal,
             },
         ],
         outer_ctx: Vec::new(),

@@ -26,12 +26,12 @@ D13).
 - [ ] [11.7 Security, auth & directory](07-security-auth-directory.md) — TLS, SSH, RADIUS, Kerberos, LDAP
 - [ ] [11.8 Web & RPC](08-web-rpc.md) — HTTP/1.1, HTTP/2, WebSocket, STUN, TURN
 - [ ] [11.9 File & mail transfer](09-file-mail-transfer.md) — FTP, TFTP, SMTP, IMAP, POP3, SMB2/3, NFS
-- [ ] [11.10 Voice, video & real-time](10-voice-video-realtime.md) — SIP, RTP, RTCP
+- [x] [11.10 Voice, video & real-time](10-voice-video-realtime.md) — SIP, RTP, RTCP
 - [x] [11.11 Network management & telemetry](11-network-management-telemetry.md) — SNMP, Syslog, NetFlow v9, IPFIX
 - [x] [11.12 Service & name discovery](12-service-name-discovery.md) — mDNS, SSDP, LLMNR, NetBIOS-NS
 - [x] [11.13 Industrial/OT (ICS-SCADA)](13-industrial-ot.md) — Modbus/TCP, DNP3, EtherNet/IP (CIP), BACnet/IP
-- [ ] [11.14 Data-center & app messaging](14-datacenter-app-messaging.md) — MQTT, AMQP 0-9-1, Redis (RESP)
-- [ ] [11.15 Telco/cellular core](15-telco-cellular-core.md) — GTPv1-U, GTPv1-C, GTPv2-C
+- [x] [11.14 Data-center & app messaging](14-datacenter-app-messaging.md) — MQTT, AMQP 0-9-1, Redis (RESP)
+- [x] [11.15 Telco/cellular core](15-telco-cellular-core.md) — GTPv1-U, GTPv1-C, GTPv2-C
 
 ## Conventions (all plugins in this task)
 

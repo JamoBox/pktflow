@@ -95,9 +95,9 @@ disambiguated by `message_method`; the precedent is `ospf` unifying v2/v3 in 11.
 - [ ] `websocket` fixture fed frame bytes directly (bypassing routing, per the documented
       reachability limitation) parses text/binary/close/ping/pong frames exactly, masked and
       unmasked.
-- [ ] `stun`/`turn` fixtures: a Binding Request/Response pair recovers the correct
+- [x] `stun`/`turn` fixtures: a Binding Request/Response pair recovers the correct
       `xor_mapped_address`; a TURN Allocate/CreatePermission/ChannelBind sequence parses
       `relayed_address`/`channel_number` from the same plugin, no `turn`-specific claim
-      needed (proves the "same format" design decision, not just states it).
-- [ ] `stun` probe honesty: `magic_cookie` mismatch scores `None`/near-zero even with an
+      needed (proves the "same format" design decision, not just states it). (`src/stun.rs`)
+- [x] `stun` probe honesty: `magic_cookie` mismatch scores `None`/near-zero even with an
       otherwise plausible-looking header.

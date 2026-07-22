@@ -21,7 +21,7 @@ D15 describes; not attempted here.
 | Fields | `Keys`: `call_id` (Str, shared `KeyField`, `b: None` — from the mandatory `Call-ID` header) · `Structural`: `is_request` (Bool), `method` (Str: INVITE/ACK/BYE/CANCEL/REGISTER/OPTIONS/...), `status_code` (U64, response only) · `Full`: `from` (Str), `to` (Str), `via` (Str), `cseq` (Str) |
 | Hint | `Terminal` |
 | Identity | key `[{call_id, None}]` (shared qualifier, GRE/VXLAN shape) → one **SIP dialog** stream per `Call-ID`, the SIP-native session identifier spanning INVITE...200 OK...ACK...BYE — a more precise identity than the generic app-stream constant, since SIP itself already defines what "one call" means |
-| Rollups | `Accumulate` on `method`; `Series{cap:64}` on `status_code` — the call-progress sequence (100 Trying → 180 Ringing → 200 OK) is order-sensitive, the same shape as DHCP's DORA series (06.6) |
+| Rollups | `Accumulate` on `method`. **`status_code` stays a per-packet `Structural` field, not a rollup** — the same constraint `http` documents for its own `status_code` (11.8): no single SIP message carries both `method` and `status_code`, and the 09.1 kit's rule 3 requires every declared rollup field on every canonical good sample. A `Series{cap:64}` tracking the call-progress sequence (100 Trying → 180 Ringing → 200 OK) is exactly the analytic payoff the original taxonomy wanted, and remains a real v2 candidate once the kit (or the rollup declaration itself) grows a per-field applicability notion |
 
 **rtp** (RFC 3550) — **D15 applies in full**: RTP has no well-known port; the port pair is
 negotiated inside SIP's (unparsed) SDP body. UDP's hint is unconditionally `Candidates`
@@ -58,12 +58,17 @@ bye). Same reachability stance as `rtp`.
 | Skinny/SCCP | *No open standard* (Cisco) | Cisco's proprietary IP-phone signaling protocol |
 
 ## Acceptance criteria
-- [ ] `sip` fixture: a full INVITE/180/200/ACK/BYE dialog folds into one `call_id`-keyed
-      stream; `status_code` series preserves call-progress order.
-- [ ] `rtp`/`rtcp` fixtures fed directly to `parse()` (bypassing routing, per the documented
+- [x] `sip` fixture: a full INVITE/180/200/ACK/BYE dialog folds into one `call_id`-keyed
+      stream (`src/sip.rs`). **Note:** `status_code`'s call-progress `Series` is not a
+      declared rollup in the shipped plugin — no single SIP message carries both `method`
+      and `status_code`, and the 09.1 kit's rule 3 requires every declared rollup field on
+      every canonical good sample (the same constraint `http`'s own `status_code` documents,
+      11.8). `status_code` remains a per-packet `Structural` field instead.
+- [x] `rtp`/`rtcp` fixtures fed directly to `parse()` (bypassing routing, per the documented
       reachability limitation) parse real-capture bytes exactly, including CSRC-list and
-      SR/SDES variants.
-- [ ] A same-session test proves the D15 claim mechanically, not just in prose: a synthetic
+      SR/SDES variants. (`src/rtp.rs`, `src/rtcp.rs`)
+- [x] A same-session test proves the D15 claim mechanically, not just in prose: a synthetic
       capture with a SIP INVITE (whose SDP names an RTP port) followed by RTP packets on that
       port shows the RTP packets **stopping** at the UDP layer with
       `StopReason::UnclaimedRoute` — the gate behaving exactly as designed, end-to-end.
+      (`tests/realtime.rs`)

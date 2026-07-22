@@ -28,7 +28,7 @@ header.
 | Data channel | **D15 applies directly**: the port `PASV`/`PORT` negotiates for the actual transfer is readable as a field (`arg`, the raw reply/command text) but the resulting data-channel session is not correlated back to this control stream or auto-routed to a data-plane plugin — it appears as an ordinary untagged TCP session in v1 |
 | Hint | `Terminal` |
 | Identity | key `[{app, None}]`, one `ftp` child stream per TCP session |
-| Rollups | `Accumulate` on `command`; `Accumulate` on `reply_code` |
+| Rollups | `Accumulate` on `command`. **`reply_code` stays a per-packet `Structural` field, not a rollup** — the same `http`/`sip` rule-3 constraint (11.8/11.10): no single line carries both `command` and `reply_code` |
 
 **tftp** (RFC 1350).
 
@@ -48,7 +48,7 @@ header.
 | Fields | as the shared shape; `command` ∈ {HELO,EHLO,MAIL,RCPT,DATA,QUIT,...} |
 | Hint | `Terminal` — the `DATA` command's message body (terminated by a bare `.` line) is payload, not parsed (D7) |
 | Identity | key `[{app, None}]`, one `smtp` child stream per TCP session |
-| Rollups | `Accumulate` on `command`; `Accumulate` on `reply_code` |
+| Rollups | `Accumulate` on `command`. **`reply_code` stays a per-packet `Structural` field, not a rollup** — the same `http`/`sip` rule-3 constraint (11.8/11.10): no single line carries both `command` and `reply_code` |
 
 **imap** (RFC 9051 rev2 / RFC 3501 rev1) — the one member of this group with client-chosen
 tags rather than a fixed status word.
@@ -102,15 +102,20 @@ v1 reads only the RPC call/reply envelope, not credentials/verifiers or NFS argu
 | WebDAV | RFC 4918 | An HTTP method/header extension — likely a refinement of 11.8's `http` rather than a new plugin |
 
 ## Acceptance criteria
-- [ ] `ftp`/`smtp`/`imap`/`pop3` each have real-capture fixtures covering a full login +
+- [x] `ftp`/`smtp`/`imap`/`pop3` each have real-capture fixtures covering a full login +
       one representative command sequence; app-stream child forms correctly in every case.
-- [ ] `ftp` `PASV` response fixture: the negotiated port is visible in the parsed `arg`
+      (`src/ftp.rs`, `src/smtp.rs`, `src/imap.rs`, `src/pop3.rs`) **Note:** `ftp`/`smtp` name
+      both `command` and `reply_code` as rollups, but no single line carries both (a request
+      has the former, a response the latter) — the same rule-3 constraint `http`/`sip`
+      document for their own request/response field split (11.8/11.10); only `command` is a
+      declared rollup in the shipped plugins.
+- [x] `ftp` `PASV` response fixture: the negotiated port is visible in the parsed `arg`
       field, but no data-channel stream is fabricated or auto-linked (D15 criterion, tested
-      not just asserted in prose).
-- [ ] `tftp` fixture: `RRQ` parses exactly via the static claim; a synthetic continuation
+      not just asserted in prose). (`src/ftp.rs`, `tests/filemail.rs`)
+- [x] `tftp` fixture: `RRQ` parses exactly via the static claim; a synthetic continuation
       `DATA`/`ACK` packet on an unclaimed ephemeral port is confirmed to **stop** at the
       transport layer with `StopReason::UnclaimedRoute`, not silently vanish or panic — the
-      D15 gate behaving as designed, verified end-to-end.
+      D15 gate behaving as designed, verified end-to-end. (`src/tftp.rs`, `tests/filemail.rs`)
 - [ ] `smb2` fixture: Negotiate/SessionSetup/TreeConnect/Create/Read/Close sequence forms one
       session-id stream; `command` accumulate reflects the full operation mix.
 - [ ] `nfs` fixture: an NFSv3 GETATTR/LOOKUP call+reply pair and an NFSv4 COMPOUND call parse

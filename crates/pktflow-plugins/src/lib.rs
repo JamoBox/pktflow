@@ -6,6 +6,7 @@
 use pktflow_core::Engine;
 
 pub mod ah;
+pub mod amqp;
 pub mod arp;
 pub mod bacnet_ip;
 pub mod bfd;
@@ -21,14 +22,17 @@ pub mod enip;
 pub mod erspan;
 pub mod esp;
 pub mod ethernet;
+pub mod ftp;
 pub mod geneve;
 pub mod gre;
+pub mod gtp_c;
 pub mod gtp_u;
 pub mod hsrp;
 pub mod http;
 pub mod icmpv4;
 pub mod icmpv6;
 pub mod igmp;
+pub mod imap;
 pub mod ipfix;
 pub mod ipv4;
 pub mod ipv6;
@@ -47,20 +51,28 @@ pub mod netbios_ns;
 pub mod netflow9;
 pub mod ntp;
 pub mod ospf;
+pub mod pop3;
 pub mod ppp;
 pub mod pppoe;
 pub mod ptp;
 pub mod pvst_plus;
 pub mod radiotap;
 pub mod radius;
+pub mod redis;
 pub mod rocev2;
+pub mod rtcp;
+pub mod rtp;
 pub mod sctp;
+pub mod sip;
+pub mod smtp;
 pub mod snmp;
 pub mod ssdp;
 pub mod stp;
+pub mod stun;
 pub mod syslog;
 pub mod tcp;
 pub mod template;
+pub mod tftp;
 pub mod tls;
 pub mod udp;
 pub mod vlan;
@@ -97,6 +109,7 @@ pub fn default_engine() -> Engine {
         .plugin(mpls::Mpls)
         .plugin(vxlan::Vxlan)
         .plugin(gtp_u::GtpU)
+        .plugin(gtp_c::GtpC)
         .plugin(geneve::Geneve)
         .plugin(esp::Esp)
         .plugin(ah::Ah)
@@ -129,9 +142,20 @@ pub fn default_engine() -> Engine {
         .plugin(syslog::Syslog)
         .plugin(snmp::Snmp)
         .plugin(radius::Radius)
+        .plugin(redis::Redis)
+        .plugin(amqp::Amqp)
         .plugin(ssdp::Ssdp)
         .plugin(http::Http)
         .plugin(tls::Tls)
+        .plugin(sip::Sip)
+        .plugin(rtp::Rtp)
+        .plugin(rtcp::Rtcp)
+        .plugin(stun::Stun)
+        .plugin(ftp::Ftp)
+        .plugin(tftp::Tftp)
+        .plugin(smtp::Smtp)
+        .plugin(pop3::Pop3)
+        .plugin(imap::Imap)
         .plugin(netflow9::Netflow9)
         .plugin(ipfix::Ipfix)
         .build()
