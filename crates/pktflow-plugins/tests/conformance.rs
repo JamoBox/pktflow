@@ -32,7 +32,9 @@ use pktflow_plugins::igmp::Igmp;
 use pktflow_plugins::ipfix::Ipfix;
 use pktflow_plugins::ipv4::{internet_checksum, Ipv4};
 use pktflow_plugins::ipv6::Ipv6;
+use pktflow_plugins::kerberos::Kerberos;
 use pktflow_plugins::l2tpv3::L2tpv3;
+use pktflow_plugins::ldap::Ldap;
 use pktflow_plugins::lacp::Lacp;
 use pktflow_plugins::llc::Llc;
 use pktflow_plugins::lldp::Lldp;
@@ -54,9 +56,11 @@ use pktflow_plugins::pvst_plus::PvstPlus;
 use pktflow_plugins::radiotap::Radiotap;
 use pktflow_plugins::radius::Radius;
 use pktflow_plugins::rocev2::Rocev2;
+use pktflow_plugins::quic::Quic;
 use pktflow_plugins::sctp::Sctp;
 use pktflow_plugins::snmp::Snmp;
 use pktflow_plugins::ssdp::Ssdp;
+use pktflow_plugins::ssh::Ssh;
 use pktflow_plugins::stp::Stp;
 use pktflow_plugins::syslog::Syslog;
 use pktflow_plugins::tcp::Tcp;
@@ -1028,6 +1032,42 @@ fn sctp_conforms() {
                 expected_hint: Hint::Terminal,
             },
         ],
+        outer_ctx: Vec::new(),
+    });
+}
+
+#[test]
+fn quic_conforms() {
+    // RFC 8999 §5.1 Long Header, QUICv1 Initial (type bits 00). Only
+    // Long-header samples are usable here: `dcid` (the declared flow key)
+    // is invariant-guaranteed only on that header form (11.6's documented
+    // Short Header ceiling) — a Short Header sample would fail rule 2's
+    // "flow-key field present at >= Keys" check, correctly, since it truly
+    // carries no invariant DCID; that case is covered by quic.rs's own
+    // unit tests instead.
+    let mut initial = vec![0xC0u8]; // header_form=1, fixed_bit=1, type=Initial
+    initial.extend_from_slice(&1u32.to_be_bytes()); // version 1
+    initial.push(4); // dcid len
+    initial.extend_from_slice(&[0xAA, 0xBB, 0xCC, 0xDD]);
+    initial.push(2); // scid len
+    initial.extend_from_slice(&[0x11, 0x22]);
+    initial.extend_from_slice(&[0xDE, 0xAD, 0xBE, 0xEF]); // version-specific data
+
+    run_conformance(&ConformanceCase {
+        plugin: Box::new(Quic),
+        good: vec![GoodPacket {
+            bytes: initial,
+            expected_header_len: 1 + 4 + 1 + 4 + 1 + 2,
+            expected_full_fields: vec![
+                ("header_form", Value::Bool(true)),
+                ("fixed_bit", Value::Bool(true)),
+                ("version", Value::U64(1)),
+                ("dcid", Value::from(&[0xAA, 0xBB, 0xCC, 0xDD][..])),
+                ("scid", Value::from(&[0x11, 0x22][..])),
+                ("packet_type", Value::from("initial")),
+            ],
+            expected_hint: Hint::Terminal,
+        }],
         outer_ctx: Vec::new(),
     });
 }
@@ -3212,6 +3252,96 @@ fn tls_conforms() {
                 ("handshake_type", Value::U64(1)),
                 ("cipher_suites", Value::List(vec![Value::U64(0x1301)])),
                 ("sni", Value::from("example.com")),
+            ],
+            expected_hint: Hint::Terminal,
+        }],
+        outer_ctx: Vec::new(),
+    });
+}
+
+#[test]
+fn kerberos_conforms() {
+    // RFC 4120 §5.10 AS-REQ: `[APPLICATION 10] SEQUENCE`, DER short-form
+    // length, opaque content (v1 doesn't decode the ticket).
+    let mut bytes = vec![0x60 | 10u8, 20];
+    bytes.extend(std::iter::repeat_n(0xABu8, 20));
+    let len = bytes.len();
+    run_conformance(&ConformanceCase {
+        plugin: Box::new(Kerberos),
+        good: vec![GoodPacket {
+            bytes,
+            expected_header_len: len,
+            expected_full_fields: vec![
+                ("app", Value::from("kerberos")),
+                ("msg_type", Value::U64(10)),
+                ("der_length", Value::U64(20)),
+            ],
+            expected_hint: Hint::Terminal,
+        }],
+        outer_ctx: Vec::new(),
+    });
+}
+
+#[test]
+fn ldap_conforms() {
+    // RFC 4511 §4.2 bindRequest: version 3, a DN, and an opaque simple-auth
+    // choice — the only shape carrying both of ldap's declared rollup
+    // fields (`protocol_op` and `bind_dn`), so it's the only case fed to
+    // the kit (rule 3); searchRequest/unbindRequest are covered by
+    // `ldap.rs`'s own unit tests instead, the same split `ssh_conforms`
+    // uses for its own rollup-only-on-one-shape field.
+    let dn = b"cn=admin,dc=example,dc=com";
+    let mut op = vec![0x02, 0x01, 0x03]; // INTEGER version = 3
+    op.push(0x04); // OCTET STRING (name)
+    op.push(dn.len() as u8);
+    op.extend_from_slice(dn);
+    op.extend_from_slice(&[0x80, 0x00]); // simple authentication, empty password
+
+    let mut content = vec![0x02, 0x01, 0x01]; // INTEGER messageID = 1
+    content.push(0x60); // [APPLICATION 0], constructed: bindRequest
+    content.push(op.len() as u8);
+    content.extend_from_slice(&op);
+
+    let mut bytes = vec![0x30, content.len() as u8]; // SEQUENCE
+    bytes.extend_from_slice(&content);
+    let len = bytes.len();
+
+    run_conformance(&ConformanceCase {
+        plugin: Box::new(Ldap),
+        good: vec![GoodPacket {
+            bytes,
+            expected_header_len: len,
+            expected_full_fields: vec![
+                ("app", Value::from("ldap")),
+                ("message_id", Value::U64(1)),
+                ("protocol_op", Value::U64(0)),
+                ("bind_dn", Value::from("cn=admin,dc=example,dc=com")),
+            ],
+            expected_hint: Hint::Terminal,
+        }],
+        outer_ctx: Vec::new(),
+    });
+}
+
+#[test]
+fn ssh_conforms() {
+    // RFC 4253 §4.2 identification line. `banner` is ssh's one declared
+    // rollup field, and rule 3 requires it present on every sample a case
+    // feeds the kit — a KEXINIT packet genuinely carries no banner, so it
+    // can't join a case here, the same "zero-option fixtures only" stance
+    // `ndp_conforms`/`mld_conforms`/`dhcpv6_conforms` document above for
+    // their own kit-incompatible variable shapes; KEXINIT is covered
+    // instead by `ssh.rs`'s own unit tests
+    // (`kexinit_parses_msg_type_and_five_name_lists` and friends).
+    let banner = b"SSH-2.0-OpenSSH_9.6\r\n".to_vec();
+    run_conformance(&ConformanceCase {
+        plugin: Box::new(Ssh),
+        good: vec![GoodPacket {
+            expected_header_len: banner.len(),
+            bytes: banner,
+            expected_full_fields: vec![
+                ("app", Value::from("ssh")),
+                ("banner", Value::from("SSH-2.0-OpenSSH_9.6")),
             ],
             expected_hint: Hint::Terminal,
         }],

@@ -32,8 +32,10 @@ pub mod igmp;
 pub mod ipfix;
 pub mod ipv4;
 pub mod ipv6;
+pub mod kerberos;
 pub mod l2tpv3;
 pub mod lacp;
+pub mod ldap;
 pub mod llc;
 pub mod lldp;
 pub mod llmnr;
@@ -51,12 +53,14 @@ pub mod ppp;
 pub mod pppoe;
 pub mod ptp;
 pub mod pvst_plus;
+pub mod quic;
 pub mod radiotap;
 pub mod radius;
 pub mod rocev2;
 pub mod sctp;
 pub mod snmp;
 pub mod ssdp;
+pub mod ssh;
 pub mod stp;
 pub mod syslog;
 pub mod tcp;
@@ -91,6 +95,7 @@ pub fn default_engine() -> Engine {
         .plugin(tcp::Tcp)
         .plugin(udp::Udp)
         .plugin(sctp::Sctp)
+        .plugin(quic::Quic)
         .plugin(bgp::Bgp)
         .plugin(gre::Gre)
         .plugin(erspan::Erspan)
@@ -129,9 +134,12 @@ pub fn default_engine() -> Engine {
         .plugin(syslog::Syslog)
         .plugin(snmp::Snmp)
         .plugin(radius::Radius)
+        .plugin(kerberos::Kerberos)
+        .plugin(ldap::Ldap)
         .plugin(ssdp::Ssdp)
         .plugin(http::Http)
         .plugin(tls::Tls)
+        .plugin(ssh::Ssh)
         .plugin(netflow9::Netflow9)
         .plugin(ipfix::Ipfix)
         .build()

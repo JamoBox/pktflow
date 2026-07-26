@@ -87,17 +87,20 @@ this task's other TLV-based protocols are.
 - [x] `tls` fixtures: ClientHello (with SNI+ALPN+cipher list) and ServerHello parse exactly;
       an ApplicationData record stops `Terminal` with no handshake fields beyond the
       per-record `content_type`/`record_version` envelope.
-- [ ] `ssh` fixtures: both banner lines and both KEXINIT packets parse exactly; a synthetic
+- [x] `ssh` fixtures: both banner lines and both KEXINIT packets parse exactly; a synthetic
       "encrypted-looking" packet on port 22 declines with `ParseError` rather than
       misreading ciphertext as a message type (the port-claim-honesty criterion, ported from
-      06.6's DNS case).
+      06.6's DNS case). (`src/ssh.rs`)
 - [x] `radius` fixture covers a full Access-Request/Access-Accept exchange plus one
       Accounting-Request; app-stream child forms under the UDP stream.
-- [ ] `kerberos` fixture: AS-REQ/AS-REP/TGS-REQ/TGS-REP each parse `msg_type` exactly from
+- [x] `kerberos` fixture: AS-REQ/AS-REP/TGS-REQ/TGS-REP each parse `msg_type` exactly from
       real captures; DER long-form length (>127 bytes) tested alongside short-form.
-- [ ] `ldap` fixture: bindRequest (DN extracted), searchRequest, and unbindRequest each parse
+      (`src/kerberos.rs`)
+- [x] `ldap` fixture: bindRequest (DN extracted), searchRequest, and unbindRequest each parse
       `protocol_op` exactly; a fixture with a compound/nested BER structure the plugin isn't
       meant to walk (a complex search filter) still parses `message_id`/`protocol_op`
       correctly and simply omits fields it doesn't attempt (no crash, no wrong guess).
-- [ ] `kerberos`/`ldap` DER length-decoding has a truncation test at the short/long-form
-      boundary (length byte `0x7f` vs `0x81` vs `0x82`).
+      (`src/ldap.rs`)
+- [x] `kerberos`/`ldap` DER length-decoding has a truncation test at the short/long-form
+      boundary (length byte `0x7f` vs `0x81` vs `0x82`). (`src/kerberos.rs`,
+      `short_and_long_form_boundary_bytes`)

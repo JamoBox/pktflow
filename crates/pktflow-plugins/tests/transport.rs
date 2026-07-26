@@ -7,8 +7,8 @@ use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
 use pktflow_core::{
-    Engine, FieldMap, Hint, LayerPlugin, LinkType, PacketMeta, ParseCtx, ParseError, ParseOpts,
-    ParsedLayer, ProtocolName, RouteId, StopReason, Value,
+    Depth, Engine, FieldMap, Hint, LayerPlugin, LinkType, PacketMeta, ParseCtx, ParseError,
+    ParseOpts, ParsedLayer, ProtocolName, RouteId, StopReason, Value,
 };
 use pktflow_flows::{Aggregator, AggregatorConfig};
 use pktflow_plugins::ipv4::internet_checksum;
@@ -381,4 +381,108 @@ fn sctp_two_associations_over_the_same_port_pair_fold_directions() {
     let sessions = agg.at_layer("sctp");
     assert_eq!(sessions.len(), 1);
     assert!(sessions[0].stats.iter().all(|s| s.packets == 1));
+}
+
+// --- QUIC (11.6, RFC 8999 invariants) ----------------------------------
+
+/// A Long Header (`type_bits` -> byte0's `0x30`) QUICv1 Initial-shaped
+/// packet with the given DCID/SCID.
+fn quic_long_header(dcid: &[u8], scid: &[u8]) -> Vec<u8> {
+    let mut b = vec![0xC0u8]; // header_form=1, fixed_bit=1, type=Initial(0)
+    b.extend_from_slice(&1u32.to_be_bytes()); // version 1
+    b.push(dcid.len() as u8);
+    b.extend_from_slice(dcid);
+    b.push(scid.len() as u8);
+    b.extend_from_slice(scid);
+    b.extend_from_slice(&[0xDE, 0xAD, 0xBE, 0xEF]); // opaque version-specific data
+    b
+}
+
+fn quic_frame(src: [u8; 4], dst: [u8; 4], sport: u16, dcid: &[u8], scid: &[u8]) -> Vec<u8> {
+    let mut f = eth(0x0800);
+    f.extend_from_slice(&ipv4_header(17, src, dst));
+    f.extend_from_slice(&udp_datagram(sport, 443, &quic_long_header(dcid, scid)));
+    f
+}
+
+#[test]
+fn quic_connection_migration_produces_sibling_streams() {
+    // D15's clearest QUIC instance (11.6's documented v1 limitation): a
+    // connection migrating to a new DCID mid-session is a *new* sibling
+    // stream, not folded into the pre-migration one.
+    let engine = Arc::new(pktflow_plugins::default_engine());
+    let mut agg = Aggregator::new(&engine, AggregatorConfig::default());
+
+    let pre = quic_frame([10, 0, 0, 1], [10, 0, 0, 2], 50000, &[0xAA, 0xBB], &[0x01]);
+    let post = quic_frame([10, 0, 0, 1], [10, 0, 0, 2], 50000, &[0xCC, 0xDD], &[0x02]);
+    agg.ingest(&engine.dissect(&pre, meta(pre.len(), 0), ParseOpts::default()));
+    agg.ingest(&engine.dissect(&post, meta(post.len(), 1), ParseOpts::default()));
+
+    let udp_streams = agg.at_layer("udp");
+    assert_eq!(udp_streams.len(), 1, "one UDP 5-tuple stream");
+    let quic_streams = agg.at_layer("quic");
+    assert_eq!(
+        quic_streams.len(),
+        2,
+        "a DCID change forms a sibling stream, not a fold"
+    );
+    assert!(quic_streams.iter().all(|s| s.parent == Some(udp_streams[0].id)));
+}
+
+#[test]
+fn quic_claim_path_and_probe_admitted_path_parse_identically() {
+    // 11.6's probe-honesty acceptance criterion, in the shape this
+    // architecture actually supports (the `wireguard`/`dnp3` precedent,
+    // 11.5/11.13): `Hint::Candidates` (`udp.rs`) only ever opens the
+    // fallback pool via `Hint::Unknown` (03.4's gate), so "reachable on a
+    // non-standard port via the fallback pool" cannot be a live full-dissect
+    // through an unclaimed UDP port — it means `parse()` is a pure function
+    // of bytes and depth, so whichever path admits these bytes (the
+    // claimed-port route, or the fallback pool wherever `Hint::Unknown`
+    // opens it, e.g. entry-point identification), the extracted fields are
+    // identical.
+    let bytes = quic_long_header(&[0xAA, 0xBB, 0xCC], &[0x01, 0x02]);
+    let engine = Arc::new(pktflow_plugins::default_engine());
+
+    let mut claimed_frame = eth(0x0800);
+    claimed_frame.extend_from_slice(&ipv4_header(17, [10, 0, 0, 1], [10, 0, 0, 2]));
+    claimed_frame.extend_from_slice(&udp_datagram(50000, 443, &bytes));
+    let packet = engine.dissect(
+        &claimed_frame,
+        meta(claimed_frame.len(), 0),
+        ParseOpts::default(),
+    );
+    let claimed_layer = packet.layers.last().expect("quic layer");
+    assert_eq!(claimed_layer.protocol, "quic");
+
+    let probe_meta = meta(bytes.len(), 0);
+    let full_ctx = ParseCtx::new(&[], Depth::Full, &probe_meta);
+    assert!(
+        pktflow_plugins::quic::Quic.probe(&bytes, &full_ctx).is_some(),
+        "must be probe-admissible for the fallback pool to ever reach it"
+    );
+    let probe_admitted = pktflow_plugins::quic::Quic
+        .parse(&bytes, &full_ctx)
+        .expect("valid Initial");
+
+    assert_eq!(claimed_layer.fields, probe_admitted.fields);
+    assert_eq!(claimed_layer.header_len, probe_admitted.header_len);
+}
+
+#[test]
+fn quic_short_header_stops_terminal_with_no_quic_stream() {
+    let mut f = eth(0x0800);
+    f.extend_from_slice(&ipv4_header(17, [10, 0, 0, 1], [10, 0, 0, 2]));
+    // Short header: header_form=0, fixed_bit=1, then opaque bytes with no
+    // invariant DCID — no `quic` stream can form (no dcid to key on).
+    f.extend_from_slice(&udp_datagram(50000, 443, &[0x40, 0xAA, 0xBB, 0xCC, 0xDD]));
+
+    let engine = Arc::new(pktflow_plugins::default_engine());
+    let mut agg = Aggregator::new(&engine, AggregatorConfig::default());
+    let packet = engine.dissect(&f, meta(f.len(), 0), ParseOpts::default());
+    let protocols: Vec<_> = packet.layers.iter().map(|l| l.protocol).collect();
+    assert_eq!(protocols, ["ethernet", "ipv4", "udp", "quic"]);
+    assert_eq!(packet.stop, StopReason::Terminal);
+    agg.ingest(&packet);
+    assert!(agg.at_layer("quic").is_empty());
 }

@@ -22,8 +22,8 @@ D13).
 - [x] [11.3 IPv6 control plane](03-ipv6-control-plane.md) — ICMPv6, NDP, MLDv1/v2, DHCPv6
 - [x] [11.4 Routing protocols](04-routing-protocols.md) — BGP-4, OSPFv2/v3, VRRP, HSRP
 - [x] [11.5 Tunnels, overlays & VPN](05-tunnels-overlays-vpn.md) — IPsec ESP/AH, WireGuard, L2TPv3, PPPoE, Geneve
-- [ ] [11.6 Transport extensions](06-transport-extensions.md) — SCTP, QUIC (invariants)
-- [ ] [11.7 Security, auth & directory](07-security-auth-directory.md) — TLS, SSH, RADIUS, Kerberos, LDAP
+- [x] [11.6 Transport extensions](06-transport-extensions.md) — SCTP, QUIC (invariants)
+- [x] [11.7 Security, auth & directory](07-security-auth-directory.md) — TLS, SSH, RADIUS, Kerberos, LDAP
 - [ ] [11.8 Web & RPC](08-web-rpc.md) — HTTP/1.1, HTTP/2, WebSocket, STUN, TURN
 - [ ] [11.9 File & mail transfer](09-file-mail-transfer.md) — FTP, TFTP, SMTP, IMAP, POP3, SMB2/3, NFS
 - [ ] [11.10 Voice, video & real-time](10-voice-video-realtime.md) — SIP, RTP, RTCP
