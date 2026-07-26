@@ -30,6 +30,7 @@ use pktflow_plugins::http2::Http2;
 use pktflow_plugins::icmpv4::Icmpv4;
 use pktflow_plugins::icmpv6::Icmpv6;
 use pktflow_plugins::igmp::Igmp;
+use pktflow_plugins::imap::Imap;
 use pktflow_plugins::ipfix::Ipfix;
 use pktflow_plugins::ipv4::{internet_checksum, Ipv4};
 use pktflow_plugins::ipv6::Ipv6;
@@ -48,8 +49,10 @@ use pktflow_plugins::mqtt::Mqtt;
 use pktflow_plugins::ndp::Ndp;
 use pktflow_plugins::netbios_ns::NetbiosNs;
 use pktflow_plugins::netflow9::Netflow9;
+use pktflow_plugins::nfs::Nfs;
 use pktflow_plugins::ntp::Ntp;
 use pktflow_plugins::ospf::Ospf;
+use pktflow_plugins::pop3::Pop3;
 use pktflow_plugins::ppp::Ppp;
 use pktflow_plugins::pppoe::Pppoe;
 use pktflow_plugins::ptp::Ptp;
@@ -59,6 +62,7 @@ use pktflow_plugins::radiotap::Radiotap;
 use pktflow_plugins::radius::Radius;
 use pktflow_plugins::rocev2::Rocev2;
 use pktflow_plugins::sctp::Sctp;
+use pktflow_plugins::smb2::Smb2;
 use pktflow_plugins::snmp::Snmp;
 use pktflow_plugins::ssdp::Ssdp;
 use pktflow_plugins::ssh::Ssh;
@@ -67,6 +71,7 @@ use pktflow_plugins::stun::Stun;
 use pktflow_plugins::syslog::Syslog;
 use pktflow_plugins::tcp::Tcp;
 use pktflow_plugins::template::Template;
+use pktflow_plugins::tftp::Tftp;
 use pktflow_plugins::tls::Tls;
 use pktflow_plugins::udp::Udp;
 use pktflow_plugins::vlan::Vlan;
@@ -3295,6 +3300,159 @@ fn stun_conforms() {
                 ("message_method", Value::U64(0x001)),
                 ("message_length", Value::U64(attr.len() as u64)),
                 ("xor_mapped_address", Value::from(&[203u8, 0, 113, 5][..])),
+            ],
+            expected_hint: Hint::Terminal,
+        }],
+        outer_ctx: Vec::new(),
+    });
+}
+
+// `ftp`/`smtp` (11.9) run no kit case here, deliberately: both declare two
+// Accumulate rollups (`command`, `reply_code`) that never co-occur on a
+// single line (a line is either a command or a reply, never both) — rule
+// 3 requires every declared rollup field present on every sample a case
+// feeds it, which no single-line fixture can ever satisfy. This is the
+// same structural incompatibility `ndp_conforms`/`mld_conforms` document
+// above for their own kit-incompatible shapes; both plugins' full behavior
+// is covered by their own thorough unit tests (`src/ftp.rs`, `src/smtp.rs`).
+
+#[test]
+fn tftp_conforms() {
+    // RFC 1350 §5 RRQ — the one opcode reachable via routing in v1 (D15);
+    // DATA/ACK/ERROR are covered by tftp.rs's own unit tests, fed directly
+    // to parse() per the domain spec's documented reachability ceiling.
+    let mut bytes = 1u16.to_be_bytes().to_vec(); // RRQ
+    bytes.extend_from_slice(b"boot.img\0octet\0");
+    let len = bytes.len();
+    run_conformance(&ConformanceCase {
+        plugin: Box::new(Tftp),
+        good: vec![GoodPacket {
+            bytes,
+            expected_header_len: len,
+            expected_full_fields: vec![
+                ("opcode", Value::U64(1)),
+                ("filename", Value::from("boot.img")),
+                ("mode", Value::from("octet")),
+            ],
+            expected_hint: Hint::Terminal,
+        }],
+        outer_ctx: Vec::new(),
+    });
+}
+
+#[test]
+fn pop3_conforms() {
+    // RFC 1939 §7 USER command — pop3's one declared rollup (`command`)
+    // needs no co-occurring field.
+    let bytes = b"USER alice\r\n".to_vec();
+    let len = bytes.len();
+    run_conformance(&ConformanceCase {
+        plugin: Box::new(Pop3),
+        good: vec![GoodPacket {
+            bytes,
+            expected_header_len: len,
+            expected_full_fields: vec![
+                ("app", Value::from("pop3")),
+                ("is_request", Value::Bool(true)),
+                ("command", Value::from("USER")),
+                ("arg", Value::from("alice")),
+            ],
+            expected_hint: Hint::Terminal,
+        }],
+        outer_ctx: Vec::new(),
+    });
+}
+
+#[test]
+fn imap_conforms() {
+    // RFC 9051 §6.2.3 LOGIN command — imap's one declared rollup
+    // (`command`) needs no co-occurring field.
+    let bytes = b"A001 LOGIN alice password\r\n".to_vec();
+    let len = bytes.len();
+    run_conformance(&ConformanceCase {
+        plugin: Box::new(Imap),
+        good: vec![GoodPacket {
+            bytes,
+            expected_header_len: len,
+            expected_full_fields: vec![
+                ("app", Value::from("imap")),
+                ("tag", Value::from("A001")),
+                ("is_response", Value::Bool(false)),
+                ("command", Value::from("LOGIN")),
+                ("args", Value::from("alice password")),
+            ],
+            expected_hint: Hint::Terminal,
+        }],
+        outer_ctx: Vec::new(),
+    });
+}
+
+#[test]
+fn smb2_conforms() {
+    // MS-SMB2 §2.2.1 Negotiate request — smb2's one declared rollup
+    // (`command`) needs no co-occurring field.
+    let mut h = vec![0xFEu8, b'S', b'M', b'B'];
+    h.extend_from_slice(&64u16.to_be_bytes());
+    h.extend_from_slice(&0u16.to_be_bytes());
+    h.extend_from_slice(&0u32.to_be_bytes());
+    h.extend_from_slice(&0u16.to_be_bytes()); // command = Negotiate
+    h.extend_from_slice(&0u16.to_be_bytes());
+    h.extend_from_slice(&0u32.to_be_bytes()); // flags
+    h.extend_from_slice(&0u32.to_be_bytes());
+    h.extend_from_slice(&1u64.to_be_bytes()); // message_id
+    h.extend_from_slice(&0u32.to_be_bytes());
+    h.extend_from_slice(&0u32.to_be_bytes()); // tree_id
+    h.extend_from_slice(&0u64.to_be_bytes()); // session_id
+    h.extend_from_slice(&[0u8; 16]);
+    let mut bytes = vec![0x00];
+    bytes.extend_from_slice(&(h.len() as u32).to_be_bytes()[1..]);
+    bytes.extend_from_slice(&h);
+    let len = bytes.len();
+
+    run_conformance(&ConformanceCase {
+        plugin: Box::new(Smb2),
+        good: vec![GoodPacket {
+            bytes,
+            expected_header_len: len,
+            expected_full_fields: vec![
+                ("session_id", Value::U64(0)),
+                ("command", Value::U64(0)),
+                ("status", Value::U64(0)),
+                ("flags", Value::U64(0)),
+                ("message_id", Value::U64(1)),
+                ("tree_id", Value::U64(0)),
+            ],
+            expected_hint: Hint::Terminal,
+        }],
+        outer_ctx: Vec::new(),
+    });
+}
+
+#[test]
+fn nfs_conforms() {
+    // RFC 1813 §3.3.1 NFSv3 GETATTR call — a Reply carries no
+    // `program`/`program_version`/`procedure` fields at all (nfs.rs's own
+    // unit tests cover that shape), so only a Call can be a kit sample here.
+    let mut bytes = 0x1234_5678u32.to_be_bytes().to_vec(); // xid
+    bytes.extend_from_slice(&0u32.to_be_bytes()); // msg_type = CALL
+    bytes.extend_from_slice(&2u32.to_be_bytes()); // rpcvers
+    bytes.extend_from_slice(&100_003u32.to_be_bytes()); // program
+    bytes.extend_from_slice(&3u32.to_be_bytes()); // program_version
+    bytes.extend_from_slice(&1u32.to_be_bytes()); // procedure = GETATTR
+    let len = bytes.len();
+
+    run_conformance(&ConformanceCase {
+        plugin: Box::new(Nfs),
+        good: vec![GoodPacket {
+            bytes,
+            expected_header_len: len,
+            expected_full_fields: vec![
+                ("app", Value::from("nfs")),
+                ("xid", Value::U64(0x1234_5678)),
+                ("msg_type", Value::from("call")),
+                ("program", Value::U64(100_003)),
+                ("program_version", Value::U64(3)),
+                ("procedure", Value::U64(1)),
             ],
             expected_hint: Hint::Terminal,
         }],

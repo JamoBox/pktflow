@@ -21,6 +21,7 @@ pub mod enip;
 pub mod erspan;
 pub mod esp;
 pub mod ethernet;
+pub mod ftp;
 pub mod geneve;
 pub mod gre;
 pub mod gtp_u;
@@ -30,6 +31,7 @@ pub mod http2;
 pub mod icmpv4;
 pub mod icmpv6;
 pub mod igmp;
+pub mod imap;
 pub mod ipfix;
 pub mod ipv4;
 pub mod ipv6;
@@ -48,8 +50,10 @@ pub mod mqtt;
 pub mod ndp;
 pub mod netbios_ns;
 pub mod netflow9;
+pub mod nfs;
 pub mod ntp;
 pub mod ospf;
+pub mod pop3;
 pub mod ppp;
 pub mod pppoe;
 pub mod ptp;
@@ -59,6 +63,8 @@ pub mod radiotap;
 pub mod radius;
 pub mod rocev2;
 pub mod sctp;
+pub mod smb2;
+pub mod smtp;
 pub mod snmp;
 pub mod ssdp;
 pub mod ssh;
@@ -67,6 +73,7 @@ pub mod stun;
 pub mod syslog;
 pub mod tcp;
 pub mod template;
+pub mod tftp;
 pub mod tls;
 pub mod udp;
 pub mod vlan;
@@ -146,6 +153,13 @@ pub fn default_engine() -> Engine {
         .plugin(ssh::Ssh)
         .plugin(websocket::WebSocket)
         .plugin(stun::Stun)
+        .plugin(ftp::Ftp)
+        .plugin(tftp::Tftp)
+        .plugin(smtp::Smtp)
+        .plugin(imap::Imap)
+        .plugin(pop3::Pop3)
+        .plugin(smb2::Smb2)
+        .plugin(nfs::Nfs)
         .plugin(netflow9::Netflow9)
         .plugin(ipfix::Ipfix)
         .build()
