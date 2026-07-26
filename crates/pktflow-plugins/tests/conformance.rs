@@ -6,6 +6,7 @@ mod kit;
 use pktflow_core::{Canonicalize, FieldMap, KeyField, LayerRecord, StreamIdentity};
 use pktflow_core::{Hint, RouteId, Value};
 use pktflow_plugins::ah::Ah;
+use pktflow_plugins::amqp::Amqp;
 use pktflow_plugins::arp::Arp;
 use pktflow_plugins::bacnet_ip::BacnetIp;
 use pktflow_plugins::bfd::Bfd;
@@ -3520,6 +3521,50 @@ fn rtcp_conforms() {
         outer_ctx: Vec::new(),
     });
 }
+
+#[test]
+fn amqp_conforms() {
+    // A Method frame (Basic.Publish, class 60/method 40) — the one frame
+    // type carrying both `frame_type` and `class_id` together, amqp's two
+    // declared rollups.
+    let mut payload = 60u16.to_be_bytes().to_vec();
+    payload.extend_from_slice(&40u16.to_be_bytes());
+    let mut bytes = vec![1u8]; // Method
+    bytes.extend_from_slice(&1u16.to_be_bytes()); // channel
+    bytes.extend_from_slice(&(payload.len() as u32).to_be_bytes());
+    bytes.extend_from_slice(&payload);
+    bytes.push(0xCE); // frame-end
+    let len = bytes.len();
+
+    run_conformance(&ConformanceCase {
+        plugin: Box::new(Amqp),
+        good: vec![GoodPacket {
+            bytes,
+            expected_header_len: len,
+            expected_full_fields: vec![
+                ("app", Value::from("amqp")),
+                ("frame_type", Value::from("method")),
+                ("channel", Value::U64(1)),
+                ("size", Value::U64(4)),
+                ("class_id", Value::U64(60)),
+                ("method_id", Value::U64(40)),
+            ],
+            expected_hint: Hint::Terminal,
+        }],
+        outer_ctx: Vec::new(),
+    });
+}
+
+// `redis` (11.14) runs no kit case here, deliberately: an array's
+// first-element lookahead is optional/best-effort (`src/redis.rs`), so a
+// buffer truncated anywhere inside that first element still parses — as
+// the valid *short* form, `header_len == 4`, `command` absent — rather
+// than declining. Rule 1 (every strict prefix of `header_len` must
+// decline) can therefore never hold for a sample whose `command` rollup
+// field is populated, the same kind of structural incompatibility
+// documented above for `ftp`/`smtp`/`sip`. `redis.rs`'s own unit tests
+// (`array_count_line_alone_is_a_valid_shorter_parse_not_a_truncation` and
+// friends) cover this shape thoroughly, truncation included.
 
 /// Wraps a `handshake` body in TLS record + handshake framing (RFC 8446
 /// §5.1 record, §4 handshake). Record version bytes are `0x0301`.

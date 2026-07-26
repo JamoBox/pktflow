@@ -6,6 +6,7 @@
 use pktflow_core::Engine;
 
 pub mod ah;
+pub mod amqp;
 pub mod arp;
 pub mod bacnet_ip;
 pub mod bfd;
@@ -61,6 +62,7 @@ pub mod pvst_plus;
 pub mod quic;
 pub mod radiotap;
 pub mod radius;
+pub mod redis;
 pub mod rocev2;
 pub mod rtcp;
 pub mod rtp;
@@ -166,6 +168,8 @@ pub fn default_engine() -> Engine {
         .plugin(sip::Sip)
         .plugin(rtp::Rtp)
         .plugin(rtcp::Rtcp)
+        .plugin(amqp::Amqp)
+        .plugin(redis::Redis)
         .plugin(netflow9::Netflow9)
         .plugin(ipfix::Ipfix)
         .build()
