@@ -45,6 +45,7 @@ state machine (no reassembly, D7). Unrecognized transitions keep current state (
 | Hint | `Candidates([UdpPort(dst), UdpPort(src)])`; **this is the gate's front line** — unclaimed ports stop dissection (03.4 fixture `encrypted_udp_no_phantom` lives here) |
 | Probe | none — UDP is 8 unguessable bytes; heuristically claiming it would undermine the gate |
 | Identity | key `[{src_port, dst_port}]`, `EndpointSort` → **UDP stream**; no lifecycle |
+| Rollups | `Sample` on `length` (first/last datagram size — a cheap shape signal for a stream with no lifecycle to describe it). Recorded here because the plugin has always declared it and this table did not; UDP has no `flags` equivalent for the `Accumulate` treatment TCP gets |
 
 ## Acceptance criteria
 - [x] Full lifecycle walk on a real handshake+teardown fixture hits every named state;
