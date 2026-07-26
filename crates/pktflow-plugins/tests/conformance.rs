@@ -61,6 +61,8 @@ use pktflow_plugins::quic::Quic;
 use pktflow_plugins::radiotap::Radiotap;
 use pktflow_plugins::radius::Radius;
 use pktflow_plugins::rocev2::Rocev2;
+use pktflow_plugins::rtcp::Rtcp;
+use pktflow_plugins::rtp::Rtp;
 use pktflow_plugins::sctp::Sctp;
 use pktflow_plugins::smb2::Smb2;
 use pktflow_plugins::snmp::Snmp;
@@ -3453,6 +3455,65 @@ fn nfs_conforms() {
                 ("program", Value::U64(100_003)),
                 ("program_version", Value::U64(3)),
                 ("procedure", Value::U64(1)),
+            ],
+            expected_hint: Hint::Terminal,
+        }],
+        outer_ctx: Vec::new(),
+    });
+}
+
+// `sip` (11.10) runs no kit case here, deliberately: its two rollups
+// (`method`, `status_code` `Series`) never co-occur on a single message
+// (a request has a method, a response has a status code, never both) — the
+// same structural incompatibility documented above for `ftp`/`smtp`.
+// `sip.rs`'s own unit tests cover both shapes fully.
+
+#[test]
+fn rtp_conforms() {
+    // RFC 3550 §5.1: fed directly to parse() (09.1), same as any plugin —
+    // `rtp` simply has no `claims()` (D15, unreachable via routing in v1).
+    let bytes = vec![
+        0x80, 0x00, // V2, no CSRC; marker=0, payload_type=0
+        0x03, 0xE8, // sequence_number = 1000
+        0x00, 0x02, 0x71, 0x00, // timestamp = 160000
+        0xDE, 0xAD, 0xBE, 0xEF, // ssrc
+    ];
+    run_conformance(&ConformanceCase {
+        plugin: Box::new(Rtp),
+        good: vec![GoodPacket {
+            bytes,
+            expected_header_len: 12,
+            expected_full_fields: vec![
+                ("ssrc", Value::U64(0xDEAD_BEEF)),
+                ("version", Value::U64(2)),
+                ("payload_type", Value::U64(0)),
+                ("sequence_number", Value::U64(1000)),
+                ("timestamp", Value::U64(160_000)),
+                ("marker_bit", Value::Bool(false)),
+                ("csrc_list", Value::List(vec![])),
+            ],
+            expected_hint: Hint::Terminal,
+        }],
+        outer_ctx: Vec::new(),
+    });
+}
+
+#[test]
+fn rtcp_conforms() {
+    // RFC 3550 §6.4.2 RR — rtcp's one declared rollup (`packet_type`)
+    // needs no co-occurring field, so any recognized type works; RR is the
+    // simplest complete shape.
+    let mut bytes = vec![0x80, 201]; // V2, RC=0; PT=RR
+    bytes.extend_from_slice(&1u16.to_be_bytes()); // length: (1+1)*4 = 8 bytes
+    bytes.extend_from_slice(&0xAAAA_BBBBu32.to_be_bytes());
+    run_conformance(&ConformanceCase {
+        plugin: Box::new(Rtcp),
+        good: vec![GoodPacket {
+            bytes,
+            expected_header_len: 8,
+            expected_full_fields: vec![
+                ("ssrc", Value::U64(0xAAAA_BBBB)),
+                ("packet_type", Value::U64(201)),
             ],
             expected_hint: Hint::Terminal,
         }],

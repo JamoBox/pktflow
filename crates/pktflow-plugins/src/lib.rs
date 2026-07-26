@@ -62,7 +62,10 @@ pub mod quic;
 pub mod radiotap;
 pub mod radius;
 pub mod rocev2;
+pub mod rtcp;
+pub mod rtp;
 pub mod sctp;
+pub mod sip;
 pub mod smb2;
 pub mod smtp;
 pub mod snmp;
@@ -160,6 +163,9 @@ pub fn default_engine() -> Engine {
         .plugin(pop3::Pop3)
         .plugin(smb2::Smb2)
         .plugin(nfs::Nfs)
+        .plugin(sip::Sip)
+        .plugin(rtp::Rtp)
+        .plugin(rtcp::Rtcp)
         .plugin(netflow9::Netflow9)
         .plugin(ipfix::Ipfix)
         .build()
