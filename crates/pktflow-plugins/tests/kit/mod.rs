@@ -129,6 +129,16 @@ pub fn run_conformance(case: &ConformanceCase) {
                  dropped {:?}",
                 previous.difference(&names).collect::<Vec<_>>()
             );
+            // Depth governs *extraction*, never framing (01.3: `None`
+            // parses "for length + routing only"). A plugin whose
+            // `header_len` moves with depth silently reattributes header
+            // bytes to opaque payload — and, for a routing hint, would
+            // hand the next layer a different offset at different depths.
+            assert_eq!(
+                at_depth.header_len, parsed.header_len,
+                "[{name}] sample {sample_no}: rule 2: header_len at {depth:?} \
+                 differs from Full"
+            );
             if depth >= Depth::Keys {
                 if let Some(identity) = plugin.stream_identity() {
                     for kf in identity.key {

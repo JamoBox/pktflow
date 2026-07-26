@@ -16,10 +16,11 @@ IP protocols) route onward to their own plugins by type.
 | Item | Spec |
 |---|---|
 | Claims | `IpProtocol(58)` |
-| Fields | `Structural`: `type`, `code` · `Full`: `rest_of_header` (Bytes, 4 — layout is type-specific, kept raw here) |
+| Fields | `Structural`: `type`, `code`, `rest_of_header` (Bytes, 4 — layout is type-specific, kept raw here) |
 | Hint | type ∈ {128 Echo Request, 129 Echo Reply, 1–4 Destination Unreachable/Packet Too Big/Time Exceeded/Parameter Problem} → `Terminal`; type ∈ {133..137} (RS/RA/NS/NA/Redirect) → `Route(Custom{space:"icmpv6_type", id: type})` to `ndp`; type ∈ {130,131,132,143} (MLD Query/v1-Report/Done/v2-Report) → `Route(Custom{space:"icmpv6_type", id: type})` to `mld`; else → `Terminal` |
 | Identity | None — mirrors icmpv4's stance (06.3): the parent IPv6 conversation carries stats, `type`/`code` remain per-packet data |
 | Note | Same v2-revisit note as icmpv4 (06.3): identity-less means no rollup on `type` today |
+| `rest_of_header`'s depth | `Structural`, not `Full` (an earlier draft of this table said `Full`). It is part of the fixed 8-byte header, and — because `ndp` and `mld` read it back cross-layer (FR-17) instead of re-decoding bytes `icmpv6` already consumed — it is the *input* to `ndp`'s `flags` and `mld`'s `max_resp_delay`/`multicast_addr`, all three declared `Structural` below, as well as to the MLDv2 record count `M` that decides `mld`'s `header_len`. Gating it at `Full` made those fields absent at `Depth::Structural` and made a `Structural` MLDv2 Report report `header_len == 0`, pushing its whole record list into opaque payload. **General rule this makes explicit:** a field another plugin reads cross-layer must be emitted at or below the depth of the dependent field it feeds — a dispatching layer's own gating is part of its dependents' contract, not a private choice |
 
 **ndp** (Neighbor Discovery Protocol, RFC 4861; SLAAC prefix option per RFC 4862) — IPv6's
 ARP-equivalent, and given the identical "request/reply chatter, not a conversation" shape,

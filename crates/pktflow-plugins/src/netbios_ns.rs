@@ -54,6 +54,16 @@ fn decode_first_level(encoded: &[u8]) -> Result<[u8; 16], ParseError> {
             ))
         }
     }
+    // The one caller reads exactly `FIRST_LEVEL_LEN` bytes, so this is
+    // belt-and-braces — but `out[i]` below would *panic* on a longer
+    // slice, and a panic on attacker-shaped input is never an acceptable
+    // failure mode for a dissector (00.2). Checked here rather than
+    // relying on the caller staying the only one.
+    if encoded.len() != FIRST_LEVEL_LEN {
+        return Err(ParseError::Malformed(
+            "netbios_ns: first-level name is not 32 characters",
+        ));
+    }
     let mut out = [0u8; 16];
     for (i, chunk) in encoded.chunks_exact(2).enumerate() {
         out[i] = (nibble(chunk[0])? << 4) | nibble(chunk[1])?;

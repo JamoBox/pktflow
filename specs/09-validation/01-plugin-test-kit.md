@@ -26,7 +26,12 @@ Checks per `good` sample (beyond the author's own expectations):
 1. **Truncation sweep:** every prefix `bytes[..n]` for `n in 0..header_len` parses to
    `Err` — never panics, never a short success (00.2's promise, mechanized).
 2. **Depth ladder:** parse at all four depths; assert field sets are monotonic
-   (`None ⊆ Keys ⊆ Structural ⊆ Full`) and flow-key fields all present at ≥ `Keys` (01.3).
+   (`None ⊆ Keys ⊆ Structural ⊆ Full`), flow-key fields all present at ≥ `Keys` (01.3), and
+   `header_len` **identical at every depth** — depth governs extraction, never framing
+   (01.3: `Depth::None` still parses "for length + routing"). A depth-dependent `header_len`
+   silently reattributes header bytes to opaque payload and would hand a routing hint's
+   target a different offset per depth; it is how 11.3's `mld` once reported `header_len == 0`
+   for an MLDv2 Report below `Depth::Full`.
 3. **Identity coherence (02.4):** every `KeyField`/`RollupSpec` name appears in the `Full`
    parse's fields; key builds without `KeyError`; involution holds (05.1 — a/b-swapped
    FieldMap gives same key, flipped direction).

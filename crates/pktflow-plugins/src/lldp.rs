@@ -100,11 +100,16 @@ impl LayerPlugin for Lldp {
         }
         let ttl = u16::from_be_bytes([ttl_bytes[0], ttl_bytes[1]]);
 
-        // Optional TLVs in any order, until End-of-LLDPDU (§8.5.1) or the
-        // buffer runs out. Unknown/unhandled types (organizationally
-        // specific TLVs, reserved types, a repeated optional TLV) are
-        // skipped by their own length field — same discipline as CDP's
-        // and LLDP's own mandatory walk above.
+        // Optional TLVs in any order, until the End-of-LLDPDU sentinel
+        // (§8.5.1). Running out of buffer first is a *decline*, not a
+        // clean end: §8.5.1 makes End-of-LLDPDU mandatory, and treating
+        // exhaustion as a terminator would make any prefix that happens
+        // to stop on a TLV boundary parse successfully — exactly the
+        // short-success the 09.1 kit's truncation sweep exists to catch.
+        // (CDP, 11.1, has the opposite problem and documents it: no end
+        // marker at all, so it must infer padding.) Unknown/unhandled
+        // types (organizationally specific TLVs, reserved types, a
+        // repeated optional TLV) are skipped by their own length field.
         let mut system_name = None;
         let mut system_description = None;
         let mut management_address = None;

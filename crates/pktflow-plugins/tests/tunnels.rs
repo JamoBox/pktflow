@@ -5,8 +5,8 @@
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
-use pktflow_core::{LinkType, PacketMeta, ParseOpts, ProtocolName, StopReason};
-use pktflow_flows::{Aggregator, AggregatorConfig, StreamId};
+use pktflow_core::{LinkType, PacketMeta, ParseOpts, ProtocolName, StopReason, Value};
+use pktflow_flows::{Aggregator, AggregatorConfig, Rollup, StreamId};
 use pktflow_plugins::default_engine;
 use pktflow_plugins::ipv4::internet_checksum;
 
@@ -123,6 +123,16 @@ fn pppoe_session(session_id: u16, ppp_payload: &[u8]) -> Vec<u8> {
 /// RFC 1332 §1: PPP's uncompressed Protocol field for IPv4.
 fn ppp_ipv4() -> Vec<u8> {
     vec![0x00, 0x21]
+}
+
+/// RFC 2516 §5: a PPPoE Discovery packet — same 6-byte header, a non-zero
+/// `Code`, and a tag list rather than a PPP payload.
+fn pppoe_discovery(code: u8, session_id: u16, tags: &[u8]) -> Vec<u8> {
+    let mut p = vec![0x11, code]; // Ver=1, Type=1
+    p.extend_from_slice(&session_id.to_be_bytes());
+    p.extend_from_slice(&(tags.len() as u16).to_be_bytes());
+    p.extend_from_slice(tags);
+    p
 }
 
 /// ESP header (RFC 4303 §2): SPI + Sequence Number, then `ciphertext` —
@@ -444,6 +454,53 @@ fn two_directions_of_one_ah_association_are_sibling_streams_under_one_ip_convers
 }
 
 #[test]
+fn ah_stream_samples_its_sequence_and_accumulates_what_it_protects() {
+    // 11.5's AH rollups. `sequence` is `Sample`, not `Accumulate`, for
+    // ESP's stated reason (a monotonic counter would overflow the 64-value
+    // cap on any real SA and say nothing) — first/last is the liveness and
+    // replay-window read. `next_header` is `Accumulate` because AH's
+    // defining difference from ESP is that it leaves that field in
+    // cleartext: what a given SA actually carried is readable per-SA.
+    let engine = Arc::new(default_engine());
+    let mut agg = Aggregator::new(&engine, AggregatorConfig::default());
+
+    // One SA (SPI 0x1000_0001), three packets: TCP, TCP, then ICMP —
+    // the same tunnel protecting more than one inner protocol.
+    for (ms, sequence, next_header) in [(0u64, 1u32, 6u8), (1, 2, 6), (2, 3, 1)] {
+        let mut frame = eth(MAC_B, MAC_A, 0x0800);
+        frame.extend_from_slice(&ipv4(51, [192, 168, 0, 1], [192, 168, 0, 2]));
+        frame.extend_from_slice(&ah(next_header, 0x1000_0001, sequence, &[0xAA; 12]));
+        match next_header {
+            6 => frame.extend_from_slice(&tcp(34567, 443)),
+            // ICMP echo request (06.3's icmpv4), enough header to parse.
+            _ => frame.extend_from_slice(&[8, 0, 0, 0, 0, 1, 0, 1]),
+        }
+        agg.ingest(&engine.dissect(&frame, meta(frame.len(), ms), ParseOpts::default()));
+    }
+
+    let ahs = agg.at_layer("ah");
+    assert_eq!(ahs.len(), 1, "one SPI, one stream");
+    match ahs[0].rollups.get("sequence") {
+        Some(Rollup::Sample { first, last }) => {
+            assert_eq!(first, &Some(Value::U64(1)));
+            assert_eq!(last, &Some(Value::U64(3)));
+        }
+        other => panic!("wrong rollup: {other:?}"),
+    }
+    match ahs[0].rollups.get("next_header") {
+        Some(Rollup::Accumulate { values, count, .. }) => {
+            assert_eq!(*count, 3);
+            assert_eq!(
+                values.as_slice(),
+                [Value::U64(6), Value::U64(1)],
+                "TCP then ICMP, insertion-ordered (05.4)"
+            );
+        }
+        other => panic!("wrong rollup: {other:?}"),
+    }
+}
+
+#[test]
 fn ah_truncated_icv_declines_safely_no_phantom_stream() {
     // 03.4/04.3: protocol-claimed traffic one byte short of the ICV length
     // its own `payload_len` field declares stops `Truncated`, not a
@@ -712,4 +769,60 @@ fn two_session_ids_over_one_outer_ethernet_are_sibling_pppoe_streams() {
         "one stream per session id (shared-qualifier key)"
     );
     assert!(streams.iter().all(|s| s.parent == Some(outer_eth.id)));
+}
+
+#[test]
+fn pppoe_session_stream_accumulates_its_own_lifecycle_codes() {
+    // 11.5's `code` rollup: PADS is what assigns the session id, and PADT
+    // is what tears it down, so both land on the same `session_id`-keyed
+    // stream as the Session-data frames between them. The resulting set
+    // is a readable session lifecycle without any cross-packet state in
+    // the plugin (D7) — the same shape `dhcp`'s DORA rollup gives the
+    // lease exchange (06.6).
+    let engine = Arc::new(default_engine());
+    let mut agg = Aggregator::new(&engine, AggregatorConfig::default());
+
+    // PADS (0x65) — the Access Concentrator confirming session 9001, with
+    // the Service-Name tag RFC 2516 §5.2 requires it to echo.
+    let mut pads = eth(MAC_A, MAC_B, 0x8863);
+    pads.extend_from_slice(&pppoe_discovery(0x65, 9001, &[0x01, 0x01, 0x00, 0x00]));
+    agg.ingest(&engine.dissect(&pads, meta(pads.len(), 0), ParseOpts::default()));
+
+    // Two Session-data frames (code 0x00) carrying the actual traffic.
+    for ms in [1u64, 2] {
+        let mut inner = ppp_ipv4();
+        inner.extend_from_slice(&ipv4(6, [172, 17, 0, 2], [172, 17, 0, 3]));
+        inner.extend_from_slice(&tcp(34567, 443));
+        let mut frame = eth(MAC_B, MAC_A, 0x8864);
+        frame.extend_from_slice(&pppoe_session(9001, &inner));
+        agg.ingest(&engine.dissect(&frame, meta(frame.len(), ms), ParseOpts::default()));
+    }
+
+    // PADT (0xa7) — teardown, no tags.
+    let mut padt = eth(MAC_B, MAC_A, 0x8863);
+    padt.extend_from_slice(&pppoe_discovery(0xa7, 9001, &[]));
+    agg.ingest(&engine.dissect(&padt, meta(padt.len(), 3), ParseOpts::default()));
+
+    let streams = agg.at_layer("pppoe");
+    assert_eq!(streams.len(), 1, "one stream: all four share session 9001");
+    match streams[0].rollups.get("code") {
+        Some(Rollup::Accumulate {
+            values,
+            count,
+            overflow,
+        }) => {
+            assert_eq!(*count, 4, "every frame observed, duplicates included");
+            assert!(!overflow);
+            assert_eq!(
+                values.as_slice(),
+                [
+                    Value::U64(0x65), // PADS: session negotiated
+                    Value::U64(0x00), // Session data: traffic carried
+                    Value::U64(0xa7), // PADT: torn down
+                ],
+                "insertion-ordered distinct values (05.4)"
+            );
+        }
+        other => panic!("wrong rollup: {other:?}"),
+    }
 }

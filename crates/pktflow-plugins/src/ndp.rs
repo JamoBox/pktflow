@@ -42,8 +42,9 @@ const OPT_TARGET_LINK_ADDR: u8 = 2;
 const OPT_PREFIX_INFORMATION: u8 = 3;
 
 /// icmpv6's `rest_of_header` word, re-read for the two message types that
-/// pack extra data into it. `None` below `Depth::Full` — that's where
-/// icmpv6 itself gates the field (see the module doc) — in which case
+/// pack extra data into it. `None` below `Depth::Structural` — that's
+/// where icmpv6 itself gates the field (see the module doc), matching the
+/// depth at which `flags` is declared here — in which case
 /// `flags`/`router_lifetime` are simply omitted below, same as any other
 /// depth-gated field.
 fn icmpv6_rest(ctx: &ParseCtx) -> Option<[u8; 4]> {
