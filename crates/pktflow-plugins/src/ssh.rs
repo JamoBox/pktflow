@@ -241,7 +241,10 @@ mod tests {
     fn kexinit_packet() -> Vec<u8> {
         let mut payload = vec![SSH_MSG_KEXINIT];
         payload.extend_from_slice(&[0xAB; COOKIE_LEN]);
-        payload.extend_from_slice(&name_list(&["curve25519-sha256", "diffie-hellman-group14-sha1"]));
+        payload.extend_from_slice(&name_list(&[
+            "curve25519-sha256",
+            "diffie-hellman-group14-sha1",
+        ]));
         payload.extend_from_slice(&name_list(&["ssh-ed25519", "rsa-sha2-512"]));
         payload.extend_from_slice(&name_list(&["aes256-gcm@openssh.com"]));
         payload.extend_from_slice(&name_list(&["aes256-gcm@openssh.com"]));
@@ -256,7 +259,7 @@ mod tests {
         // padding_length chosen so (payload.len() + padding_length + 1) is
         // a multiple of 8 (RFC 4253 §6), minimum 4 padding bytes.
         let mut padding_length = 4u8;
-        while (1 + payload.len() + usize::from(padding_length)) % 8 != 0 {
+        while !(1 + payload.len() + usize::from(padding_length)).is_multiple_of(8) {
             padding_length += 1;
         }
         let packet_length = (1 + payload.len() + usize::from(padding_length)) as u32;
@@ -279,7 +282,10 @@ mod tests {
             assert_eq!(parsed.hint, Hint::Terminal);
             assert_eq!(parsed.fields.get(APP), Some(&Value::from("ssh")));
             let expected = String::from_utf8_lossy(trim_line_ending(banner));
-            assert_eq!(parsed.fields.get(BANNER), Some(&Value::from(expected.as_ref())));
+            assert_eq!(
+                parsed.fields.get(BANNER),
+                Some(&Value::from(expected.as_ref()))
+            );
             assert_eq!(parsed.fields.get(MSG_TYPE), None);
         }
     }

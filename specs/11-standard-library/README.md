@@ -24,7 +24,7 @@ D13).
 - [x] [11.5 Tunnels, overlays & VPN](05-tunnels-overlays-vpn.md) — IPsec ESP/AH, WireGuard, L2TPv3, PPPoE, Geneve
 - [x] [11.6 Transport extensions](06-transport-extensions.md) — SCTP, QUIC (invariants)
 - [x] [11.7 Security, auth & directory](07-security-auth-directory.md) — TLS, SSH, RADIUS, Kerberos, LDAP
-- [ ] [11.8 Web & RPC](08-web-rpc.md) — HTTP/1.1, HTTP/2, WebSocket, STUN, TURN
+- [x] [11.8 Web & RPC](08-web-rpc.md) — HTTP/1.1, HTTP/2, WebSocket, STUN, TURN
 - [ ] [11.9 File & mail transfer](09-file-mail-transfer.md) — FTP, TFTP, SMTP, IMAP, POP3, SMB2/3, NFS
 - [ ] [11.10 Voice, video & real-time](10-voice-video-realtime.md) — SIP, RTP, RTCP
 - [x] [11.11 Network management & telemetry](11-network-management-telemetry.md) — SNMP, Syslog, NetFlow v9, IPFIX

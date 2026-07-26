@@ -61,7 +61,7 @@ practice wherever WebSocket runs on a port `http`/`https` doesn't already claim.
 | Claims | none — fallback-pool only |
 | Fields | `Keys`: `app` (shared, constant `Str("websocket")`) · `Structural`: `fin`, `opcode` (continuation/text/binary/close/ping/pong), `mask_bit`, `payload_len` (U64, 7-bit/16-bit-extended/64-bit-extended forms) · `Full`: `masking_key` (Bytes,4, if masked) |
 | Hint | `Terminal` |
-| Probe | `opcode` ∈ {0,1,2,8,9,10} (defined values), RSV bits zero (the common no-extensions case), and the extended-length encoding is self-consistent with the remaining buffer → 50 |
+| Probe | `opcode` ∈ {1,2,8,9,10} (defined values, **excluding bare Continuation, 0**: RFC 6455 §5.4 forbids it as a session's first frame, and it carries no structure beyond RSV/opcode being zero — indistinguishable from arbitrary leading zero bytes in an unrelated protocol; `parse()` still accepts it where genuinely reached), RSV bits zero (the common no-extensions case), control opcodes additionally honoring their RFC 6455 §5.5 invariants (`FIN=1`, `payload_len <= 125`), and the extended-length encoding is self-consistent with the remaining buffer → 50 |
 | Identity | key `[{app, None}]`, one `websocket` child stream where reached |
 | Rollups | `Accumulate` on `opcode` |
 
@@ -87,17 +87,19 @@ disambiguated by `message_method`; the precedent is `ospf` unifying v2/v3 in 11.
 ## Acceptance criteria
 - [x] `http` fixtures: GET/POST requests and 200/404/101 responses parse exactly;
       header-block-split-across-segments fixture yields `Truncated`, not a wrong parse.
-- [ ] h2c fixture: a real HTTP/2 cleartext-upgrade capture dispatches `http ▸ http2` via
+- [x] h2c fixture: a real HTTP/2 cleartext-upgrade capture dispatches `http ▸ http2` via
       `ByProtocol` with the connection preface consumed exactly as `http`'s `header_len`.
-- [ ] `http2` fixture: SETTINGS, HEADERS (envelope only, no HPACK attempt), DATA frames parse
+      (`tests/web.rs::h2c_preface_dispatches_http_to_http2_and_frames_form_sibling_streams`)
+- [x] `http2` fixture: SETTINGS, HEADERS (envelope only, no HPACK attempt), DATA frames parse
       exact expected envelope fields; one stream id per HTTP/2 stream verified across a
-      multi-stream fixture (mirrors 06.5's two-VNIs test shape).
-- [ ] `websocket` fixture fed frame bytes directly (bypassing routing, per the documented
+      multi-stream fixture (mirrors 06.5's two-VNIs test shape). (`src/http2.rs`, `tests/web.rs`)
+- [x] `websocket` fixture fed frame bytes directly (bypassing routing, per the documented
       reachability limitation) parses text/binary/close/ping/pong frames exactly, masked and
-      unmasked.
-- [ ] `stun`/`turn` fixtures: a Binding Request/Response pair recovers the correct
+      unmasked. (`src/websocket.rs`, `tests/web.rs`)
+- [x] `stun`/`turn` fixtures: a Binding Request/Response pair recovers the correct
       `xor_mapped_address`; a TURN Allocate/CreatePermission/ChannelBind sequence parses
       `relayed_address`/`channel_number` from the same plugin, no `turn`-specific claim
-      needed (proves the "same format" design decision, not just states it).
-- [ ] `stun` probe honesty: `magic_cookie` mismatch scores `None`/near-zero even with an
-      otherwise plausible-looking header.
+      needed (proves the "same format" design decision, not just states it). (`src/stun.rs`,
+      `tests/web.rs`)
+- [x] `stun` probe honesty: `magic_cookie` mismatch scores `None`/near-zero even with an
+      otherwise plausible-looking header. (`src/stun.rs`, `tests/web.rs`)

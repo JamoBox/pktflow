@@ -426,7 +426,9 @@ fn quic_connection_migration_produces_sibling_streams() {
         2,
         "a DCID change forms a sibling stream, not a fold"
     );
-    assert!(quic_streams.iter().all(|s| s.parent == Some(udp_streams[0].id)));
+    assert!(quic_streams
+        .iter()
+        .all(|s| s.parent == Some(udp_streams[0].id)));
 }
 
 #[test]
@@ -458,7 +460,9 @@ fn quic_claim_path_and_probe_admitted_path_parse_identically() {
     let probe_meta = meta(bytes.len(), 0);
     let full_ctx = ParseCtx::new(&[], Depth::Full, &probe_meta);
     assert!(
-        pktflow_plugins::quic::Quic.probe(&bytes, &full_ctx).is_some(),
+        pktflow_plugins::quic::Quic
+            .probe(&bytes, &full_ctx)
+            .is_some(),
         "must be probe-admissible for the fallback pool to ever reach it"
     );
     let probe_admitted = pktflow_plugins::quic::Quic

@@ -243,8 +243,15 @@ mod tests {
 
     /// A Long Header packet: `type_bits` occupy byte0's `0x30`, DCID/SCID
     /// as given, then arbitrary version-specific trailing bytes.
-    fn long_header(version: u32, type_bits: u8, dcid: &[u8], scid: &[u8], trailer: &[u8]) -> Vec<u8> {
-        let byte0 = HEADER_FORM_BIT | FIXED_BIT_MASK | ((type_bits << LONG_TYPE_SHIFT) & LONG_TYPE_MASK);
+    fn long_header(
+        version: u32,
+        type_bits: u8,
+        dcid: &[u8],
+        scid: &[u8],
+        trailer: &[u8],
+    ) -> Vec<u8> {
+        let byte0 =
+            HEADER_FORM_BIT | FIXED_BIT_MASK | ((type_bits << LONG_TYPE_SHIFT) & LONG_TYPE_MASK);
         let mut b = vec![byte0];
         b.extend_from_slice(&version.to_be_bytes());
         b.push(dcid.len() as u8);
@@ -275,21 +282,36 @@ mod tests {
         assert_eq!(parsed.hint, Hint::Terminal);
         assert_eq!(parsed.fields.get(HEADER_FORM), Some(&Value::Bool(true)));
         assert_eq!(parsed.fields.get(FIXED_BIT), Some(&Value::Bool(true)));
-        assert_eq!(parsed.fields.get(VERSION), Some(&Value::U64(u64::from(VERSION_1))));
+        assert_eq!(
+            parsed.fields.get(VERSION),
+            Some(&Value::U64(u64::from(VERSION_1)))
+        );
         assert_eq!(parsed.fields.get(DCID), Some(&Value::from(&dcid[..])));
         assert_eq!(parsed.fields.get(SCID), Some(&Value::from(&scid[..])));
-        assert_eq!(parsed.fields.get(PACKET_TYPE), Some(&Value::from("initial")));
+        assert_eq!(
+            parsed.fields.get(PACKET_TYPE),
+            Some(&Value::from("initial"))
+        );
     }
 
     #[test]
     fn v1_zero_rtt_handshake_and_retry_map_correctly() {
-        for (bits, name) in [(0u8, "initial"), (1, "0-rtt"), (2, "handshake"), (3, "retry")] {
+        for (bits, name) in [
+            (0u8, "initial"),
+            (1, "0-rtt"),
+            (2, "handshake"),
+            (3, "retry"),
+        ] {
             let bytes = long_header(VERSION_1, bits, &[0x01], &[], &[0x00]);
             let m = meta(bytes.len());
             let parsed = Quic
                 .parse(&bytes, &ctx(Depth::Full, &m))
                 .unwrap_or_else(|e| panic!("type {bits}: {e}"));
-            assert_eq!(parsed.fields.get(PACKET_TYPE), Some(&Value::from(name)), "type {bits}");
+            assert_eq!(
+                parsed.fields.get(PACKET_TYPE),
+                Some(&Value::from(name)),
+                "type {bits}"
+            );
         }
     }
 
@@ -297,13 +319,22 @@ mod tests {
     fn v2_permuted_bits_map_to_the_same_names() {
         // RFC 9369 §3.2: v2's bit pattern is a permutation of v1's, same
         // four meanings.
-        for (bits, name) in [(0b01u8, "initial"), (0b10, "0-rtt"), (0b11, "handshake"), (0b00, "retry")] {
+        for (bits, name) in [
+            (0b01u8, "initial"),
+            (0b10, "0-rtt"),
+            (0b11, "handshake"),
+            (0b00, "retry"),
+        ] {
             let bytes = long_header(VERSION_2, bits, &[0x01], &[], &[0x00]);
             let m = meta(bytes.len());
             let parsed = Quic
                 .parse(&bytes, &ctx(Depth::Full, &m))
                 .unwrap_or_else(|e| panic!("type {bits}: {e}"));
-            assert_eq!(parsed.fields.get(PACKET_TYPE), Some(&Value::from(name)), "type {bits}");
+            assert_eq!(
+                parsed.fields.get(PACKET_TYPE),
+                Some(&Value::from(name)),
+                "type {bits}"
+            );
         }
     }
 
@@ -349,9 +380,7 @@ mod tests {
     fn depth_ladder_gates_dcid_at_keys_and_version_at_full() {
         let bytes = long_header(VERSION_1, 0, &[0xAA], &[0xBB], &[0x00]);
         let m = meta(bytes.len());
-        let keys = Quic
-            .parse(&bytes, &ctx(Depth::Keys, &m))
-            .expect("valid");
+        let keys = Quic.parse(&bytes, &ctx(Depth::Keys, &m)).expect("valid");
         assert_eq!(keys.fields.get(DCID), Some(&Value::from(&[0xAAu8][..])));
         assert_eq!(keys.fields.get(HEADER_FORM), None);
         assert_eq!(keys.fields.get(VERSION), None);

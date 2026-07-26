@@ -218,15 +218,24 @@ fn quic_unknown_matches_tshark() {
     assert_parity("quic_unknown.pcap");
 }
 
-/// The QUIC "honest-unknowns" §8 no-phantom metric, measured on real
-/// traffic: pktflow has no QUIC plugin, so its payload must land as
-/// opaque bytes on the UDP stream — never guessed at as some other
-/// protocol, and never silently dropped from the accounting.
-/// `quic_unknown.pcap` is a QUIC-only slice (filtered with tshark) of
-/// Wireshark's own `quic-with-secrets.pcapng` test capture (see
-/// `fixtures/real/README.md` for full provenance).
+/// 11.6's honest-invariants metric, measured on real traffic (D6's "QUIC...
+/// later" arriving here): pktflow now has a `quic` plugin, RFC 8999
+/// invariants only — so real QUIC traffic must be recognized as `quic`
+/// (never left as opaque UDP, and never misidentified as any *other*
+/// protocol), while everything past its invariant header (mandatory header
+/// protection, RFC 9001 §5.4, this plugin never removes) still lands as
+/// opaque bytes, not a phantom extra layer. Short-header (1-RTT) packets
+/// carry no invariant DCID (11.6's documented ceiling): their `quic` layer
+/// forms in dissection but declares no stream identity (05.1's routine
+/// "layer with no stream" case), so their opaque remainder rolls up to the
+/// nearest stream-forming ancestor — the `udp` stream — while long-header
+/// packets each key their own `quic` stream by DCID. `quic_unknown.pcap` is
+/// a QUIC-only slice (filtered with tshark) of Wireshark's own
+/// `quic-with-secrets.pcapng` test capture (see `fixtures/real/README.md`
+/// for full provenance); its name predates this plugin and is now a
+/// misnomer left as-is for fixture-history continuity.
 #[test]
-fn quic_capture_produces_no_phantom_streams_beyond_udp() {
+fn quic_capture_recognizes_quic_streams_with_no_phantom_layers() {
     if windows_skips() {
         eprintln!("skipping: Windows without the Npcap runtime");
         return;
@@ -245,11 +254,11 @@ fn quic_capture_produces_no_phantom_streams_beyond_udp() {
 
     assert_eq!(snapshot.summary.packets, total_packets);
 
-    let allowed = ["ethernet", "ipv6", "udp"];
+    let allowed = ["ethernet", "ipv6", "udp", "quic"];
     for stream in &snapshot.streams {
         assert!(
             allowed.contains(&stream.protocol),
-            "unexpected stream protocol {:?} — QUIC must never be misidentified as a claimed protocol",
+            "unexpected stream protocol {:?} — QUIC must never be misidentified as some other claimed protocol",
             stream.protocol
         );
     }
@@ -260,17 +269,34 @@ fn quic_capture_produces_no_phantom_streams_beyond_udp() {
         1,
         "exactly one UDP conversation, no phantom splits"
     );
-    let opaque: u64 = udp_streams
-        .iter()
-        .flat_map(|row| &row.nodes)
-        .filter_map(|&id| snapshot.streams.iter().find(|s| s.id == id))
-        .map(|s| s.opaque_bytes)
-        .sum();
+    let quic_streams = agg.at_layer_merged("quic");
     assert!(
-        opaque > 0,
-        "QUIC's payload is unparsed application data — must be counted as opaque_bytes on the UDP stream"
+        !quic_streams.is_empty(),
+        "real QUIC traffic on port 443 must reach the quic plugin"
     );
 
+    // Opaque bytes land wherever dissection actually stopped (05.1/D15):
+    // long-header packets' ciphertext on their own `quic` stream, and
+    // short-header packets' (no DCID to key on) on the parent `udp` stream
+    // they roll up to — either way, every byte is accounted for and none
+    // is silently parsed as a phantom further layer.
+    let opaque_on = |protocol: &str| -> u64 {
+        agg.at_layer_merged(protocol)
+            .iter()
+            .flat_map(|row| &row.nodes)
+            .filter_map(|&id| snapshot.streams.iter().find(|s| s.id == id))
+            .map(|s| s.opaque_bytes)
+            .sum()
+    };
+    let opaque = opaque_on("udp") + opaque_on("quic");
+    assert!(
+        opaque > 0,
+        "QUIC's encrypted payload is unparsed application data — must be counted as opaque_bytes"
+    );
+
+    // Every quic packet's hint is unconditionally Terminal (11.6): recognized,
+    // not "unknown, heuristically guessed at" — StopClass::UnknownPayload
+    // no longer applies to this traffic now that a real plugin claims it.
     let unknown_payload = snapshot
         .summary
         .stop_classes
@@ -278,8 +304,8 @@ fn quic_capture_produces_no_phantom_streams_beyond_udp() {
         .find(|(class, _)| *class == pktflow_core::StopClass::UnknownPayload)
         .map(|(_, n)| *n)
         .unwrap_or(0);
-    assert!(
-        unknown_payload > 0,
-        "QUIC frames stop at UDP with StopClass::UnknownPayload, never guessed at"
+    assert_eq!(
+        unknown_payload, 0,
+        "quic recognizes every frame in this capture; nothing should stop as UnknownPayload"
     );
 }

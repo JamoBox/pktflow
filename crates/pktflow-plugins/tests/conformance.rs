@@ -26,6 +26,7 @@ use pktflow_plugins::gre::Gre;
 use pktflow_plugins::gtp_u::GtpU;
 use pktflow_plugins::hsrp::Hsrp;
 use pktflow_plugins::http::Http;
+use pktflow_plugins::http2::Http2;
 use pktflow_plugins::icmpv4::Icmpv4;
 use pktflow_plugins::icmpv6::Icmpv6;
 use pktflow_plugins::igmp::Igmp;
@@ -34,8 +35,8 @@ use pktflow_plugins::ipv4::{internet_checksum, Ipv4};
 use pktflow_plugins::ipv6::Ipv6;
 use pktflow_plugins::kerberos::Kerberos;
 use pktflow_plugins::l2tpv3::L2tpv3;
-use pktflow_plugins::ldap::Ldap;
 use pktflow_plugins::lacp::Lacp;
+use pktflow_plugins::ldap::Ldap;
 use pktflow_plugins::llc::Llc;
 use pktflow_plugins::lldp::Lldp;
 use pktflow_plugins::llmnr::Llmnr;
@@ -53,15 +54,16 @@ use pktflow_plugins::ppp::Ppp;
 use pktflow_plugins::pppoe::Pppoe;
 use pktflow_plugins::ptp::Ptp;
 use pktflow_plugins::pvst_plus::PvstPlus;
+use pktflow_plugins::quic::Quic;
 use pktflow_plugins::radiotap::Radiotap;
 use pktflow_plugins::radius::Radius;
 use pktflow_plugins::rocev2::Rocev2;
-use pktflow_plugins::quic::Quic;
 use pktflow_plugins::sctp::Sctp;
 use pktflow_plugins::snmp::Snmp;
 use pktflow_plugins::ssdp::Ssdp;
 use pktflow_plugins::ssh::Ssh;
 use pktflow_plugins::stp::Stp;
+use pktflow_plugins::stun::Stun;
 use pktflow_plugins::syslog::Syslog;
 use pktflow_plugins::tcp::Tcp;
 use pktflow_plugins::template::Template;
@@ -70,6 +72,7 @@ use pktflow_plugins::udp::Udp;
 use pktflow_plugins::vlan::Vlan;
 use pktflow_plugins::vrrp::Vrrp;
 use pktflow_plugins::vxlan::Vxlan;
+use pktflow_plugins::websocket::WebSocket;
 use pktflow_plugins::wireguard::Wireguard;
 
 use kit::{run_conformance, ConformanceCase, GoodPacket};
@@ -3191,6 +3194,110 @@ Content-Length: 9\r\n\
                 expected_hint: Hint::Terminal,
             },
         ],
+        outer_ctx: Vec::new(),
+    });
+}
+
+#[test]
+fn http2_conforms() {
+    // RFC 9113 §6.5 SETTINGS: the one frame type carrying `settings_entries`
+    // (a Full-only field, not a rollup, so it needn't co-occur elsewhere).
+    let mut payload = Vec::new();
+    payload.extend_from_slice(&1u16.to_be_bytes());
+    payload.extend_from_slice(&4096u32.to_be_bytes());
+    let mut bytes = (payload.len() as u32).to_be_bytes()[1..].to_vec();
+    bytes.push(0x4); // SETTINGS
+    bytes.push(0); // flags
+    bytes.extend_from_slice(&0u32.to_be_bytes()); // stream id 0
+    bytes.extend_from_slice(&payload);
+    let len = bytes.len();
+
+    run_conformance(&ConformanceCase {
+        plugin: Box::new(Http2),
+        good: vec![GoodPacket {
+            bytes,
+            expected_header_len: len,
+            expected_full_fields: vec![
+                ("stream_id", Value::U64(0)),
+                ("frame_type", Value::from("SETTINGS")),
+                ("flags", Value::U64(0)),
+                ("length", Value::U64(6)),
+                (
+                    "settings_entries",
+                    Value::List(vec![Value::from(&payload[..])]),
+                ),
+            ],
+            expected_hint: Hint::Terminal,
+        }],
+        outer_ctx: Vec::new(),
+    });
+}
+
+#[test]
+fn websocket_conforms() {
+    // RFC 6455 §5.2: an unmasked text frame — websocket's one rollup
+    // field (`opcode`) needs no co-occurring field, so any recognized
+    // frame works as the canonical sample.
+    let payload = b"hi";
+    let bytes = vec![0x81, payload.len() as u8, b'h', b'i'];
+    run_conformance(&ConformanceCase {
+        plugin: Box::new(WebSocket),
+        good: vec![GoodPacket {
+            bytes,
+            expected_header_len: 2,
+            expected_full_fields: vec![
+                ("app", Value::from("websocket")),
+                ("fin", Value::Bool(true)),
+                ("opcode", Value::U64(1)),
+                ("mask_bit", Value::Bool(false)),
+                ("payload_len", Value::U64(payload.len() as u64)),
+            ],
+            expected_hint: Hint::Terminal,
+        }],
+        outer_ctx: Vec::new(),
+    });
+}
+
+#[test]
+fn stun_conforms() {
+    // RFC 8489 Binding Success Response carrying XOR-MAPPED-ADDRESS — the
+    // only shape pairing both of stun's declared rollup fields
+    // (`message_class`, `xor_mapped_address`), the same constraint
+    // `ssh_conforms`/`ldap_conforms` document above for their own
+    // one-shape rollups.
+    let txn = [0x01u8; 12];
+    let mut addr_value = vec![0x00, 0x01]; // reserved + family IPv4
+    let xport = 3478u16 ^ 0x2112u16;
+    addr_value.extend_from_slice(&xport.to_be_bytes());
+    let cookie = 0x2112_A442u32.to_be_bytes();
+    for (i, &b) in [203u8, 0, 113, 5].iter().enumerate() {
+        addr_value.push(b ^ cookie[i]);
+    }
+    let mut attr = 0x0020u16.to_be_bytes().to_vec();
+    attr.extend_from_slice(&(addr_value.len() as u16).to_be_bytes());
+    attr.extend_from_slice(&addr_value);
+
+    let mut bytes = 0x0101u16.to_be_bytes().to_vec(); // Binding Success Response
+    bytes.extend_from_slice(&(attr.len() as u16).to_be_bytes());
+    bytes.extend_from_slice(&0x2112_A442u32.to_be_bytes());
+    bytes.extend_from_slice(&txn);
+    bytes.extend_from_slice(&attr);
+    let len = bytes.len();
+
+    run_conformance(&ConformanceCase {
+        plugin: Box::new(Stun),
+        good: vec![GoodPacket {
+            bytes,
+            expected_header_len: len,
+            expected_full_fields: vec![
+                ("app", Value::from("stun")),
+                ("message_class", Value::from("success_response")),
+                ("message_method", Value::U64(0x001)),
+                ("message_length", Value::U64(attr.len() as u64)),
+                ("xor_mapped_address", Value::from(&[203u8, 0, 113, 5][..])),
+            ],
+            expected_hint: Hint::Terminal,
+        }],
         outer_ctx: Vec::new(),
     });
 }

@@ -26,6 +26,7 @@ pub mod gre;
 pub mod gtp_u;
 pub mod hsrp;
 pub mod http;
+pub mod http2;
 pub mod icmpv4;
 pub mod icmpv6;
 pub mod igmp;
@@ -62,6 +63,7 @@ pub mod snmp;
 pub mod ssdp;
 pub mod ssh;
 pub mod stp;
+pub mod stun;
 pub mod syslog;
 pub mod tcp;
 pub mod template;
@@ -70,6 +72,7 @@ pub mod udp;
 pub mod vlan;
 pub mod vrrp;
 pub mod vxlan;
+pub mod websocket;
 pub mod wireguard;
 
 /// The one registration list (PRD §8): adding a protocol end-to-end is a
@@ -138,8 +141,11 @@ pub fn default_engine() -> Engine {
         .plugin(ldap::Ldap)
         .plugin(ssdp::Ssdp)
         .plugin(http::Http)
+        .plugin(http2::Http2)
         .plugin(tls::Tls)
         .plugin(ssh::Ssh)
+        .plugin(websocket::WebSocket)
+        .plugin(stun::Stun)
         .plugin(netflow9::Netflow9)
         .plugin(ipfix::Ipfix)
         .build()
