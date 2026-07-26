@@ -27,7 +27,9 @@ jobs:
       - run: cargo install cargo-fuzz --locked
       - name: Fuzz ${{ matrix.target }} for 5 minutes
         working-directory: crates/pktflow-plugins
-        run: cargo fuzz run ${{ matrix.target }} -- -max_total_time=300
+        # +nightly is required: the repo's rust-toolchain.toml pins "stable",
+        # which otherwise overrides the nightly toolchain installed above.
+        run: cargo +nightly fuzz run ${{ matrix.target }} -- -max_total_time=300
       - name: Upload crash artifacts
         if: failure()
         uses: actions/upload-artifact@v4
