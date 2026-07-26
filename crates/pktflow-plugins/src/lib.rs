@@ -25,6 +25,7 @@ pub mod ethernet;
 pub mod ftp;
 pub mod geneve;
 pub mod gre;
+pub mod gtp_c;
 pub mod gtp_u;
 pub mod hsrp;
 pub mod http;
@@ -117,6 +118,7 @@ pub fn default_engine() -> Engine {
         .plugin(mpls::Mpls)
         .plugin(vxlan::Vxlan)
         .plugin(gtp_u::GtpU)
+        .plugin(gtp_c::GtpC)
         .plugin(geneve::Geneve)
         .plugin(esp::Esp)
         .plugin(ah::Ah)

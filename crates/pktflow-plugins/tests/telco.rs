@@ -7,7 +7,10 @@
 //! inner-stream attempt; and two TEIDs sharing one outer UDP 5-tuple (a
 //! GTP-U gateway serving multiple subscriber tunnels) produce sibling
 //! streams, the same shared-qualifier shape `tests/tunnels.rs` proves for
-//! two VNIs over one outer UDP stream.
+//! two VNIs over one outer UDP stream. `gtp_c`'s GTPv1-C/GTPv2-C pairs
+//! parse through the one plugin the `version` field disambiguates, and its
+//! bounded IE walk skips a vendor-specific TLV via its own length field to
+//! still recover a recognized IMSI.
 
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
@@ -209,4 +212,137 @@ fn two_teids_over_one_outer_udp_are_sibling_streams() {
     );
     assert!(gtp_streams.iter().all(|g| g.parent == Some(outer_udp.id)));
     assert_ne!(gtp_streams[0].key, gtp_streams[1].key);
+}
+
+// --- GTP-C (11.15, TS 29.060 GTPv1-C / TS 29.274 GTPv2-C) ----------------
+
+/// TS 29.060 §6 GTPv1-C header, no optional block.
+fn gtp1c(message_type: u8, teid: u32, ies: &[u8]) -> Vec<u8> {
+    let mut g = vec![0x30, message_type]; // version 1, PT=1
+    g.extend_from_slice(&(ies.len() as u16).to_be_bytes());
+    g.extend_from_slice(&teid.to_be_bytes());
+    g.extend_from_slice(ies);
+    g
+}
+
+/// TS 29.274 §5.1 GTPv2-C header, `T=1` (TEID present).
+fn gtp2c(message_type: u8, teid: u32, ies: &[u8]) -> Vec<u8> {
+    let mut g = vec![0x48, message_type]; // version 2, T=1
+    g.extend_from_slice(&((8 + ies.len()) as u16).to_be_bytes());
+    g.extend_from_slice(&teid.to_be_bytes());
+    g.extend_from_slice(&[0x00, 0x00, 0x01, 0x00]); // sequence number + spare
+    g.extend_from_slice(ies);
+    g
+}
+
+fn gtp_c_frame(msg: &[u8]) -> Vec<u8> {
+    let mut frame = eth(MAC_B, MAC_A);
+    frame.extend_from_slice(&ipv4(
+        17,
+        (20 + 8 + msg.len()) as u16,
+        [192, 168, 0, 1],
+        [192, 168, 0, 2],
+    ));
+    frame.extend_from_slice(&udp(2123, 2123, msg.len() as u16));
+    frame.extend_from_slice(msg);
+    frame
+}
+
+#[test]
+fn gtpv1c_and_gtpv2c_create_session_pairs_parse_through_the_same_plugin() {
+    let engine = Arc::new(default_engine());
+
+    // GTPv1-C Create PDP Context Request (16) / Response (17).
+    for (message_type, teid) in [(16u8, 0u32), (17, 0xAABB_CCDD)] {
+        let msg = gtp1c(message_type, teid, &[]);
+        let frame = gtp_c_frame(&msg);
+        let packet = engine.dissect(&frame, meta(frame.len(), 0), ParseOpts::default());
+        let layer = packet.layers.last().expect("gtp_c layer");
+        assert_eq!(layer.protocol, "gtp_c");
+        assert_eq!(
+            layer.fields.get("version"),
+            Some(&pktflow_core::Value::U64(1))
+        );
+        assert_eq!(
+            layer.fields.get("message_type"),
+            Some(&pktflow_core::Value::U64(u64::from(message_type)))
+        );
+        assert_eq!(
+            layer.fields.get("teid"),
+            Some(&pktflow_core::Value::U64(u64::from(teid)))
+        );
+    }
+
+    // GTPv2-C Create Session Request (32) / Response (33) — the same
+    // plugin, disambiguated purely by `version`.
+    for (message_type, teid) in [(32u8, 0u32), (33, 0x1122_3344)] {
+        let msg = gtp2c(message_type, teid, &[]);
+        let frame = gtp_c_frame(&msg);
+        let packet = engine.dissect(&frame, meta(frame.len(), 0), ParseOpts::default());
+        let layer = packet.layers.last().expect("gtp_c layer");
+        assert_eq!(layer.protocol, "gtp_c");
+        assert_eq!(
+            layer.fields.get("version"),
+            Some(&pktflow_core::Value::U64(2))
+        );
+        assert_eq!(
+            layer.fields.get("message_type"),
+            Some(&pktflow_core::Value::U64(u64::from(message_type)))
+        );
+        assert_eq!(
+            layer.fields.get("teid"),
+            Some(&pktflow_core::Value::U64(u64::from(teid)))
+        );
+    }
+}
+
+/// TS 23.003 §2.2 BCD packing: digits two per octet, low nibble first;
+/// `0xF` fills the trailing nibble of an odd-length number.
+fn bcd_encode(digits: &str) -> Vec<u8> {
+    let nibbles: Vec<u8> = digits.bytes().map(|b| b - b'0').collect();
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i < nibbles.len() {
+        let lo = nibbles[i];
+        let hi = if i + 1 < nibbles.len() {
+            nibbles[i + 1]
+        } else {
+            0xF
+        };
+        out.push(lo | (hi << 4));
+        i += 2;
+    }
+    out
+}
+
+#[test]
+fn gtp_c_ie_walk_skips_a_vendor_specific_ie_and_still_recovers_imsi() {
+    // GTPv1-C Create PDP Context Request: an unrecognized TLV IE
+    // (type >= 0x80, self-describing length) ahead of a recognized IMSI TV
+    // IE — the walk must skip the former via its own length field and
+    // still recover the latter, end-to-end through the real engine.
+    let vendor_tlv = {
+        let mut b = vec![0xFEu8]; // vendor-specific TLV type
+        b.extend_from_slice(&4u16.to_be_bytes());
+        b.extend_from_slice(&[0xDE, 0xAD, 0xBE, 0xEF]);
+        b
+    };
+    let imsi_tv = {
+        let mut b = vec![0x02u8];
+        b.extend_from_slice(&bcd_encode("111223334445556"));
+        b
+    };
+    let mut ies = vendor_tlv;
+    ies.extend_from_slice(&imsi_tv);
+
+    let msg = gtp1c(16, 0, &ies);
+    let frame = gtp_c_frame(&msg);
+    let engine = Arc::new(default_engine());
+    let packet = engine.dissect(&frame, meta(frame.len(), 0), ParseOpts::default());
+    let layer = packet.layers.last().expect("gtp_c layer");
+    assert_eq!(layer.protocol, "gtp_c");
+    assert_eq!(
+        layer.fields.get("imsi"),
+        Some(&pktflow_core::Value::from("111223334445556"))
+    );
 }

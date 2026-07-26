@@ -24,6 +24,7 @@ use pktflow_plugins::esp::Esp;
 use pktflow_plugins::ethernet::Ethernet;
 use pktflow_plugins::geneve::Geneve;
 use pktflow_plugins::gre::Gre;
+use pktflow_plugins::gtp_c::GtpC;
 use pktflow_plugins::gtp_u::GtpU;
 use pktflow_plugins::hsrp::Hsrp;
 use pktflow_plugins::http::Http;
@@ -1211,6 +1212,32 @@ fn gtp_u_conforms() {
                 expected_hint: Hint::Terminal,
             },
         ],
+        outer_ctx: Vec::new(),
+    });
+}
+
+#[test]
+fn gtp_c_conforms() {
+    // TS 29.060 §7.3 GTPv1-C Create PDP Context Request (message type 16),
+    // no optional block, no IEs.
+    let bytes = vec![
+        0x30, 16, // version 1, PT=1; message type 16
+        0x00, 0x00, // length: 0 (no IEs in this sample)
+        0xAA, 0xBB, 0xCC, 0xDD, // TEID
+    ];
+    run_conformance(&ConformanceCase {
+        plugin: Box::new(GtpC),
+        good: vec![GoodPacket {
+            bytes,
+            expected_header_len: 8,
+            expected_full_fields: vec![
+                ("teid", Value::U64(0xAABB_CCDD)),
+                ("version", Value::U64(1)),
+                ("message_type", Value::U64(16)),
+                ("length", Value::U64(0)),
+            ],
+            expected_hint: Hint::Terminal,
+        }],
         outer_ctx: Vec::new(),
     });
 }
