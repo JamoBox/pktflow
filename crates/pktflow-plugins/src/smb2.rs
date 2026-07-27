@@ -113,17 +113,25 @@ impl LayerPlugin for Smb2 {
                 "not an SMB2 message (bad ProtocolId)",
             ));
         }
-        let _structure_size = mr.u16_be()?;
-        let _credit_charge = mr.u16_be()?;
-        let status = mr.u32_be()?;
-        let command = mr.u16_be()?;
-        let _credit = mr.u16_be()?;
-        let flags = mr.u32_be()?;
-        let _next_command = mr.u32_be()?;
-        let message_id = mr.u64_be()?;
-        let _reserved = mr.u32_be()?;
-        let tree_id = mr.u32_be()?;
-        let session_id = mr.u64_be()?;
+        // Every multi-byte field below is little-endian ([MS-SMB2] §2.2.1;
+        // only `ProtocolId` above is a network-order byte string, and only
+        // the NBSS length prefix is big-endian). `StructureSize` MUST be
+        // 64 — the cheap invariant that makes a byte-order or framing
+        // mistake here fail loudly instead of yielding plausible garbage.
+        let structure_size = mr.u16_le()?;
+        if usize::from(structure_size) != FIXED_HEADER_LEN {
+            return Err(ParseError::Malformed("SMB2 header StructureSize is not 64"));
+        }
+        let _credit_charge = mr.u16_le()?;
+        let status = mr.u32_le()?;
+        let command = mr.u16_le()?;
+        let _credit = mr.u16_le()?;
+        let flags = mr.u32_le()?;
+        let _next_command = mr.u32_le()?;
+        let message_id = mr.u64_le()?;
+        let _reserved = mr.u32_le()?;
+        let tree_id = mr.u32_le()?;
+        let session_id = mr.u64_le()?;
         let _signature = mr.take(16)?;
 
         let is_response = flags & FLAG_SERVER_TO_REDIR != 0;
@@ -193,18 +201,20 @@ mod tests {
         session_id: u64,
         body: &[u8],
     ) -> Vec<u8> {
+        // Little-endian, as the wire is ([MS-SMB2] §2.2.1) — the NBSS
+        // length prefix below is the one big-endian field.
         let mut h = PROTOCOL_ID.to_vec();
-        h.extend_from_slice(&64u16.to_be_bytes()); // StructureSize
-        h.extend_from_slice(&0u16.to_be_bytes()); // CreditCharge
-        h.extend_from_slice(&0u32.to_be_bytes()); // Status
-        h.extend_from_slice(&command.to_be_bytes());
-        h.extend_from_slice(&0u16.to_be_bytes()); // Credit
-        h.extend_from_slice(&flags.to_be_bytes());
-        h.extend_from_slice(&0u32.to_be_bytes()); // NextCommand
-        h.extend_from_slice(&message_id.to_be_bytes());
-        h.extend_from_slice(&0u32.to_be_bytes()); // Reserved
-        h.extend_from_slice(&tree_id.to_be_bytes());
-        h.extend_from_slice(&session_id.to_be_bytes());
+        h.extend_from_slice(&64u16.to_le_bytes()); // StructureSize
+        h.extend_from_slice(&0u16.to_le_bytes()); // CreditCharge
+        h.extend_from_slice(&0u32.to_le_bytes()); // Status
+        h.extend_from_slice(&command.to_le_bytes());
+        h.extend_from_slice(&0u16.to_le_bytes()); // Credit
+        h.extend_from_slice(&flags.to_le_bytes());
+        h.extend_from_slice(&0u32.to_le_bytes()); // NextCommand
+        h.extend_from_slice(&message_id.to_le_bytes());
+        h.extend_from_slice(&0u32.to_le_bytes()); // Reserved
+        h.extend_from_slice(&tree_id.to_le_bytes());
+        h.extend_from_slice(&session_id.to_le_bytes());
         h.extend_from_slice(&[0u8; 16]); // Signature
         h.extend_from_slice(body);
 
@@ -228,6 +238,69 @@ mod tests {
         assert_eq!(parsed.fields.get(COMMAND), Some(&Value::U64(0)));
         assert_eq!(parsed.fields.get(MESSAGE_ID), Some(&Value::U64(1)));
         assert_eq!(parsed.fields.get(FLAGS), Some(&Value::U64(0)));
+    }
+
+    /// Byte-order regression, pinned against a **hand-written** header
+    /// rather than [`smb2_message`]'s output.
+    ///
+    /// The original parser read every field big-endian and its fixture
+    /// builder wrote them big-endian, so the two agreed with each other
+    /// and disagreed with the wire: on a real capture a `TreeConnect`
+    /// (`03 00` little-endian) read as `command == 0x0300`, and
+    /// `session_id` — the flow key — came out byte-reversed. A literal
+    /// byte array is the only fixture that can't drift along with the
+    /// parser, so this test spells the header out.
+    #[test]
+    fn header_fields_are_little_endian_on_the_wire() {
+        #[rustfmt::skip]
+        let message: Vec<u8> = vec![
+            0xFE, b'S', b'M', b'B',   // ProtocolId (byte string, not an integer)
+            0x40, 0x00,               // StructureSize = 64
+            0x00, 0x00,               // CreditCharge
+            0x22, 0x00, 0x00, 0xC0,   // Status = 0xC0000022 (ACCESS_DENIED)
+            0x03, 0x00,               // Command = 3 (TreeConnect)
+            0x01, 0x00,               // Credit
+            0x01, 0x00, 0x00, 0x00,   // Flags = SERVER_TO_REDIR (response)
+            0x00, 0x00, 0x00, 0x00,   // NextCommand
+            0x0A, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // MessageId = 10
+            0x00, 0x00, 0x00, 0x00,   // Reserved
+            0x05, 0x00, 0x00, 0x00,   // TreeId = 5
+            0xEF, 0xBE, 0xAD, 0xDE, 0x00, 0x00, 0x00, 0x00, // SessionId = 0xDEADBEEF
+            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, // Signature
+        ];
+        assert_eq!(message.len(), FIXED_HEADER_LEN);
+
+        // NBSS prefix: type 0x00 then a *big-endian* 3-byte length.
+        let mut bytes = vec![0x00, 0x00, 0x00, message.len() as u8];
+        bytes.extend_from_slice(&message);
+
+        let m = meta(bytes.len());
+        let parsed = Smb2
+            .parse(&bytes, &ctx(Depth::Full, &m))
+            .expect("valid TreeConnect response");
+        assert_eq!(parsed.header_len, bytes.len());
+        assert_eq!(parsed.fields.get(COMMAND), Some(&Value::U64(3)));
+        assert_eq!(parsed.fields.get(STATUS), Some(&Value::U64(0xC000_0022)));
+        assert_eq!(parsed.fields.get(MESSAGE_ID), Some(&Value::U64(10)));
+        assert_eq!(parsed.fields.get(TREE_ID), Some(&Value::U64(5)));
+        assert_eq!(
+            parsed.fields.get(SESSION_ID),
+            Some(&Value::U64(0xDEAD_BEEF))
+        );
+        assert_eq!(parsed.fields.get(FLAGS), Some(&Value::U64(1)));
+    }
+
+    /// [MS-SMB2] §2.2.1 makes `StructureSize == 64` a MUST; enforcing it is
+    /// what turns a byte-order or framing mistake into a clean decline
+    /// instead of plausible-looking garbage.
+    #[test]
+    fn wrong_structure_size_declines() {
+        let mut bytes = smb2_message(0, 0, 1, 0, 0, &[]);
+        // StructureSize sits at NBSS(4) + ProtocolId(4).
+        bytes[8] = 0x00;
+        bytes[9] = 0x40; // 64 written big-endian: the original bug's shape
+        let m = meta(bytes.len());
+        assert!(Smb2.parse(&bytes, &ctx(Depth::Full, &m)).is_err());
     }
 
     #[test]

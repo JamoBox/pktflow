@@ -36,6 +36,7 @@ feeding bytes directly to `parse()` (09.1) — it is just not reachable via rout
 | Claims | none |
 | Probe | none — see above; would be dead code under the current gate |
 | Fields | `Keys`: `ssrc` (U64) · `Structural`: `version`, `payload_type`, `sequence_number`, `timestamp`, `marker_bit` · `Full`: `csrc_list` (List of U64) |
+| Header extension | The `X` bit (§5.1) puts a `profile(2) + length(2, 32-bit words) + data` extension (§5.3.1) after the CSRC list — part of the header, not the payload, and near-universal in WebRTC traffic (RFC 8285 carries audio level/mid per packet). Walked so `header_len` is right; no field of its own, since the contents are profile-specific and their own decode — the same "walked, not extracted" treatment `ndp` gives Redirect's second address |
 | Hint | `Terminal` |
 | Identity | key `[{ssrc, None}]` (shared qualifier) → one stream per RTP synchronization source, ready to be reached the moment cross-stream port correlation (D15) exists |
 | Rollups | `Accumulate` on `payload_type` |

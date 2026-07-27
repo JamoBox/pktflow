@@ -43,10 +43,11 @@ impl<'a> ByteReader<'a> {
     }
 
     /// Reads a little-endian `u16`. Most link/network headers in this crate
-    /// are big-endian network-byte-order, but a few link-layer formats
-    /// (802.11's Frame Control/Duration/Sequence Control/QoS Control,
-    /// IEEE 802.11-2020 §9.2; radiotap.org's header) are little-endian —
-    /// this reader exists for those.
+    /// are big-endian network-byte-order, but several formats are not:
+    /// 802.11's Frame Control/Duration/Sequence Control/QoS Control
+    /// (IEEE 802.11-2020 §9.2), radiotap.org's header, DNP3's link-layer
+    /// addresses (IEEE 1815), and every multi-byte field in an SMB2 header
+    /// ([MS-SMB2] §2.2.1, DOS/CIFS heritage).
     pub fn u16_le(&mut self) -> Result<u16, Truncated> {
         Ok(u16::from_le_bytes(self.array()?))
     }
@@ -65,6 +66,12 @@ impl<'a> ByteReader<'a> {
     /// Reads a big-endian `u64`.
     pub fn u64_be(&mut self) -> Result<u64, Truncated> {
         Ok(u64::from_be_bytes(self.array()?))
+    }
+
+    /// Reads a little-endian `u64` (SMB2's `MessageId`/`SessionId` — see
+    /// [`ByteReader::u16_le`]).
+    pub fn u64_le(&mut self) -> Result<u64, Truncated> {
+        Ok(u64::from_le_bytes(self.array()?))
     }
 
     /// Reads a big-endian `i32`.

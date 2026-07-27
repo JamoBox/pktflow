@@ -316,19 +316,21 @@ fn smb2_message(
     tree_id: u32,
     session_id: u64,
 ) -> Vec<u8> {
+    // Little-endian header fields ([MS-SMB2] §2.2.1); only the NBSS
+    // length prefix below is big-endian.
     let mut h = vec![0xFEu8, b'S', b'M', b'B'];
-    h.extend_from_slice(&64u16.to_be_bytes());
-    h.extend_from_slice(&0u16.to_be_bytes());
-    h.extend_from_slice(&0u32.to_be_bytes());
-    h.extend_from_slice(&command.to_be_bytes());
-    h.extend_from_slice(&0u16.to_be_bytes());
-    h.extend_from_slice(&flags.to_be_bytes());
-    h.extend_from_slice(&0u32.to_be_bytes());
-    h.extend_from_slice(&message_id.to_be_bytes());
-    h.extend_from_slice(&0u32.to_be_bytes());
-    h.extend_from_slice(&tree_id.to_be_bytes());
-    h.extend_from_slice(&session_id.to_be_bytes());
-    h.extend_from_slice(&[0u8; 16]);
+    h.extend_from_slice(&64u16.to_le_bytes()); // StructureSize
+    h.extend_from_slice(&0u16.to_le_bytes()); // CreditCharge
+    h.extend_from_slice(&0u32.to_le_bytes()); // Status
+    h.extend_from_slice(&command.to_le_bytes());
+    h.extend_from_slice(&0u16.to_le_bytes()); // Credit
+    h.extend_from_slice(&flags.to_le_bytes());
+    h.extend_from_slice(&0u32.to_le_bytes()); // NextCommand
+    h.extend_from_slice(&message_id.to_le_bytes());
+    h.extend_from_slice(&0u32.to_le_bytes()); // Reserved
+    h.extend_from_slice(&tree_id.to_le_bytes());
+    h.extend_from_slice(&session_id.to_le_bytes());
+    h.extend_from_slice(&[0u8; 16]); // Signature
     let mut msg = vec![0x00];
     msg.extend_from_slice(&(h.len() as u32).to_be_bytes()[1..]);
     msg.extend_from_slice(&h);

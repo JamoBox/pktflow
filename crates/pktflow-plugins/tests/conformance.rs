@@ -3519,20 +3519,23 @@ fn imap_conforms() {
 
 #[test]
 fn smb2_conforms() {
-    // MS-SMB2 §2.2.1 Negotiate request — smb2's one declared rollup
-    // (`command`) needs no co-occurring field.
+    // MS-SMB2 §2.2.1 TreeConnect request. Every field below the
+    // `ProtocolId` byte string is little-endian, as the wire is — only the
+    // NBSS length prefix is big-endian. Non-zero values throughout, so a
+    // byte-order regression shows up as a wrong value rather than passing
+    // by symmetry.
     let mut h = vec![0xFEu8, b'S', b'M', b'B'];
-    h.extend_from_slice(&64u16.to_be_bytes());
-    h.extend_from_slice(&0u16.to_be_bytes());
-    h.extend_from_slice(&0u32.to_be_bytes());
-    h.extend_from_slice(&0u16.to_be_bytes()); // command = Negotiate
-    h.extend_from_slice(&0u16.to_be_bytes());
-    h.extend_from_slice(&0u32.to_be_bytes()); // flags
-    h.extend_from_slice(&0u32.to_be_bytes());
-    h.extend_from_slice(&1u64.to_be_bytes()); // message_id
-    h.extend_from_slice(&0u32.to_be_bytes());
-    h.extend_from_slice(&0u32.to_be_bytes()); // tree_id
-    h.extend_from_slice(&0u64.to_be_bytes()); // session_id
+    h.extend_from_slice(&64u16.to_le_bytes()); // StructureSize
+    h.extend_from_slice(&0u16.to_le_bytes()); // CreditCharge
+    h.extend_from_slice(&0u32.to_le_bytes()); // Status
+    h.extend_from_slice(&3u16.to_le_bytes()); // command = TreeConnect
+    h.extend_from_slice(&0u16.to_le_bytes()); // Credit
+    h.extend_from_slice(&0u32.to_le_bytes()); // flags
+    h.extend_from_slice(&0u32.to_le_bytes()); // NextCommand
+    h.extend_from_slice(&0x0102u64.to_le_bytes()); // message_id
+    h.extend_from_slice(&0u32.to_le_bytes()); // Reserved
+    h.extend_from_slice(&0x0304u32.to_le_bytes()); // tree_id
+    h.extend_from_slice(&0x0506u64.to_le_bytes()); // session_id
     h.extend_from_slice(&[0u8; 16]);
     let mut bytes = vec![0x00];
     bytes.extend_from_slice(&(h.len() as u32).to_be_bytes()[1..]);
@@ -3545,12 +3548,12 @@ fn smb2_conforms() {
             bytes,
             expected_header_len: len,
             expected_full_fields: vec![
-                ("session_id", Value::U64(0)),
-                ("command", Value::U64(0)),
+                ("session_id", Value::U64(0x0506)),
+                ("command", Value::U64(3)),
                 ("status", Value::U64(0)),
                 ("flags", Value::U64(0)),
-                ("message_id", Value::U64(1)),
-                ("tree_id", Value::U64(0)),
+                ("message_id", Value::U64(0x0102)),
+                ("tree_id", Value::U64(0x0304)),
             ],
             expected_hint: Hint::Terminal,
         }],
