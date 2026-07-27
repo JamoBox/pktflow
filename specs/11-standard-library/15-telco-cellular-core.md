@@ -54,12 +54,14 @@ disambiguates, the `ospf`/`stun` precedent from 11.4/11.8).
       acceptance-criteria rigor). (`tests/telco.rs`)
 - [x] `gtp_u` Echo-Request/Response and Error-Indication fixtures stop `Terminal`, no
       spurious inner-stream attempt. (`tests/telco.rs`)
-- [ ] `gtp_c` fixture: a GTPv1-C Create-PDP-Context Request/Response pair and a GTPv2-C
+- [x] `gtp_c` fixture: a GTPv1-C Create-PDP-Context Request/Response pair and a GTPv2-C
       Create-Session Request/Response pair both parse `version`/`message_type`/`teid`
       exactly through the same plugin.
-- [ ] `gtp_c` IE-walk honesty: a fixture with an unrecognized/vendor-specific IE type present
+      (`tests/telco.rs::gtpv1c_and_gtpv2c_create_session_pairs_parse_through_the_same_plugin`)
+- [x] `gtp_c` IE-walk honesty: a fixture with an unrecognized/vendor-specific IE type present
       alongside a recognized `imsi`/`apn` still extracts the recognized ones correctly and
       skips the unrecognized one via its own length field (bounded walk, no misalignment).
+      (`src/gtp_c.rs`, `tests/telco.rs::gtp_c_ie_walk_skips_a_vendor_specific_ie_and_still_recovers_imsi`)
 - [x] Two different TEIDs over one UDP 5-tuple (a GTP-U gateway serving multiple subscriber
       tunnels) produce two sibling streams (06.5's two-VNIs-one-outer-stream test shape).
       (`tests/telco.rs`)

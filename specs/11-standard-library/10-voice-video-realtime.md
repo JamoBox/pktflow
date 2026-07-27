@@ -58,12 +58,14 @@ bye). Same reachability stance as `rtp`.
 | Skinny/SCCP | *No open standard* (Cisco) | Cisco's proprietary IP-phone signaling protocol |
 
 ## Acceptance criteria
-- [ ] `sip` fixture: a full INVITE/180/200/ACK/BYE dialog folds into one `call_id`-keyed
+- [x] `sip` fixture: a full INVITE/180/200/ACK/BYE dialog folds into one `call_id`-keyed
       stream; `status_code` series preserves call-progress order.
-- [ ] `rtp`/`rtcp` fixtures fed directly to `parse()` (bypassing routing, per the documented
+      (`tests/voice_video.rs::sip_dialog_folds_into_one_call_id_stream_with_status_code_series_in_order`)
+- [x] `rtp`/`rtcp` fixtures fed directly to `parse()` (bypassing routing, per the documented
       reachability limitation) parse real-capture bytes exactly, including CSRC-list and
-      SR/SDES variants.
-- [ ] A same-session test proves the D15 claim mechanically, not just in prose: a synthetic
+      SR/SDES variants. (`src/rtp.rs`, `src/rtcp.rs`)
+- [x] A same-session test proves the D15 claim mechanically, not just in prose: a synthetic
       capture with a SIP INVITE (whose SDP names an RTP port) followed by RTP packets on that
       port shows the RTP packets **stopping** at the UDP layer with
       `StopReason::UnclaimedRoute` — the gate behaving exactly as designed, end-to-end.
+      (`tests/voice_video.rs::rtp_port_named_in_sip_sdp_still_stops_unclaimed_at_udp_d15_gate`)

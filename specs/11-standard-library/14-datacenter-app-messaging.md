@@ -51,14 +51,16 @@ own documentation is the canonical reference).
 | Cassandra/CQL | *Project doc* — Apache Cassandra native protocol spec | |
 
 ## Acceptance criteria
-- [ ] `mqtt` fixture covers CONNECT/CONNACK/PUBLISH/SUBSCRIBE; `remaining_length`'s
+- [x] `mqtt` fixture covers CONNECT/CONNACK/PUBLISH/SUBSCRIBE; `remaining_length`'s
       variable-length continuation-bit encoding tested at the 1-byte/2-byte boundary
-      (127/128 and 16383/16384).
-- [ ] `amqp` fixture: a Method frame (`Basic.Publish`) plus its following Header and Body
+      (127/128 and 16383/16384). (`src/mqtt.rs`)
+- [x] `amqp` fixture: a Method frame (`Basic.Publish`) plus its following Header and Body
       frames on the same channel parse `frame_type`/`class_id`/`method_id` exactly; Body
-      frame content itself is left as payload (not decoded).
-- [ ] `redis` fixture: a `SET foo bar` command array and a simple-string `+OK` response parse
+      frame content itself is left as payload (not decoded). (`src/amqp.rs`,
+      `tests/messaging.rs`)
+- [x] `redis` fixture: a `SET foo bar` command array and a simple-string `+OK` response parse
       `command`/`resp_type` exactly; a nested-array command (e.g. `MULTI`/`EXEC` pipeline)
       still yields the correct top-level `command` without attempting the nested walk.
-- [ ] Each plugin's app-stream child stream forms correctly under its TCP session (06.6
-      pattern verified for all three).
+      (`src/redis.rs`, `tests/messaging.rs`)
+- [x] Each plugin's app-stream child stream forms correctly under its TCP session (06.6
+      pattern verified for all three). (`tests/messaging.rs`)

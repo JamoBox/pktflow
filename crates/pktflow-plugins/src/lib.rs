@@ -6,6 +6,7 @@
 use pktflow_core::Engine;
 
 pub mod ah;
+pub mod amqp;
 pub mod arp;
 pub mod bacnet_ip;
 pub mod bfd;
@@ -21,19 +22,25 @@ pub mod enip;
 pub mod erspan;
 pub mod esp;
 pub mod ethernet;
+pub mod ftp;
 pub mod geneve;
 pub mod gre;
+pub mod gtp_c;
 pub mod gtp_u;
 pub mod hsrp;
 pub mod http;
+pub mod http2;
 pub mod icmpv4;
 pub mod icmpv6;
 pub mod igmp;
+pub mod imap;
 pub mod ipfix;
 pub mod ipv4;
 pub mod ipv6;
+pub mod kerberos;
 pub mod l2tpv3;
 pub mod lacp;
+pub mod ldap;
 pub mod llc;
 pub mod lldp;
 pub mod llmnr;
@@ -45,27 +52,40 @@ pub mod mqtt;
 pub mod ndp;
 pub mod netbios_ns;
 pub mod netflow9;
+pub mod nfs;
 pub mod ntp;
 pub mod ospf;
+pub mod pop3;
 pub mod ppp;
 pub mod pppoe;
 pub mod ptp;
 pub mod pvst_plus;
+pub mod quic;
 pub mod radiotap;
 pub mod radius;
+pub mod redis;
 pub mod rocev2;
+pub mod rtcp;
+pub mod rtp;
 pub mod sctp;
+pub mod sip;
+pub mod smb2;
+pub mod smtp;
 pub mod snmp;
 pub mod ssdp;
+pub mod ssh;
 pub mod stp;
+pub mod stun;
 pub mod syslog;
 pub mod tcp;
 pub mod template;
+pub mod tftp;
 pub mod tls;
 pub mod udp;
 pub mod vlan;
 pub mod vrrp;
 pub mod vxlan;
+pub mod websocket;
 pub mod wireguard;
 
 /// The one registration list (PRD §8): adding a protocol end-to-end is a
@@ -91,12 +111,14 @@ pub fn default_engine() -> Engine {
         .plugin(tcp::Tcp)
         .plugin(udp::Udp)
         .plugin(sctp::Sctp)
+        .plugin(quic::Quic)
         .plugin(bgp::Bgp)
         .plugin(gre::Gre)
         .plugin(erspan::Erspan)
         .plugin(mpls::Mpls)
         .plugin(vxlan::Vxlan)
         .plugin(gtp_u::GtpU)
+        .plugin(gtp_c::GtpC)
         .plugin(geneve::Geneve)
         .plugin(esp::Esp)
         .plugin(ah::Ah)
@@ -129,9 +151,27 @@ pub fn default_engine() -> Engine {
         .plugin(syslog::Syslog)
         .plugin(snmp::Snmp)
         .plugin(radius::Radius)
+        .plugin(kerberos::Kerberos)
+        .plugin(ldap::Ldap)
         .plugin(ssdp::Ssdp)
         .plugin(http::Http)
+        .plugin(http2::Http2)
         .plugin(tls::Tls)
+        .plugin(ssh::Ssh)
+        .plugin(websocket::WebSocket)
+        .plugin(stun::Stun)
+        .plugin(ftp::Ftp)
+        .plugin(tftp::Tftp)
+        .plugin(smtp::Smtp)
+        .plugin(imap::Imap)
+        .plugin(pop3::Pop3)
+        .plugin(smb2::Smb2)
+        .plugin(nfs::Nfs)
+        .plugin(sip::Sip)
+        .plugin(rtp::Rtp)
+        .plugin(rtcp::Rtcp)
+        .plugin(amqp::Amqp)
+        .plugin(redis::Redis)
         .plugin(netflow9::Netflow9)
         .plugin(ipfix::Ipfix)
         .build()

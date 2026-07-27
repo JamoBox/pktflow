@@ -102,17 +102,20 @@ v1 reads only the RPC call/reply envelope, not credentials/verifiers or NFS argu
 | WebDAV | RFC 4918 | An HTTP method/header extension — likely a refinement of 11.8's `http` rather than a new plugin |
 
 ## Acceptance criteria
-- [ ] `ftp`/`smtp`/`imap`/`pop3` each have real-capture fixtures covering a full login +
+- [x] `ftp`/`smtp`/`imap`/`pop3` each have real-capture fixtures covering a full login +
       one representative command sequence; app-stream child forms correctly in every case.
-- [ ] `ftp` `PASV` response fixture: the negotiated port is visible in the parsed `arg`
+      (`tests/files_mail.rs`)
+- [x] `ftp` `PASV` response fixture: the negotiated port is visible in the parsed `arg`
       field, but no data-channel stream is fabricated or auto-linked (D15 criterion, tested
-      not just asserted in prose).
-- [ ] `tftp` fixture: `RRQ` parses exactly via the static claim; a synthetic continuation
+      not just asserted in prose). (`tests/files_mail.rs::ftp_pasv_response_exposes_port_in_arg_with_no_fabricated_data_stream`)
+- [x] `tftp` fixture: `RRQ` parses exactly via the static claim; a synthetic continuation
       `DATA`/`ACK` packet on an unclaimed ephemeral port is confirmed to **stop** at the
       transport layer with `StopReason::UnclaimedRoute`, not silently vanish or panic — the
       D15 gate behaving as designed, verified end-to-end.
-- [ ] `smb2` fixture: Negotiate/SessionSetup/TreeConnect/Create/Read/Close sequence forms one
+      (`tests/files_mail.rs::tftp_rrq_reaches_the_dissector_but_continuation_stops_at_unclaimed_ephemeral_port`)
+- [x] `smb2` fixture: Negotiate/SessionSetup/TreeConnect/Create/Read/Close sequence forms one
       session-id stream; `command` accumulate reflects the full operation mix.
-- [ ] `nfs` fixture: an NFSv3 GETATTR/LOOKUP call+reply pair and an NFSv4 COMPOUND call parse
+      (`tests/files_mail.rs::smb2_operation_sequence_forms_one_session_id_stream`)
+- [x] `nfs` fixture: an NFSv3 GETATTR/LOOKUP call+reply pair and an NFSv4 COMPOUND call parse
       their envelope fields exactly, with the COMPOUND op-list correctly left unparsed (no
-      attempt, no crash).
+      attempt, no crash). (`tests/files_mail.rs`, `src/nfs.rs`)

@@ -44,7 +44,7 @@ transport or crypto, purely the invariant-level framing D12 permits).
 | Claims | `UdpPort(443)` — shared, contested space with HTTP/3-over-QUIC negotiation and arbitrary-port deployments; **claim-honesty note** matching `wireguard` (11.5): the static claim covers the common case, `probe()` covers the rest |
 | Fields | `Structural`: `header_form` (Long/Short), `fixed_bit` · **Long header only**, `Full`: `version` (U64), `dcid` (Bytes, variable length, 0–20), `scid` (Bytes, variable length), `packet_type` (Initial/0-RTT/Handshake/Retry, derived from the type bits + `version`) |
 | Hint | `Terminal` unconditionally — even a Long-header Initial packet's frame contents sit behind QUIC's mandatory header protection (a lightweight but real cryptographic step RFC 9001 requires even before TLS keys exist); this plugin does not remove header protection, so there is nothing further to route to, ever. Short-header (1-RTT) packets carry no invariant-guaranteed fields beyond `header_form`/`fixed_bit` at all |
-| Probe | `fixed_bit == 1` and (Long header: `header_form==1` and `version` is a value that has ever been assigned, or is the reserved-for-negotiation pattern `0x?a?a?a?a`) → 40 (deliberately modest — QUIC's invariants are thin, honest reflection of how little is guessable) |
+| Probe | `fixed_bit == 1` and (Long header: `header_form==1` and `version` is a value that has ever been assigned, or is the reserved-for-negotiation pattern `0x?a?a?a?a`) → 50, the `MIN_CONFIDENCE` floor itself (03.3) — QUIC's invariants are thin, an honest reflection of how little is guessable, and this is as low as a probe can score while still being able to win a fallback-pool route at all; below the floor it would be discarded outright (the same "dead weight" note 11.8's `tls` entry states explicitly) and this domain's own acceptance criterion (a genuine Initial packet on a non-standard port must be admitted) would be unmeetable |
 | Identity | key `[{dcid, None}]` (Long-header packets only) — one QUIC stream per destination connection id observed. **Known v1 limitation, documented not hidden**: QUIC connections may migrate to a new connection ID mid-session (RFC 9000 §5.1.1); a post-migration DCID forms a new sibling stream rather than folding into the pre-migration one, the same shape as ESP's per-direction-SPI note (11.5) — a protocol-level identifier rotation the plugin can observe but not reconcile without decrypting NEW_CONNECTION_ID frames it has no access to |
 | Rollups | `Accumulate` on `packet_type` (Initial/0-RTT/Handshake/Retry mix seen for this DCID — the handshake's shape, without its content) |
 
@@ -60,11 +60,17 @@ transport or crypto, purely the invariant-level framing D12 permits).
       lifecycle criterion exactly.
 - [x] `sctp` multi-chunk-bundle fixture: only the first chunk's type/fields are asserted;
       no attempt to walk a second bundled chunk (explicit non-goal, tested not just stated).
-- [ ] `quic` fixtures: Initial, 0-RTT, Handshake, Retry Long-header packets parse
+- [x] `quic` fixtures: Initial, 0-RTT, Handshake, Retry Long-header packets parse
       `dcid`/`scid`/`packet_type` exactly; a Short-header packet stops `Terminal` with no
-      fields beyond `header_form`/`fixed_bit`.
-- [ ] `quic` connection-migration fixture (same connection, DCID changes mid-capture)
+      fields beyond `header_form`/`fixed_bit`. (`src/quic.rs`)
+- [x] `quic` connection-migration fixture (same connection, DCID changes mid-capture)
       produces two sibling streams under the same parent UDP stream — proves the documented
       limitation is real and bounded, not a crash or a silently wrong fold.
-- [ ] `quic` probe honesty: random UDP payload on port 443 scores low/`None`; a genuine
-      QUIC Initial packet on a non-standard port is still admitted via the fallback pool.
+      (`tests/transport.rs::quic_connection_migration_produces_sibling_streams`)
+- [x] `quic` probe honesty: random UDP payload on port 443 scores low/`None`; a genuine
+      QUIC Initial packet is probe-admissible, and `parse()` on those bytes is identical
+      whichever path admits them (the claimed-port route or the fallback pool) — proven the
+      same way `wireguard`/`dnp3` do (11.5/11.13), since `Hint::Candidates` (`udp.rs`) only
+      ever opens the fallback pool via `Hint::Unknown`, never for a genuinely unclaimed port
+      pair (03.4's gate). (`src/quic.rs` probe tests;
+      `tests/transport.rs::quic_claim_path_and_probe_admitted_path_parse_identically`)

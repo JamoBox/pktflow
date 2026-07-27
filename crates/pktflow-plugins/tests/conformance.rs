@@ -6,6 +6,7 @@ mod kit;
 use pktflow_core::{Canonicalize, FieldMap, KeyField, LayerRecord, StreamIdentity};
 use pktflow_core::{Hint, RouteId, Value};
 use pktflow_plugins::ah::Ah;
+use pktflow_plugins::amqp::Amqp;
 use pktflow_plugins::arp::Arp;
 use pktflow_plugins::bacnet_ip::BacnetIp;
 use pktflow_plugins::bfd::Bfd;
@@ -23,17 +24,22 @@ use pktflow_plugins::esp::Esp;
 use pktflow_plugins::ethernet::Ethernet;
 use pktflow_plugins::geneve::Geneve;
 use pktflow_plugins::gre::Gre;
+use pktflow_plugins::gtp_c::GtpC;
 use pktflow_plugins::gtp_u::GtpU;
 use pktflow_plugins::hsrp::Hsrp;
 use pktflow_plugins::http::Http;
+use pktflow_plugins::http2::Http2;
 use pktflow_plugins::icmpv4::Icmpv4;
 use pktflow_plugins::icmpv6::Icmpv6;
 use pktflow_plugins::igmp::Igmp;
+use pktflow_plugins::imap::Imap;
 use pktflow_plugins::ipfix::Ipfix;
 use pktflow_plugins::ipv4::{internet_checksum, Ipv4};
 use pktflow_plugins::ipv6::Ipv6;
+use pktflow_plugins::kerberos::Kerberos;
 use pktflow_plugins::l2tpv3::L2tpv3;
 use pktflow_plugins::lacp::Lacp;
+use pktflow_plugins::ldap::Ldap;
 use pktflow_plugins::llc::Llc;
 use pktflow_plugins::lldp::Lldp;
 use pktflow_plugins::llmnr::Llmnr;
@@ -45,27 +51,37 @@ use pktflow_plugins::mqtt::Mqtt;
 use pktflow_plugins::ndp::Ndp;
 use pktflow_plugins::netbios_ns::NetbiosNs;
 use pktflow_plugins::netflow9::Netflow9;
+use pktflow_plugins::nfs::Nfs;
 use pktflow_plugins::ntp::Ntp;
 use pktflow_plugins::ospf::Ospf;
+use pktflow_plugins::pop3::Pop3;
 use pktflow_plugins::ppp::Ppp;
 use pktflow_plugins::pppoe::Pppoe;
 use pktflow_plugins::ptp::Ptp;
 use pktflow_plugins::pvst_plus::PvstPlus;
+use pktflow_plugins::quic::Quic;
 use pktflow_plugins::radiotap::Radiotap;
 use pktflow_plugins::radius::Radius;
 use pktflow_plugins::rocev2::Rocev2;
+use pktflow_plugins::rtcp::Rtcp;
+use pktflow_plugins::rtp::Rtp;
 use pktflow_plugins::sctp::Sctp;
+use pktflow_plugins::smb2::Smb2;
 use pktflow_plugins::snmp::Snmp;
 use pktflow_plugins::ssdp::Ssdp;
+use pktflow_plugins::ssh::Ssh;
 use pktflow_plugins::stp::Stp;
+use pktflow_plugins::stun::Stun;
 use pktflow_plugins::syslog::Syslog;
 use pktflow_plugins::tcp::Tcp;
 use pktflow_plugins::template::Template;
+use pktflow_plugins::tftp::Tftp;
 use pktflow_plugins::tls::Tls;
 use pktflow_plugins::udp::Udp;
 use pktflow_plugins::vlan::Vlan;
 use pktflow_plugins::vrrp::Vrrp;
 use pktflow_plugins::vxlan::Vxlan;
+use pktflow_plugins::websocket::WebSocket;
 use pktflow_plugins::wireguard::Wireguard;
 
 use kit::{run_conformance, ConformanceCase, GoodPacket};
@@ -1033,6 +1049,42 @@ fn sctp_conforms() {
 }
 
 #[test]
+fn quic_conforms() {
+    // RFC 8999 §5.1 Long Header, QUICv1 Initial (type bits 00). Only
+    // Long-header samples are usable here: `dcid` (the declared flow key)
+    // is invariant-guaranteed only on that header form (11.6's documented
+    // Short Header ceiling) — a Short Header sample would fail rule 2's
+    // "flow-key field present at >= Keys" check, correctly, since it truly
+    // carries no invariant DCID; that case is covered by quic.rs's own
+    // unit tests instead.
+    let mut initial = vec![0xC0u8]; // header_form=1, fixed_bit=1, type=Initial
+    initial.extend_from_slice(&1u32.to_be_bytes()); // version 1
+    initial.push(4); // dcid len
+    initial.extend_from_slice(&[0xAA, 0xBB, 0xCC, 0xDD]);
+    initial.push(2); // scid len
+    initial.extend_from_slice(&[0x11, 0x22]);
+    initial.extend_from_slice(&[0xDE, 0xAD, 0xBE, 0xEF]); // version-specific data
+
+    run_conformance(&ConformanceCase {
+        plugin: Box::new(Quic),
+        good: vec![GoodPacket {
+            bytes: initial,
+            expected_header_len: 1 + 4 + 1 + 4 + 1 + 2,
+            expected_full_fields: vec![
+                ("header_form", Value::Bool(true)),
+                ("fixed_bit", Value::Bool(true)),
+                ("version", Value::U64(1)),
+                ("dcid", Value::from(&[0xAA, 0xBB, 0xCC, 0xDD][..])),
+                ("scid", Value::from(&[0x11, 0x22][..])),
+                ("packet_type", Value::from("initial")),
+            ],
+            expected_hint: Hint::Terminal,
+        }],
+        outer_ctx: Vec::new(),
+    });
+}
+
+#[test]
 fn udp_conforms() {
     // DNS-reply-shaped datagram: 53 -> 34567 with 4 payload bytes.
     let bytes = vec![
@@ -1160,6 +1212,32 @@ fn gtp_u_conforms() {
                 expected_hint: Hint::Terminal,
             },
         ],
+        outer_ctx: Vec::new(),
+    });
+}
+
+#[test]
+fn gtp_c_conforms() {
+    // TS 29.060 §7.3 GTPv1-C Create PDP Context Request (message type 16),
+    // no optional block, no IEs.
+    let bytes = vec![
+        0x30, 16, // version 1, PT=1; message type 16
+        0x00, 0x00, // length: 0 (no IEs in this sample)
+        0xAA, 0xBB, 0xCC, 0xDD, // TEID
+    ];
+    run_conformance(&ConformanceCase {
+        plugin: Box::new(GtpC),
+        good: vec![GoodPacket {
+            bytes,
+            expected_header_len: 8,
+            expected_full_fields: vec![
+                ("teid", Value::U64(0xAABB_CCDD)),
+                ("version", Value::U64(1)),
+                ("message_type", Value::U64(16)),
+                ("length", Value::U64(0)),
+            ],
+            expected_hint: Hint::Terminal,
+        }],
         outer_ctx: Vec::new(),
     });
 }
@@ -3155,6 +3233,366 @@ Content-Length: 9\r\n\
     });
 }
 
+#[test]
+fn http2_conforms() {
+    // RFC 9113 §6.5 SETTINGS: the one frame type carrying `settings_entries`
+    // (a Full-only field, not a rollup, so it needn't co-occur elsewhere).
+    let mut payload = Vec::new();
+    payload.extend_from_slice(&1u16.to_be_bytes());
+    payload.extend_from_slice(&4096u32.to_be_bytes());
+    let mut bytes = (payload.len() as u32).to_be_bytes()[1..].to_vec();
+    bytes.push(0x4); // SETTINGS
+    bytes.push(0); // flags
+    bytes.extend_from_slice(&0u32.to_be_bytes()); // stream id 0
+    bytes.extend_from_slice(&payload);
+    let len = bytes.len();
+
+    run_conformance(&ConformanceCase {
+        plugin: Box::new(Http2),
+        good: vec![GoodPacket {
+            bytes,
+            expected_header_len: len,
+            expected_full_fields: vec![
+                ("stream_id", Value::U64(0)),
+                ("frame_type", Value::from("SETTINGS")),
+                ("flags", Value::U64(0)),
+                ("length", Value::U64(6)),
+                (
+                    "settings_entries",
+                    Value::List(vec![Value::from(&payload[..])]),
+                ),
+            ],
+            expected_hint: Hint::Terminal,
+        }],
+        outer_ctx: Vec::new(),
+    });
+}
+
+#[test]
+fn websocket_conforms() {
+    // RFC 6455 §5.2: an unmasked text frame — websocket's one rollup
+    // field (`opcode`) needs no co-occurring field, so any recognized
+    // frame works as the canonical sample.
+    let payload = b"hi";
+    let bytes = vec![0x81, payload.len() as u8, b'h', b'i'];
+    run_conformance(&ConformanceCase {
+        plugin: Box::new(WebSocket),
+        good: vec![GoodPacket {
+            bytes,
+            expected_header_len: 2,
+            expected_full_fields: vec![
+                ("app", Value::from("websocket")),
+                ("fin", Value::Bool(true)),
+                ("opcode", Value::U64(1)),
+                ("mask_bit", Value::Bool(false)),
+                ("payload_len", Value::U64(payload.len() as u64)),
+            ],
+            expected_hint: Hint::Terminal,
+        }],
+        outer_ctx: Vec::new(),
+    });
+}
+
+#[test]
+fn stun_conforms() {
+    // RFC 8489 Binding Success Response carrying XOR-MAPPED-ADDRESS — the
+    // only shape pairing both of stun's declared rollup fields
+    // (`message_class`, `xor_mapped_address`), the same constraint
+    // `ssh_conforms`/`ldap_conforms` document above for their own
+    // one-shape rollups.
+    let txn = [0x01u8; 12];
+    let mut addr_value = vec![0x00, 0x01]; // reserved + family IPv4
+    let xport = 3478u16 ^ 0x2112u16;
+    addr_value.extend_from_slice(&xport.to_be_bytes());
+    let cookie = 0x2112_A442u32.to_be_bytes();
+    for (i, &b) in [203u8, 0, 113, 5].iter().enumerate() {
+        addr_value.push(b ^ cookie[i]);
+    }
+    let mut attr = 0x0020u16.to_be_bytes().to_vec();
+    attr.extend_from_slice(&(addr_value.len() as u16).to_be_bytes());
+    attr.extend_from_slice(&addr_value);
+
+    let mut bytes = 0x0101u16.to_be_bytes().to_vec(); // Binding Success Response
+    bytes.extend_from_slice(&(attr.len() as u16).to_be_bytes());
+    bytes.extend_from_slice(&0x2112_A442u32.to_be_bytes());
+    bytes.extend_from_slice(&txn);
+    bytes.extend_from_slice(&attr);
+    let len = bytes.len();
+
+    run_conformance(&ConformanceCase {
+        plugin: Box::new(Stun),
+        good: vec![GoodPacket {
+            bytes,
+            expected_header_len: len,
+            expected_full_fields: vec![
+                ("app", Value::from("stun")),
+                ("message_class", Value::from("success_response")),
+                ("message_method", Value::U64(0x001)),
+                ("message_length", Value::U64(attr.len() as u64)),
+                ("xor_mapped_address", Value::from(&[203u8, 0, 113, 5][..])),
+            ],
+            expected_hint: Hint::Terminal,
+        }],
+        outer_ctx: Vec::new(),
+    });
+}
+
+// `ftp`/`smtp` (11.9) run no kit case here, deliberately: both declare two
+// Accumulate rollups (`command`, `reply_code`) that never co-occur on a
+// single line (a line is either a command or a reply, never both) — rule
+// 3 requires every declared rollup field present on every sample a case
+// feeds it, which no single-line fixture can ever satisfy. This is the
+// same structural incompatibility `ndp_conforms`/`mld_conforms` document
+// above for their own kit-incompatible shapes; both plugins' full behavior
+// is covered by their own thorough unit tests (`src/ftp.rs`, `src/smtp.rs`).
+
+#[test]
+fn tftp_conforms() {
+    // RFC 1350 §5 RRQ — the one opcode reachable via routing in v1 (D15);
+    // DATA/ACK/ERROR are covered by tftp.rs's own unit tests, fed directly
+    // to parse() per the domain spec's documented reachability ceiling.
+    let mut bytes = 1u16.to_be_bytes().to_vec(); // RRQ
+    bytes.extend_from_slice(b"boot.img\0octet\0");
+    let len = bytes.len();
+    run_conformance(&ConformanceCase {
+        plugin: Box::new(Tftp),
+        good: vec![GoodPacket {
+            bytes,
+            expected_header_len: len,
+            expected_full_fields: vec![
+                ("opcode", Value::U64(1)),
+                ("filename", Value::from("boot.img")),
+                ("mode", Value::from("octet")),
+            ],
+            expected_hint: Hint::Terminal,
+        }],
+        outer_ctx: Vec::new(),
+    });
+}
+
+#[test]
+fn pop3_conforms() {
+    // RFC 1939 §7 USER command — pop3's one declared rollup (`command`)
+    // needs no co-occurring field.
+    let bytes = b"USER alice\r\n".to_vec();
+    let len = bytes.len();
+    run_conformance(&ConformanceCase {
+        plugin: Box::new(Pop3),
+        good: vec![GoodPacket {
+            bytes,
+            expected_header_len: len,
+            expected_full_fields: vec![
+                ("app", Value::from("pop3")),
+                ("is_request", Value::Bool(true)),
+                ("command", Value::from("USER")),
+                ("arg", Value::from("alice")),
+            ],
+            expected_hint: Hint::Terminal,
+        }],
+        outer_ctx: Vec::new(),
+    });
+}
+
+#[test]
+fn imap_conforms() {
+    // RFC 9051 §6.2.3 LOGIN command — imap's one declared rollup
+    // (`command`) needs no co-occurring field.
+    let bytes = b"A001 LOGIN alice password\r\n".to_vec();
+    let len = bytes.len();
+    run_conformance(&ConformanceCase {
+        plugin: Box::new(Imap),
+        good: vec![GoodPacket {
+            bytes,
+            expected_header_len: len,
+            expected_full_fields: vec![
+                ("app", Value::from("imap")),
+                ("tag", Value::from("A001")),
+                ("is_response", Value::Bool(false)),
+                ("command", Value::from("LOGIN")),
+                ("args", Value::from("alice password")),
+            ],
+            expected_hint: Hint::Terminal,
+        }],
+        outer_ctx: Vec::new(),
+    });
+}
+
+#[test]
+fn smb2_conforms() {
+    // MS-SMB2 §2.2.1 Negotiate request — smb2's one declared rollup
+    // (`command`) needs no co-occurring field.
+    let mut h = vec![0xFEu8, b'S', b'M', b'B'];
+    h.extend_from_slice(&64u16.to_be_bytes());
+    h.extend_from_slice(&0u16.to_be_bytes());
+    h.extend_from_slice(&0u32.to_be_bytes());
+    h.extend_from_slice(&0u16.to_be_bytes()); // command = Negotiate
+    h.extend_from_slice(&0u16.to_be_bytes());
+    h.extend_from_slice(&0u32.to_be_bytes()); // flags
+    h.extend_from_slice(&0u32.to_be_bytes());
+    h.extend_from_slice(&1u64.to_be_bytes()); // message_id
+    h.extend_from_slice(&0u32.to_be_bytes());
+    h.extend_from_slice(&0u32.to_be_bytes()); // tree_id
+    h.extend_from_slice(&0u64.to_be_bytes()); // session_id
+    h.extend_from_slice(&[0u8; 16]);
+    let mut bytes = vec![0x00];
+    bytes.extend_from_slice(&(h.len() as u32).to_be_bytes()[1..]);
+    bytes.extend_from_slice(&h);
+    let len = bytes.len();
+
+    run_conformance(&ConformanceCase {
+        plugin: Box::new(Smb2),
+        good: vec![GoodPacket {
+            bytes,
+            expected_header_len: len,
+            expected_full_fields: vec![
+                ("session_id", Value::U64(0)),
+                ("command", Value::U64(0)),
+                ("status", Value::U64(0)),
+                ("flags", Value::U64(0)),
+                ("message_id", Value::U64(1)),
+                ("tree_id", Value::U64(0)),
+            ],
+            expected_hint: Hint::Terminal,
+        }],
+        outer_ctx: Vec::new(),
+    });
+}
+
+#[test]
+fn nfs_conforms() {
+    // RFC 1813 §3.3.1 NFSv3 GETATTR call — a Reply carries no
+    // `program`/`program_version`/`procedure` fields at all (nfs.rs's own
+    // unit tests cover that shape), so only a Call can be a kit sample here.
+    let mut bytes = 0x1234_5678u32.to_be_bytes().to_vec(); // xid
+    bytes.extend_from_slice(&0u32.to_be_bytes()); // msg_type = CALL
+    bytes.extend_from_slice(&2u32.to_be_bytes()); // rpcvers
+    bytes.extend_from_slice(&100_003u32.to_be_bytes()); // program
+    bytes.extend_from_slice(&3u32.to_be_bytes()); // program_version
+    bytes.extend_from_slice(&1u32.to_be_bytes()); // procedure = GETATTR
+    let len = bytes.len();
+
+    run_conformance(&ConformanceCase {
+        plugin: Box::new(Nfs),
+        good: vec![GoodPacket {
+            bytes,
+            expected_header_len: len,
+            expected_full_fields: vec![
+                ("app", Value::from("nfs")),
+                ("xid", Value::U64(0x1234_5678)),
+                ("msg_type", Value::from("call")),
+                ("program", Value::U64(100_003)),
+                ("program_version", Value::U64(3)),
+                ("procedure", Value::U64(1)),
+            ],
+            expected_hint: Hint::Terminal,
+        }],
+        outer_ctx: Vec::new(),
+    });
+}
+
+// `sip` (11.10) runs no kit case here, deliberately: its two rollups
+// (`method`, `status_code` `Series`) never co-occur on a single message
+// (a request has a method, a response has a status code, never both) — the
+// same structural incompatibility documented above for `ftp`/`smtp`.
+// `sip.rs`'s own unit tests cover both shapes fully.
+
+#[test]
+fn rtp_conforms() {
+    // RFC 3550 §5.1: fed directly to parse() (09.1), same as any plugin —
+    // `rtp` simply has no `claims()` (D15, unreachable via routing in v1).
+    let bytes = vec![
+        0x80, 0x00, // V2, no CSRC; marker=0, payload_type=0
+        0x03, 0xE8, // sequence_number = 1000
+        0x00, 0x02, 0x71, 0x00, // timestamp = 160000
+        0xDE, 0xAD, 0xBE, 0xEF, // ssrc
+    ];
+    run_conformance(&ConformanceCase {
+        plugin: Box::new(Rtp),
+        good: vec![GoodPacket {
+            bytes,
+            expected_header_len: 12,
+            expected_full_fields: vec![
+                ("ssrc", Value::U64(0xDEAD_BEEF)),
+                ("version", Value::U64(2)),
+                ("payload_type", Value::U64(0)),
+                ("sequence_number", Value::U64(1000)),
+                ("timestamp", Value::U64(160_000)),
+                ("marker_bit", Value::Bool(false)),
+                ("csrc_list", Value::List(vec![])),
+            ],
+            expected_hint: Hint::Terminal,
+        }],
+        outer_ctx: Vec::new(),
+    });
+}
+
+#[test]
+fn rtcp_conforms() {
+    // RFC 3550 §6.4.2 RR — rtcp's one declared rollup (`packet_type`)
+    // needs no co-occurring field, so any recognized type works; RR is the
+    // simplest complete shape.
+    let mut bytes = vec![0x80, 201]; // V2, RC=0; PT=RR
+    bytes.extend_from_slice(&1u16.to_be_bytes()); // length: (1+1)*4 = 8 bytes
+    bytes.extend_from_slice(&0xAAAA_BBBBu32.to_be_bytes());
+    run_conformance(&ConformanceCase {
+        plugin: Box::new(Rtcp),
+        good: vec![GoodPacket {
+            bytes,
+            expected_header_len: 8,
+            expected_full_fields: vec![
+                ("ssrc", Value::U64(0xAAAA_BBBB)),
+                ("packet_type", Value::U64(201)),
+            ],
+            expected_hint: Hint::Terminal,
+        }],
+        outer_ctx: Vec::new(),
+    });
+}
+
+#[test]
+fn amqp_conforms() {
+    // A Method frame (Basic.Publish, class 60/method 40) — the one frame
+    // type carrying both `frame_type` and `class_id` together, amqp's two
+    // declared rollups.
+    let mut payload = 60u16.to_be_bytes().to_vec();
+    payload.extend_from_slice(&40u16.to_be_bytes());
+    let mut bytes = vec![1u8]; // Method
+    bytes.extend_from_slice(&1u16.to_be_bytes()); // channel
+    bytes.extend_from_slice(&(payload.len() as u32).to_be_bytes());
+    bytes.extend_from_slice(&payload);
+    bytes.push(0xCE); // frame-end
+    let len = bytes.len();
+
+    run_conformance(&ConformanceCase {
+        plugin: Box::new(Amqp),
+        good: vec![GoodPacket {
+            bytes,
+            expected_header_len: len,
+            expected_full_fields: vec![
+                ("app", Value::from("amqp")),
+                ("frame_type", Value::from("method")),
+                ("channel", Value::U64(1)),
+                ("size", Value::U64(4)),
+                ("class_id", Value::U64(60)),
+                ("method_id", Value::U64(40)),
+            ],
+            expected_hint: Hint::Terminal,
+        }],
+        outer_ctx: Vec::new(),
+    });
+}
+
+// `redis` (11.14) runs no kit case here, deliberately: an array's
+// first-element lookahead is optional/best-effort (`src/redis.rs`), so a
+// buffer truncated anywhere inside that first element still parses — as
+// the valid *short* form, `header_len == 4`, `command` absent — rather
+// than declining. Rule 1 (every strict prefix of `header_len` must
+// decline) can therefore never hold for a sample whose `command` rollup
+// field is populated, the same kind of structural incompatibility
+// documented above for `ftp`/`smtp`/`sip`. `redis.rs`'s own unit tests
+// (`array_count_line_alone_is_a_valid_shorter_parse_not_a_truncation` and
+// friends) cover this shape thoroughly, truncation included.
+
 /// Wraps a `handshake` body in TLS record + handshake framing (RFC 8446
 /// §5.1 record, §4 handshake). Record version bytes are `0x0301`.
 fn tls_handshake_record(hs_type: u8, body: &[u8]) -> Vec<u8> {
@@ -3212,6 +3650,96 @@ fn tls_conforms() {
                 ("handshake_type", Value::U64(1)),
                 ("cipher_suites", Value::List(vec![Value::U64(0x1301)])),
                 ("sni", Value::from("example.com")),
+            ],
+            expected_hint: Hint::Terminal,
+        }],
+        outer_ctx: Vec::new(),
+    });
+}
+
+#[test]
+fn kerberos_conforms() {
+    // RFC 4120 §5.10 AS-REQ: `[APPLICATION 10] SEQUENCE`, DER short-form
+    // length, opaque content (v1 doesn't decode the ticket).
+    let mut bytes = vec![0x60 | 10u8, 20];
+    bytes.extend(std::iter::repeat_n(0xABu8, 20));
+    let len = bytes.len();
+    run_conformance(&ConformanceCase {
+        plugin: Box::new(Kerberos),
+        good: vec![GoodPacket {
+            bytes,
+            expected_header_len: len,
+            expected_full_fields: vec![
+                ("app", Value::from("kerberos")),
+                ("msg_type", Value::U64(10)),
+                ("der_length", Value::U64(20)),
+            ],
+            expected_hint: Hint::Terminal,
+        }],
+        outer_ctx: Vec::new(),
+    });
+}
+
+#[test]
+fn ldap_conforms() {
+    // RFC 4511 §4.2 bindRequest: version 3, a DN, and an opaque simple-auth
+    // choice — the only shape carrying both of ldap's declared rollup
+    // fields (`protocol_op` and `bind_dn`), so it's the only case fed to
+    // the kit (rule 3); searchRequest/unbindRequest are covered by
+    // `ldap.rs`'s own unit tests instead, the same split `ssh_conforms`
+    // uses for its own rollup-only-on-one-shape field.
+    let dn = b"cn=admin,dc=example,dc=com";
+    let mut op = vec![0x02, 0x01, 0x03]; // INTEGER version = 3
+    op.push(0x04); // OCTET STRING (name)
+    op.push(dn.len() as u8);
+    op.extend_from_slice(dn);
+    op.extend_from_slice(&[0x80, 0x00]); // simple authentication, empty password
+
+    let mut content = vec![0x02, 0x01, 0x01]; // INTEGER messageID = 1
+    content.push(0x60); // [APPLICATION 0], constructed: bindRequest
+    content.push(op.len() as u8);
+    content.extend_from_slice(&op);
+
+    let mut bytes = vec![0x30, content.len() as u8]; // SEQUENCE
+    bytes.extend_from_slice(&content);
+    let len = bytes.len();
+
+    run_conformance(&ConformanceCase {
+        plugin: Box::new(Ldap),
+        good: vec![GoodPacket {
+            bytes,
+            expected_header_len: len,
+            expected_full_fields: vec![
+                ("app", Value::from("ldap")),
+                ("message_id", Value::U64(1)),
+                ("protocol_op", Value::U64(0)),
+                ("bind_dn", Value::from("cn=admin,dc=example,dc=com")),
+            ],
+            expected_hint: Hint::Terminal,
+        }],
+        outer_ctx: Vec::new(),
+    });
+}
+
+#[test]
+fn ssh_conforms() {
+    // RFC 4253 §4.2 identification line. `banner` is ssh's one declared
+    // rollup field, and rule 3 requires it present on every sample a case
+    // feeds the kit — a KEXINIT packet genuinely carries no banner, so it
+    // can't join a case here, the same "zero-option fixtures only" stance
+    // `ndp_conforms`/`mld_conforms`/`dhcpv6_conforms` document above for
+    // their own kit-incompatible variable shapes; KEXINIT is covered
+    // instead by `ssh.rs`'s own unit tests
+    // (`kexinit_parses_msg_type_and_five_name_lists` and friends).
+    let banner = b"SSH-2.0-OpenSSH_9.6\r\n".to_vec();
+    run_conformance(&ConformanceCase {
+        plugin: Box::new(Ssh),
+        good: vec![GoodPacket {
+            expected_header_len: banner.len(),
+            bytes: banner,
+            expected_full_fields: vec![
+                ("app", Value::from("ssh")),
+                ("banner", Value::from("SSH-2.0-OpenSSH_9.6")),
             ],
             expected_hint: Hint::Terminal,
         }],
