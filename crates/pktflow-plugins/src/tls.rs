@@ -68,13 +68,24 @@ static ROLLUPS: &[RollupSpec] = &[
         kind: RollupKind::Sample,
     },
     // The handshake types seen over the session (ClientHello, ServerHello,
-    // ...). `selected_cipher_suite`/`tls_version_selected` would be natural
-    // companions, but they appear only in the ServerHello while `sni`
-    // appears only in the ClientHello — no single record carries both, and
-    // the 09.1 kit (rule 3) requires every rollup field on every canonical
-    // sample, so those stay per-packet Full fields rather than rollups.
+    // ...).
     RollupSpec {
         field: HANDSHAKE_TYPE,
+        kind: RollupKind::Accumulate,
+    },
+    // What the session actually negotiated. These appear only in the
+    // ServerHello while `sni` appears only in the ClientHello — a
+    // conditional rollup (05.4), which the 09.1 kit covers by checking the
+    // union of a case's samples rather than each one. Worth retaining
+    // rather than leaving per-packet: "this device negotiated a
+    // TLS 1.0 session with a CBC suite" is a stream-level fact a reviewer
+    // wants surfaced on the stream, not buried in one record.
+    RollupSpec {
+        field: SELECTED_CIPHER_SUITE,
+        kind: RollupKind::Accumulate,
+    },
+    RollupSpec {
+        field: TLS_VERSION_SELECTED,
         kind: RollupKind::Accumulate,
     },
 ];

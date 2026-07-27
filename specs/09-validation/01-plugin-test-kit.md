@@ -32,9 +32,18 @@ Checks per `good` sample (beyond the author's own expectations):
    silently reattributes header bytes to opaque payload and would hand a routing hint's
    target a different offset per depth; it is how 11.3's `mld` once reported `header_len == 0`
    for an MLDv2 Report below `Depth::Full`.
-3. **Identity coherence (02.4):** every `KeyField`/`RollupSpec` name appears in the `Full`
-   parse's fields; key builds without `KeyError`; involution holds (05.1 — a/b-swapped
-   FieldMap gives same key, flipped direction).
+3. **Identity coherence (02.4):** every `KeyField` name appears in **every** sample's `Full`
+   parse (a flow key is unconditional by definition); key builds without `KeyError`;
+   involution holds (05.1 — a/b-swapped FieldMap gives same key, flipped direction). Every
+   `RollupSpec` name appears in **at least one** sample's `Full` parse — the union over the
+   case, not each sample. Rollup fields are explicitly allowed to be conditional (05.4:
+   "absent field on a given packet = no-op … e.g. DNS qname only on queries"), and whole
+   protocol families declare two rollups that are mutually exclusive by construction —
+   `command`/`reply_code` on a request/response line (11.9's ftp, smtp), `method`/
+   `status_code` on a SIP message (11.10). The union still catches what this check is for (a
+   `RollupSpec` naming a field the plugin never emits); the per-sample form additionally
+   forced those plugins out of the kit altogether, losing rules 1/2/4/5/6 with it, and talked
+   two domain specs (11.7 tls, 11.8 http) out of rollups they otherwise wanted.
 4. **`header_len` honesty:** `≤ bytes.len()`; re-parsing `bytes[..header_len]` succeeds
    (header self-contained).
 5. **Probe sanity** (if probing): probe(good bytes) ≥ `MIN_CONFIDENCE`; probe on 1k random

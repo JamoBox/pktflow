@@ -59,6 +59,10 @@ pub fn run_conformance(case: &ConformanceCase) {
     let name = plugin.name();
     assert!(!case.good.is_empty(), "[{name}] kit needs >= 1 good sample");
 
+    // Every field name any good sample extracted at Full, unioned across
+    // the case — the input to rule 3's rollup-coverage check below.
+    let mut rollup_fields_seen: BTreeSet<&str> = BTreeSet::new();
+
     for (sample_no, good) in case.good.iter().enumerate() {
         let m = meta(good.bytes.len());
         let full = ParseCtx::new(&case.outer_ctx, Depth::Full, &m);
@@ -84,6 +88,7 @@ pub fn run_conformance(case: &ConformanceCase) {
             .collect();
         want.sort_by_key(|(n, _)| *n);
         assert_eq!(got, want, "[{name}] sample {sample_no}: Full field set");
+        rollup_fields_seen.extend(got.iter().map(|(n, _)| *n));
 
         // Rule 1 — truncation sweep: every strict prefix declines, cleanly.
         for n in 0..parsed.header_len {
@@ -167,18 +172,8 @@ pub fn run_conformance(case: &ConformanceCase) {
                     );
                 }
             }
-            for spec in identity.rollups {
-                // Rollup fields may be conditional per packet, but the
-                // declaration must at least name a real field somewhere;
-                // check against this sample when present is too weak, so
-                // require it for good samples (they are canonical).
-                assert!(
-                    parsed.fields.get(spec.field).is_some(),
-                    "[{name}] sample {sample_no}: rule 3: rollup field {:?} \
-                     not extracted at Full",
-                    spec.field
-                );
-            }
+            // Rollup coverage is checked once per *case*, against the
+            // union of its samples — see `rollup_fields_seen` below.
 
             let (key, dir) = flow_key(identity, &parsed.fields).unwrap_or_else(|e| {
                 panic!("[{name}] sample {sample_no}: rule 3: key build failed: {e}")
@@ -244,6 +239,35 @@ pub fn run_conformance(case: &ConformanceCase) {
             assert!(
                 confident <= 10,
                 "[{name}] rule 5: probe confident on {confident}/1000 random buffers"
+            );
+        }
+    }
+
+    // Rule 3 (rollup coverage) — checked per *case*, not per sample.
+    //
+    // What this catches is a `RollupSpec` naming a field the plugin never
+    // emits: a typo, or a rename that missed the declaration. What it must
+    // *not* demand is that every rollup field appear on every packet —
+    // 05.4 states the opposite outright ("absent field on a given packet =
+    // no-op ... fields can be depth-gated or conditional — e.g. DNS qname
+    // only on queries"), and a per-sample check contradicts it.
+    //
+    // The per-sample form had a real cost, which is why this is a union:
+    // whole classes of protocol declare two rollups on fields that are
+    // mutually exclusive by construction — a request/response protocol's
+    // `command` and `reply_code` (ftp/smtp, 11.9), `method` and
+    // `status_code` (sip, 11.10). Under the old rule those plugins could
+    // not have a kit case *at all*, losing rules 1/2/4/5/6 as well; two
+    // domain specs (11.7's tls, 11.8's http) additionally talked
+    // themselves out of rollups they wanted, citing this rule by name.
+    // The union keeps the real guarantee and drops the false constraint.
+    if let Some(identity) = case.plugin.stream_identity() {
+        for spec in identity.rollups {
+            assert!(
+                rollup_fields_seen.contains(spec.field),
+                "[{name}] rule 3: rollup field {:?} extracted by no good sample \
+                 (a conditional field needs a sample that carries it)",
+                spec.field
             );
         }
     }
