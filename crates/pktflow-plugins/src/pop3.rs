@@ -52,9 +52,27 @@ fn parse_status(line: &[u8]) -> Option<(&[u8], &[u8])> {
     None
 }
 
-fn parse_command(line: &[u8]) -> Option<(&[u8], &[u8])> {
+/// RFC 1939's command set plus the standard extensions (RFC 2449 CAPA,
+/// RFC 2595 STLS, RFC 1939 §7 APOP, RFC 5034 AUTH/USER SASL).
+///
+/// An **allow-list, not a shape test** — see `ftp`'s COMMANDS for the
+/// reasoning (06.6's port-claim honesty).
+const COMMANDS: &[&str] = &[
+    "USER", "PASS", "APOP", "STAT", "LIST", "RETR", "DELE", "NOOP", "RSET", "QUIT", "TOP", "UIDL",
+    "CAPA", "STLS", "AUTH",
+];
+
+/// The command token and its argument, or `None` when the token is not a
+/// command this protocol defines (see [`COMMANDS`]).
+fn parse_command(line: &[u8]) -> Option<(String, &[u8])> {
     let end = line.iter().position(|&b| b == b' ').unwrap_or(line.len());
     if end == 0 || !line[..end].iter().all(u8::is_ascii_alphabetic) {
+        return None;
+    }
+    let mut upper = line[..end].to_vec();
+    upper.make_ascii_uppercase();
+    let command = String::from_utf8(upper).ok()?;
+    if !COMMANDS.contains(&command.as_str()) {
         return None;
     }
     let arg = if end < line.len() {
@@ -62,7 +80,7 @@ fn parse_command(line: &[u8]) -> Option<(&[u8], &[u8])> {
     } else {
         &line[end..]
     };
-    Some((&line[..end], arg))
+    Some((command, arg))
 }
 
 pub struct Pop3;
@@ -95,13 +113,10 @@ impl LayerPlugin for Pop3 {
             if ctx.depth() >= Depth::Full {
                 fields.insert(ARG, Value::from(String::from_utf8_lossy(rest).as_ref()));
             }
-        } else if let Some((cmd, arg)) = parse_command(line) {
-            let mut upper = cmd.to_vec();
-            upper.make_ascii_uppercase();
-            let cmd_str = String::from_utf8_lossy(&upper).into_owned();
+        } else if let Some((command, arg)) = parse_command(line) {
             if ctx.depth() >= Depth::Structural {
                 fields.insert(IS_REQUEST, Value::Bool(true));
-                fields.insert(COMMAND, Value::from(cmd_str.as_str()));
+                fields.insert(COMMAND, Value::from(command.as_str()));
             }
             if ctx.depth() >= Depth::Full {
                 fields.insert(ARG, Value::from(String::from_utf8_lossy(arg).as_ref()));
@@ -223,6 +238,18 @@ mod tests {
                 "prefix of {n}/{} bytes must decline",
                 bytes.len()
             );
+        }
+    }
+
+    /// `ftp`'s port-claim-honesty case, same reasoning.
+    #[test]
+    fn undefined_verb_declines_instead_of_fabricating_a_command() {
+        let m = meta(32);
+        for line in [&b"VSER alice\r\n"[..], &b"XYZZY now\r\n"[..]] {
+            assert!(Pop3.parse(line, &ctx(Depth::Full, &m)).is_err());
+        }
+        for line in [&b"CAPA\r\n"[..], &b"STLS\r\n"[..]] {
+            assert!(Pop3.parse(line, &ctx(Depth::Full, &m)).is_ok());
         }
     }
 }

@@ -72,7 +72,11 @@ fn read_first_cname(chunk_after_ssrc: &[u8]) -> Option<String> {
         let item_len = r.u8().ok()?;
         let text = r.take(usize::from(item_len)).ok()?;
         if item_type == SDES_CNAME {
-            return std::str::from_utf8(text).ok().map(String::from);
+            // Lossy, not strict: RFC 3550 §6.5 specifies UTF-8, but a
+            // malformed byte in a diagnostic string field is no reason to
+            // drop the field entirely — the same stance `lldp`/`cdp`
+            // (11.1) and `dhcp`'s hostname (06.6) take on their own text.
+            return Some(String::from_utf8_lossy(text).into_owned());
         }
     }
 }

@@ -73,6 +73,59 @@ fn is_response_status(token: &[u8]) -> bool {
     matches!(token, b"OK" | b"NO" | b"BAD")
 }
 
+/// RFC 9051 §6's client command set (§6.1-§6.4 plus the RFC 2177 `IDLE`
+/// and RFC 3501 `AUTHENTICATE`/`STARTTLS` this domain's field row names).
+///
+/// Applied **only to tagged lines**: a tagged line's second token is a
+/// client command by grammar, so a closed vocabulary is checkable and
+/// worth checking — claiming `TcpPort(143)` routes everything on port 143
+/// here, and accepting any token would report `command = "ALICE"` for a
+/// line whose tag delimiter was corrupted (06.6's port-claim honesty).
+/// Untagged (`*`) server data has no such closed vocabulary — it carries
+/// message counts, `CAPABILITY` lists, `FLAGS`, `SEARCH` results — so it
+/// keeps the permissive best-effort read; see [`Imap::parse`].
+const COMMANDS: &[&str] = &[
+    "CAPABILITY",
+    "NOOP",
+    "LOGOUT",
+    "STARTTLS",
+    "AUTHENTICATE",
+    "LOGIN",
+    "ENABLE",
+    "SELECT",
+    "EXAMINE",
+    "CREATE",
+    "DELETE",
+    "RENAME",
+    "SUBSCRIBE",
+    "UNSUBSCRIBE",
+    "LIST",
+    "LSUB",
+    "NAMESPACE",
+    "STATUS",
+    "APPEND",
+    "IDLE",
+    "CLOSE",
+    "UNSELECT",
+    "EXPUNGE",
+    "SEARCH",
+    "FETCH",
+    "STORE",
+    "COPY",
+    "MOVE",
+    "UID",
+    "CHECK",
+];
+
+/// RFC 9051 §4.3.1: a tag is a short run of ASTRING-CHARs — in practice
+/// alphanumerics — and the two special forms `*` (untagged server data)
+/// and `+` (command continuation). Anything else means the line's first
+/// token isn't a tag at all, so the whole tag/command split below is built
+/// on a mis-detected delimiter.
+fn is_valid_tag(tag: &[u8]) -> bool {
+    tag == b"*" || tag == b"+" || tag.iter().all(|b| b.is_ascii_alphanumeric() || *b == b'.')
+}
+
 pub struct Imap;
 
 impl LayerPlugin for Imap {
@@ -88,6 +141,26 @@ impl LayerPlugin for Imap {
             }))?;
         let (tag, second, args) = split_tag_and_second_token(line)
             .ok_or(ParseError::Malformed("not a tag + token IMAP line"))?;
+        if !is_valid_tag(tag) {
+            return Err(ParseError::Malformed("IMAP line does not start with a tag"));
+        }
+        let untagged = tag == b"*" || tag == b"+";
+        // A tagged line's second token is a client command by grammar, so
+        // it must be one this protocol defines; untagged server data has
+        // no closed vocabulary and keeps the best-effort read (see
+        // [`COMMANDS`]).
+        let command = (!is_response_status(second))
+            .then(|| {
+                let mut upper = second.to_vec();
+                upper.make_ascii_uppercase();
+                String::from_utf8(upper).ok()
+            })
+            .flatten();
+        if let Some(command) = &command {
+            if !untagged && !COMMANDS.contains(&command.as_str()) {
+                return Err(ParseError::Malformed("unrecognized IMAP command"));
+            }
+        }
 
         let mut fields = FieldMap::new();
         if ctx.depth() >= Depth::Keys {
@@ -101,14 +174,9 @@ impl LayerPlugin for Imap {
                     RESPONSE_STATUS,
                     Value::from(String::from_utf8_lossy(second).as_ref()),
                 );
-            } else {
+            } else if let Some(command) = &command {
                 fields.insert(IS_RESPONSE, Value::Bool(false));
-                let mut upper = second.to_vec();
-                upper.make_ascii_uppercase();
-                fields.insert(
-                    COMMAND,
-                    Value::from(String::from_utf8_lossy(&upper).as_ref()),
-                );
+                fields.insert(COMMAND, Value::from(command.as_str()));
             }
         }
         if ctx.depth() >= Depth::Full {
