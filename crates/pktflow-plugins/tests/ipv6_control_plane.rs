@@ -288,3 +288,81 @@ fn all_four_mld_types_dispatch_from_icmpv6_by_type() {
     );
     assert_eq!(packet.stop, StopReason::Complete);
 }
+
+/// Regression (11.3): `ndp`'s `flags` and `mld`'s `max_resp_delay`/
+/// `multicast_addr` are all declared `Structural`, but every one of them
+/// is read back out of `icmpv6`'s `rest_of_header` — so gating *that*
+/// field at `Depth::Full` made all three vanish at `Depth::Structural`,
+/// and made an MLDv2 Report (whose record count `M` lives in the same
+/// word) report `header_len == 0`, reattributing its whole record list to
+/// opaque payload and downgrading the packet's stop reason from
+/// `Complete` to `Terminal`. A dispatching layer's depth gating is part of
+/// its dependents' contract; the fix emits `rest_of_header` from
+/// `Structural` up.
+#[test]
+fn cross_layer_structural_fields_survive_structural_depth() {
+    let engine = default_engine();
+    let structural = ParseOpts {
+        depth: pktflow_core::Depth::Structural,
+        ..Default::default()
+    };
+
+    // RFC 4861 §4.2 Router Advertisement: M+O flags live in the word
+    // icmpv6 consumed, nothing else does.
+    let mut ra = icmpv6(134, [0x40, 0xC0, 0x07, 0x08]);
+    ra.extend_from_slice(&[0x00, 0x00, 0x1D, 0x4C, 0x00, 0x00, 0x03, 0xE8]);
+    let mut pkt = eth(ALL_NODES_MAC, MAC_A, 0x86DD);
+    pkt.extend_from_slice(&ipv6(ra.len() as u16, LINK_LOCAL_SRC, ALL_NODES_DST));
+    pkt.extend_from_slice(&ra);
+
+    let m = meta(pkt.len());
+    let full = engine.dissect(&pkt, m, ParseOpts::default());
+    let m = meta(pkt.len());
+    let packet = engine.dissect(&pkt, m, structural);
+    assert_eq!(chain(&packet), ["ethernet", "ipv6", "icmpv6", "ndp"]);
+    let ndp = packet.layers.last().expect("ndp layer");
+    assert_eq!(ndp.fields.get("flags"), Some(&Value::U64(0xC0)));
+    assert_eq!(
+        ndp.header_len,
+        full.layers.last().expect("ndp layer").header_len,
+        "header_len is framing, not extraction: it may not move with depth"
+    );
+
+    // RFC 3810 §5.2 MLDv2 Report, M=1: the record count itself comes from
+    // the cross-layer word, so `header_len` depends on it.
+    let group: [u8; 16] = [0xFF, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1];
+    let mut record = vec![2u8, 0, 0x00, 0x00];
+    record.extend_from_slice(&group);
+    let mut report = icmpv6(143, [0, 0, 0, 1]);
+    report.extend_from_slice(&record);
+    let mut pkt = eth(MLDV2_ROUTERS_MAC, MAC_A, 0x86DD);
+    pkt.extend_from_slice(&ipv6(
+        report.len() as u16,
+        LINK_LOCAL_SRC,
+        MLDV2_ROUTERS_DST,
+    ));
+    pkt.extend_from_slice(&report);
+
+    let m = meta(pkt.len());
+    let packet = engine.dissect(&pkt, m, structural);
+    assert_eq!(chain(&packet), ["ethernet", "ipv6", "icmpv6", "mld"]);
+    let mld = packet.layers.last().expect("mld layer");
+    assert_eq!(mld.header_len, record.len(), "the whole record list");
+    assert_eq!(
+        mld.fields.get("multicast_addr"),
+        Some(&Value::from(&group[..]))
+    );
+    assert_eq!(packet.stop, StopReason::Complete);
+
+    // MLDv1 Query: `max_resp_delay` is the same word read a different way.
+    let mut query = icmpv6(130, [0x27, 0x10, 0, 0]);
+    query.extend_from_slice(&group);
+    let mut pkt = eth(ALL_NODES_MAC, MAC_A, 0x86DD);
+    pkt.extend_from_slice(&ipv6(query.len() as u16, LINK_LOCAL_SRC, ALL_NODES_DST));
+    pkt.extend_from_slice(&query);
+
+    let m = meta(pkt.len());
+    let packet = engine.dissect(&pkt, m, structural);
+    let mld = packet.layers.last().expect("mld layer");
+    assert_eq!(mld.fields.get("max_resp_delay"), Some(&Value::U64(10000)));
+}

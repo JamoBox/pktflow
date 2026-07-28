@@ -33,6 +33,10 @@ const CSRC_LIST: FieldName = "csrc_list";
 /// RFC 3550 §5.1: the only version in use.
 const RTP_VERSION: u8 = 2;
 const FIXED_HEADER_LEN: usize = 12;
+/// RFC 3550 §5.1: the `X` bit — a header extension (§5.3.1) follows the
+/// CSRC list. Ubiquitous in WebRTC traffic, which carries RFC 8285
+/// per-packet extensions (audio level, mid, ...) on nearly every packet.
+const EXTENSION_BIT: u8 = 0x10;
 
 static KEY: &[KeyField] = &[KeyField { a: SSRC, b: None }];
 static ROLLUPS: &[RollupSpec] = &[RollupSpec {
@@ -71,7 +75,22 @@ impl LayerPlugin for Rtp {
         for _ in 0..cc {
             csrc_list.push(Value::U64(u64::from(r.u32_be()?)));
         }
-        let header_len = FIXED_HEADER_LEN + usize::from(cc) * 4;
+        // §5.3.1: `profile(2) + length(2, in 32-bit words, excluding this
+        // 4-byte header) + length*4` of extension data. Walked for
+        // `header_len` correctness only — 11.10's field list for `rtp`
+        // names no extension field, and the profile-specific contents
+        // (RFC 8285's one-byte/two-byte element chains) are their own
+        // decode. Same "walked, not extracted" treatment `ndp` gives
+        // Redirect's second address and `ospf` gives an LSA body.
+        let extension_len = if byte0 & EXTENSION_BIT != 0 {
+            let _profile = r.u16_be()?;
+            let words = usize::from(r.u16_be()?);
+            r.take(words * 4)?;
+            4 + words * 4
+        } else {
+            0
+        };
+        let header_len = FIXED_HEADER_LEN + usize::from(cc) * 4 + extension_len;
 
         let mut fields = FieldMap::new();
         if ctx.depth() >= Depth::Keys {
@@ -180,6 +199,43 @@ mod tests {
             .expect("valid");
         assert_eq!(structural.fields.get(PAYLOAD_TYPE), Some(&Value::U64(0)));
         assert_eq!(structural.fields.get(CSRC_LIST), None);
+    }
+
+    /// RFC 3550 §5.3.1: with `X` set, the extension is part of the header,
+    /// not the payload. Missing it under-reported `header_len` on
+    /// essentially every WebRTC packet (RFC 8285 extensions are near
+    /// universal there), silently reattributing header bytes to payload.
+    #[test]
+    fn header_extension_extends_header_len() {
+        let mut bytes = frame(false, 96, 5, 900, 0x1234_5678, &[0xAAAA_AAAA]);
+        bytes[0] |= EXTENSION_BIT;
+        bytes.extend_from_slice(&0xBEDEu16.to_be_bytes()); // RFC 8285 one-byte profile
+        bytes.extend_from_slice(&2u16.to_be_bytes()); // 2 words of extension data
+        bytes.extend_from_slice(&[0x10, 0x40, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]);
+        let payload = [0xFFu8; 4];
+        bytes.extend_from_slice(&payload);
+
+        let m = meta(bytes.len());
+        let parsed = Rtp.parse(&bytes, &ctx(Depth::Full, &m)).expect("valid");
+        // 12 fixed + 4 CSRC + (4 extension header + 8 extension data).
+        assert_eq!(parsed.header_len, 12 + 4 + 12);
+        assert_eq!(parsed.header_len, bytes.len() - payload.len());
+        // The extension is walked, not surfaced — no field of its own.
+        assert_eq!(
+            parsed.fields.get(CSRC_LIST),
+            Some(&Value::List(vec![Value::U64(0xAAAA_AAAA)]))
+        );
+
+        // Depth may not move framing (09.1 rule 2).
+        for depth in [Depth::None, Depth::Keys, Depth::Structural] {
+            let at_depth = Rtp.parse(&bytes, &ctx(depth, &m)).expect("valid");
+            assert_eq!(at_depth.header_len, parsed.header_len);
+        }
+
+        // And a truncated extension declines rather than claiming bytes
+        // that aren't there.
+        let short = &bytes[..12 + 4 + 8];
+        assert!(Rtp.parse(short, &ctx(Depth::Full, &m)).is_err());
     }
 
     #[test]

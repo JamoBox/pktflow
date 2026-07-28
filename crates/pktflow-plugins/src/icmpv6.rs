@@ -18,7 +18,12 @@ pub(crate) const TYPE: FieldName = "type";
 const CODE: FieldName = "code";
 // `pub(crate)`: the dispatch targets (`ndp`, `mld`, 11.3) read this back
 // via a cross-layer lookup (FR-17) rather than re-deciding their own
-// dispatch — see ndp.rs's module doc.
+// dispatch — see ndp.rs's module doc. Emitted from `Depth::Structural`
+// up, not `Full`: it is part of the fixed 8-byte header, and it is the
+// *input* to two downstream plugins' own `Structural` fields (ndp's
+// `flags`, mld's `max_resp_delay`/`multicast_addr`) as well as to mld's
+// MLDv2 record count, which decides `header_len`. Gating it at `Full`
+// made both of those depth-dependent (11.3).
 pub(crate) const REST_OF_HEADER: FieldName = "rest_of_header";
 
 /// The id space this plugin mints for NDP/MLD dispatch (11.3): ICMPv6
@@ -67,8 +72,6 @@ impl LayerPlugin for Icmpv6 {
         if ctx.depth() >= Depth::Structural {
             fields.insert(TYPE, Value::U64(u64::from(icmp_type)));
             fields.insert(CODE, Value::U64(u64::from(code)));
-        }
-        if ctx.depth() >= Depth::Full {
             fields.insert(REST_OF_HEADER, Value::from(rest));
         }
 

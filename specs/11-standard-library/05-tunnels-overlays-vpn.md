@@ -28,6 +28,7 @@ special-casing, extending 06.5's GRE/VXLAN precedent.
 | Fields | `Keys`: `spi` (U64) · `Structural`: `next_header`, `payload_len`, `sequence` (U64) · `Full`: `icv` (Bytes, integrity check value, length derived from `payload_len`) |
 | Hint | `Route(IpProtocol(next_header))` — AH is transparent to what it protects |
 | Identity | key `[{spi, None}]`, same unidirectional-SPI shape as `esp` |
+| Rollups | `Sample` on `sequence` — `esp`'s stance on the same field for the same reason (a monotonic counter would just overflow `Accumulate`'s 64-value cap and say nothing; first/last is the liveness/replay-window read). Plus `Accumulate` on `next_header`, which `esp` has no equivalent of: AH's defining difference is that this field is *cleartext*, so what a given SA actually protected is readable per-SA — `ipv4`/`ipv6`'s `protocol`/`next_header` rollup (06.3), one encapsulation down |
 
 **wireguard** (no RFC — canonical spec is the WireGuard whitepaper, wireguard.com/papers).
 App-stream pattern (06.6): message-type rollups on top of the UDP stream, no separate
@@ -74,6 +75,7 @@ ever needs to handle that trimmed shape.
 | Fields | `Keys`: `session_id` (the flow-key field, floored at `Keys` per 01.3) · `Structural`: `version`, `type`, `code` · `Full` (Discovery only, `code` ∈ {PADI 0x09, PADO 0x07, PADR 0x19, PADS 0x65, PADT 0xa7}): tag walk — `service_name` (Str), `ac_name` (Str), `host_uniq` (Bytes) |
 | Hint | `code == 0x00` (Session data) → `ByProtocol("ppp")`; else (Discovery) → `Terminal` |
 | Identity | key `[{session_id, None}]` — one PPPoE session stream per `session_id`, parenting the `ppp ▸ ipv4/ipv6 ▸ ...` inner stack |
+| Rollups | `Accumulate` on `code` — the session's own lifecycle, as far as a stateless dissector can see it. PADS is the frame that *assigns* the `session_id` this stream is keyed on and PADT is the one that tears it down, so both land on the same stream as the Session-data frames between them: `{PADS, 0x00, PADT}` reads as negotiated → carried traffic → torn down, while `{0x00}` alone says the capture began mid-session. Same "the message-type sequence is the analytic content" shape as `dhcp`'s DORA rollup (06.6), reached without any cross-packet state (D7). The Discovery frames that precede PADS (PADI/PADO/PADR) carry `session_id == 0` and so form their own stream — correct, not a gap: no session exists yet for them to belong to |
 
 **geneve** (RFC 8926) — like GRE, its `protocol_type` field *is* an EtherType value by
 protocol design (no translation table needed, unlike `ppp` above).
@@ -118,5 +120,9 @@ Geneve:   eth ▸ ipv4 ▸ udp ▸ geneve ▸ ipv4 ▸ ...          (EtherType r
       the **unmodified** 06.3 `ipv4` plugin (no `claims()` diff in that file) — the specific
       claim this domain makes about zero-touch reuse.
 - [x] `geneve` fixture mirrors 06.5's VXLAN two-VNIs-one-outer-stream test.
+- [x] Rollups populate through the aggregator, not just parse: one AH SA carrying two inner
+      protocols across three packets samples `sequence` first/last and accumulates both
+      `next_header` values; a PADS → Session-data → PADT sequence on one `session_id`
+      accumulates all three `code` values in insertion order.
 - [x] All five hierarchies above asserted node-by-node, same rigor as 06.5's acceptance
       criteria.

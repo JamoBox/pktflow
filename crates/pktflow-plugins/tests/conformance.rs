@@ -22,6 +22,7 @@ use pktflow_plugins::enip::Enip;
 use pktflow_plugins::erspan::Erspan;
 use pktflow_plugins::esp::Esp;
 use pktflow_plugins::ethernet::Ethernet;
+use pktflow_plugins::ftp::Ftp;
 use pktflow_plugins::geneve::Geneve;
 use pktflow_plugins::gre::Gre;
 use pktflow_plugins::gtp_c::GtpC;
@@ -66,7 +67,9 @@ use pktflow_plugins::rocev2::Rocev2;
 use pktflow_plugins::rtcp::Rtcp;
 use pktflow_plugins::rtp::Rtp;
 use pktflow_plugins::sctp::Sctp;
+use pktflow_plugins::sip::Sip;
 use pktflow_plugins::smb2::Smb2;
+use pktflow_plugins::smtp::Smtp;
 use pktflow_plugins::snmp::Snmp;
 use pktflow_plugins::ssdp::Ssdp;
 use pktflow_plugins::ssh::Ssh;
@@ -3174,9 +3177,10 @@ fn ipfix_conforms() {
 
 #[test]
 fn http_conforms() {
-    // A GET request carrying both rollup fields (`method`, `host`) — the
-    // canonical shape the 09.1 kit's rule 3 requires. A response (which has
-    // `status_code` but no `method`) is covered by http.rs's own fixtures.
+    // A GET request carrying `method` and `host`, plus (below) a response
+    // carrying `status_code`: rule 3 checks rollup coverage against the
+    // union of a case's samples, which is what lets a request/response
+    // protocol declare a rollup on each side.
     let get = b"GET /index.html HTTP/1.1\r\n\
 Host: example.com\r\n\
 User-Agent: curl/8.4.0\r\n\
@@ -3196,6 +3200,16 @@ Content-Length: 9\r\n\
         .to_vec();
     let post_header_len = post.len();
     post.extend_from_slice(post_body);
+
+    // The response side: `status_code` and no `method`, the other half of
+    // the rollup union.
+    let mut response = b"HTTP/1.1 200 OK\r\n\
+Content-Type: text/html\r\n\
+Content-Length: 9\r\n\
+\r\n"
+        .to_vec();
+    let response_header_len = response.len();
+    response.extend_from_slice(b"<html/>\r\n");
 
     run_conformance(&ConformanceCase {
         plugin: Box::new(Http),
@@ -3224,6 +3238,19 @@ Content-Length: 9\r\n\
                     ("host", Value::from("api.example.com")),
                     ("user_agent", Value::from("app/1.0")),
                     ("content_type", Value::from("application/json")),
+                    ("content_length", Value::U64(9)),
+                ],
+                expected_hint: Hint::Terminal,
+            },
+            GoodPacket {
+                expected_header_len: response_header_len,
+                bytes: response,
+                expected_full_fields: vec![
+                    ("app", Value::from("http")),
+                    ("is_request", Value::Bool(false)),
+                    ("status_code", Value::U64(200)),
+                    ("version", Value::from("HTTP/1.1")),
+                    ("content_type", Value::from("text/html")),
                     ("content_length", Value::U64(9)),
                 ],
                 expected_hint: Hint::Terminal,
@@ -3337,14 +3364,87 @@ fn stun_conforms() {
     });
 }
 
-// `ftp`/`smtp` (11.9) run no kit case here, deliberately: both declare two
-// Accumulate rollups (`command`, `reply_code`) that never co-occur on a
-// single line (a line is either a command or a reply, never both) — rule
-// 3 requires every declared rollup field present on every sample a case
-// feeds it, which no single-line fixture can ever satisfy. This is the
-// same structural incompatibility `ndp_conforms`/`mld_conforms` document
-// above for their own kit-incompatible shapes; both plugins' full behavior
-// is covered by their own thorough unit tests (`src/ftp.rs`, `src/smtp.rs`).
+/// `ftp` (11.9) declares two Accumulate rollups — `command` and
+/// `reply_code` — that never co-occur, because a control-channel line is
+/// either a command or a reply. That is exactly the conditional-rollup
+/// shape 05.4 sanctions ("absent field on a given packet = no-op"), so
+/// rule 3 checks rollup coverage against the union of a case's samples:
+/// one request line and one reply line together cover both.
+#[test]
+fn ftp_conforms() {
+    // RFC 959 §4.1.1 USER command, then §4.2's 230 login-success reply.
+    let request = b"USER anonymous\r\n".to_vec();
+    let request_len = request.len();
+    let reply = b"230 Login successful.\r\n".to_vec();
+    let reply_len = reply.len();
+    run_conformance(&ConformanceCase {
+        plugin: Box::new(Ftp),
+        good: vec![
+            GoodPacket {
+                bytes: request,
+                expected_header_len: request_len,
+                expected_full_fields: vec![
+                    ("app", Value::from("ftp")),
+                    ("is_request", Value::Bool(true)),
+                    ("command", Value::from("USER")),
+                    ("arg", Value::from("anonymous")),
+                ],
+                expected_hint: Hint::Terminal,
+            },
+            GoodPacket {
+                bytes: reply,
+                expected_header_len: reply_len,
+                expected_full_fields: vec![
+                    ("app", Value::from("ftp")),
+                    ("is_request", Value::Bool(false)),
+                    ("reply_code", Value::U64(230)),
+                    ("arg", Value::from("Login successful.")),
+                ],
+                expected_hint: Hint::Terminal,
+            },
+        ],
+        outer_ctx: Vec::new(),
+    });
+}
+
+/// `smtp` (11.9) has `ftp`'s exact request/reply rollup split; same
+/// two-sample shape.
+#[test]
+fn smtp_conforms() {
+    // RFC 5321 §3.2 EHLO, then §4.2's 250 reply.
+    let request = b"EHLO client.example.com\r\n".to_vec();
+    let request_len = request.len();
+    let reply = b"250 mail.example.com Hello\r\n".to_vec();
+    let reply_len = reply.len();
+    run_conformance(&ConformanceCase {
+        plugin: Box::new(Smtp),
+        good: vec![
+            GoodPacket {
+                bytes: request,
+                expected_header_len: request_len,
+                expected_full_fields: vec![
+                    ("app", Value::from("smtp")),
+                    ("is_request", Value::Bool(true)),
+                    ("command", Value::from("EHLO")),
+                    ("arg", Value::from("client.example.com")),
+                ],
+                expected_hint: Hint::Terminal,
+            },
+            GoodPacket {
+                bytes: reply,
+                expected_header_len: reply_len,
+                expected_full_fields: vec![
+                    ("app", Value::from("smtp")),
+                    ("is_request", Value::Bool(false)),
+                    ("reply_code", Value::U64(250)),
+                    ("arg", Value::from("mail.example.com Hello")),
+                ],
+                expected_hint: Hint::Terminal,
+            },
+        ],
+        outer_ctx: Vec::new(),
+    });
+}
 
 #[test]
 fn tftp_conforms() {
@@ -3419,20 +3519,23 @@ fn imap_conforms() {
 
 #[test]
 fn smb2_conforms() {
-    // MS-SMB2 §2.2.1 Negotiate request — smb2's one declared rollup
-    // (`command`) needs no co-occurring field.
+    // MS-SMB2 §2.2.1 TreeConnect request. Every field below the
+    // `ProtocolId` byte string is little-endian, as the wire is — only the
+    // NBSS length prefix is big-endian. Non-zero values throughout, so a
+    // byte-order regression shows up as a wrong value rather than passing
+    // by symmetry.
     let mut h = vec![0xFEu8, b'S', b'M', b'B'];
-    h.extend_from_slice(&64u16.to_be_bytes());
-    h.extend_from_slice(&0u16.to_be_bytes());
-    h.extend_from_slice(&0u32.to_be_bytes());
-    h.extend_from_slice(&0u16.to_be_bytes()); // command = Negotiate
-    h.extend_from_slice(&0u16.to_be_bytes());
-    h.extend_from_slice(&0u32.to_be_bytes()); // flags
-    h.extend_from_slice(&0u32.to_be_bytes());
-    h.extend_from_slice(&1u64.to_be_bytes()); // message_id
-    h.extend_from_slice(&0u32.to_be_bytes());
-    h.extend_from_slice(&0u32.to_be_bytes()); // tree_id
-    h.extend_from_slice(&0u64.to_be_bytes()); // session_id
+    h.extend_from_slice(&64u16.to_le_bytes()); // StructureSize
+    h.extend_from_slice(&0u16.to_le_bytes()); // CreditCharge
+    h.extend_from_slice(&0u32.to_le_bytes()); // Status
+    h.extend_from_slice(&3u16.to_le_bytes()); // command = TreeConnect
+    h.extend_from_slice(&0u16.to_le_bytes()); // Credit
+    h.extend_from_slice(&0u32.to_le_bytes()); // flags
+    h.extend_from_slice(&0u32.to_le_bytes()); // NextCommand
+    h.extend_from_slice(&0x0102u64.to_le_bytes()); // message_id
+    h.extend_from_slice(&0u32.to_le_bytes()); // Reserved
+    h.extend_from_slice(&0x0304u32.to_le_bytes()); // tree_id
+    h.extend_from_slice(&0x0506u64.to_le_bytes()); // session_id
     h.extend_from_slice(&[0u8; 16]);
     let mut bytes = vec![0x00];
     bytes.extend_from_slice(&(h.len() as u32).to_be_bytes()[1..]);
@@ -3445,12 +3548,12 @@ fn smb2_conforms() {
             bytes,
             expected_header_len: len,
             expected_full_fields: vec![
-                ("session_id", Value::U64(0)),
-                ("command", Value::U64(0)),
+                ("session_id", Value::U64(0x0506)),
+                ("command", Value::U64(3)),
                 ("status", Value::U64(0)),
                 ("flags", Value::U64(0)),
-                ("message_id", Value::U64(1)),
-                ("tree_id", Value::U64(0)),
+                ("message_id", Value::U64(0x0102)),
+                ("tree_id", Value::U64(0x0304)),
             ],
             expected_hint: Hint::Terminal,
         }],
@@ -3490,11 +3593,80 @@ fn nfs_conforms() {
     });
 }
 
-// `sip` (11.10) runs no kit case here, deliberately: its two rollups
-// (`method`, `status_code` `Series`) never co-occur on a single message
-// (a request has a method, a response has a status code, never both) — the
-// same structural incompatibility documented above for `ftp`/`smtp`.
-// `sip.rs`'s own unit tests cover both shapes fully.
+/// `sip` (11.10) has the same request/response rollup split as
+/// `ftp`/`smtp`: `method` on a request, `status_code` on a response, never
+/// both on one message. Two samples, one of each — the `Call-ID` flow key
+/// is the field that *is* on every message, and rule 3 still requires it
+/// per sample.
+#[test]
+fn sip_conforms() {
+    // RFC 3261 §24.2's INVITE, then the 180 Ringing that answers it —
+    // same Call-ID, so the pair is one dialog.
+    let invite = concat!(
+        "INVITE sip:bob@biloxi.example.com SIP/2.0\r\n",
+        "Via: SIP/2.0/UDP client.atlanta.example.com:5060;branch=z9hG4bK74bf9\r\n",
+        "From: Alice <sip:alice@atlanta.example.com>;tag=9fxced76sl\r\n",
+        "To: Bob <sip:bob@biloxi.example.com>\r\n",
+        "Call-ID: 3848276298220188511@atlanta.example.com\r\n",
+        "CSeq: 1 INVITE\r\n",
+        "\r\n"
+    )
+    .as_bytes()
+    .to_vec();
+    let invite_len = invite.len();
+    let ringing = concat!(
+        "SIP/2.0 180 Ringing\r\n",
+        "Via: SIP/2.0/UDP client.atlanta.example.com:5060;branch=z9hG4bK74bf9\r\n",
+        "From: Alice <sip:alice@atlanta.example.com>;tag=9fxced76sl\r\n",
+        "To: Bob <sip:bob@biloxi.example.com>;tag=8321234356\r\n",
+        "Call-ID: 3848276298220188511@atlanta.example.com\r\n",
+        "CSeq: 1 INVITE\r\n",
+        "\r\n"
+    )
+    .as_bytes()
+    .to_vec();
+    let ringing_len = ringing.len();
+    let call_id = Value::from("3848276298220188511@atlanta.example.com");
+    let via = Value::from("SIP/2.0/UDP client.atlanta.example.com:5060;branch=z9hG4bK74bf9");
+    let from = Value::from("Alice <sip:alice@atlanta.example.com>;tag=9fxced76sl");
+    run_conformance(&ConformanceCase {
+        plugin: Box::new(Sip),
+        good: vec![
+            GoodPacket {
+                bytes: invite,
+                expected_header_len: invite_len,
+                expected_full_fields: vec![
+                    ("call_id", call_id.clone()),
+                    ("is_request", Value::Bool(true)),
+                    ("method", Value::from("INVITE")),
+                    ("from", from.clone()),
+                    ("to", Value::from("Bob <sip:bob@biloxi.example.com>")),
+                    ("via", via.clone()),
+                    ("cseq", Value::from("1 INVITE")),
+                ],
+                expected_hint: Hint::Terminal,
+            },
+            GoodPacket {
+                bytes: ringing,
+                expected_header_len: ringing_len,
+                expected_full_fields: vec![
+                    ("call_id", call_id),
+                    ("is_request", Value::Bool(false)),
+                    ("status_code", Value::U64(180)),
+                    ("from", from),
+                    (
+                        "to",
+                        Value::from("Bob <sip:bob@biloxi.example.com>;tag=8321234356"),
+                    ),
+                    ("via", via),
+                    ("cseq", Value::from("1 INVITE")),
+                ],
+                expected_hint: Hint::Terminal,
+            },
+        ],
+        outer_ctx: Vec::new(),
+    });
+}
 
 #[test]
 fn rtp_conforms() {
@@ -3635,24 +3807,58 @@ fn tls_client_hello() -> Vec<u8> {
     tls_handshake_record(1, &body)
 }
 
+/// The ServerHello answering [`tls_client_hello`]: a single selected
+/// cipher suite and the negotiated version, which is where
+/// `selected_cipher_suite`/`tls_version_selected` live — the ClientHello
+/// never carries either, and vice versa for `sni` (RFC 8446 §4.1.2/§4.1.3).
+fn tls_server_hello() -> Vec<u8> {
+    let mut body = Vec::new();
+    body.extend_from_slice(&[0x03, 0x03]); // legacy_version TLS 1.2
+    body.extend_from_slice(&[0x22; 32]); // random
+    body.push(0); // session_id length 0
+    body.extend_from_slice(&[0x13, 0x01]); // selected: TLS_AES_128_GCM_SHA256
+    body.push(0); // null compression
+    tls_handshake_record(2, &body)
+}
+
 #[test]
 fn tls_conforms() {
+    // ClientHello and ServerHello together: `sni`/`handshake_type` on the
+    // first, `selected_cipher_suite`/`tls_version_selected` on the second.
+    // No single record carries all four — a conditional rollup (05.4), so
+    // rule 3 checks coverage against the union of these two samples.
     let hello = tls_client_hello();
+    let server_hello = tls_server_hello();
     run_conformance(&ConformanceCase {
         plugin: Box::new(Tls),
-        good: vec![GoodPacket {
-            expected_header_len: hello.len(),
-            bytes: hello,
-            expected_full_fields: vec![
-                ("app", Value::from("tls")),
-                ("content_type", Value::U64(22)),
-                ("record_version", Value::U64(0x0301)),
-                ("handshake_type", Value::U64(1)),
-                ("cipher_suites", Value::List(vec![Value::U64(0x1301)])),
-                ("sni", Value::from("example.com")),
-            ],
-            expected_hint: Hint::Terminal,
-        }],
+        good: vec![
+            GoodPacket {
+                expected_header_len: hello.len(),
+                bytes: hello,
+                expected_full_fields: vec![
+                    ("app", Value::from("tls")),
+                    ("content_type", Value::U64(22)),
+                    ("record_version", Value::U64(0x0301)),
+                    ("handshake_type", Value::U64(1)),
+                    ("cipher_suites", Value::List(vec![Value::U64(0x1301)])),
+                    ("sni", Value::from("example.com")),
+                ],
+                expected_hint: Hint::Terminal,
+            },
+            GoodPacket {
+                expected_header_len: server_hello.len(),
+                bytes: server_hello,
+                expected_full_fields: vec![
+                    ("app", Value::from("tls")),
+                    ("content_type", Value::U64(22)),
+                    ("record_version", Value::U64(0x0301)),
+                    ("handshake_type", Value::U64(2)),
+                    ("selected_cipher_suite", Value::U64(0x1301)),
+                    ("tls_version_selected", Value::U64(0x0303)),
+                ],
+                expected_hint: Hint::Terminal,
+            },
+        ],
         outer_ctx: Vec::new(),
     });
 }
@@ -3683,11 +3889,10 @@ fn kerberos_conforms() {
 #[test]
 fn ldap_conforms() {
     // RFC 4511 §4.2 bindRequest: version 3, a DN, and an opaque simple-auth
-    // choice — the only shape carrying both of ldap's declared rollup
-    // fields (`protocol_op` and `bind_dn`), so it's the only case fed to
-    // the kit (rule 3); searchRequest/unbindRequest are covered by
-    // `ldap.rs`'s own unit tests instead, the same split `ssh_conforms`
-    // uses for its own rollup-only-on-one-shape field.
+    // choice — the shape carrying both of ldap's declared rollup fields
+    // (`protocol_op` and `bind_dn`). searchRequest/unbindRequest carry
+    // `protocol_op` but no `bind_dn`, which rule 3 permits (union over the
+    // case); they stay in `ldap.rs`'s own unit tests.
     let dn = b"cn=admin,dc=example,dc=com";
     let mut op = vec![0x02, 0x01, 0x03]; // INTEGER version = 3
     op.push(0x04); // OCTET STRING (name)
@@ -3723,14 +3928,13 @@ fn ldap_conforms() {
 
 #[test]
 fn ssh_conforms() {
-    // RFC 4253 §4.2 identification line. `banner` is ssh's one declared
-    // rollup field, and rule 3 requires it present on every sample a case
-    // feeds the kit — a KEXINIT packet genuinely carries no banner, so it
-    // can't join a case here, the same "zero-option fixtures only" stance
-    // `ndp_conforms`/`mld_conforms`/`dhcpv6_conforms` document above for
-    // their own kit-incompatible variable shapes; KEXINIT is covered
-    // instead by `ssh.rs`'s own unit tests
-    // (`kexinit_parses_msg_type_and_five_name_lists` and friends).
+    // RFC 4253 §4.2 identification line — where `banner`, ssh's one
+    // declared rollup field, lives. A KEXINIT packet carries no banner,
+    // which rule 3 permits (rollup coverage is the union over a case's
+    // samples, 05.4's conditional-field rule); it stays in `ssh.rs`'s own
+    // unit tests (`kexinit_parses_msg_type_and_five_name_lists` and
+    // friends) because its binary framing shares no expectations with this
+    // text line, not because the kit rejects it.
     let banner = b"SSH-2.0-OpenSSH_9.6\r\n".to_vec();
     run_conformance(&ConformanceCase {
         plugin: Box::new(Ssh),

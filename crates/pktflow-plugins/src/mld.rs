@@ -35,7 +35,13 @@ const SOURCE_ADDRS: FieldName = "source_addrs";
 
 /// icmpv6's `rest_of_header` word, re-read for every message type here —
 /// each interprets the same four bytes differently (see the module doc).
-/// `None` below `Depth::Full`, mirroring ndp's `icmpv6_rest`.
+/// `None` below `Depth::Structural`, mirroring ndp's `icmpv6_rest`. For
+/// an MLDv2 Report this word carries the record count `M`, so it also
+/// decides how far the record walk runs: without it (`Depth::None`/
+/// `Keys`, where icmpv6 emits no fields at all) the whole message is
+/// consumed as one un-subdivided body instead, exactly like the
+/// unknown-`msg_type` fallback below — never a `header_len` of 0 that
+/// would push the records out into opaque payload.
 fn icmpv6_rest(ctx: &ParseCtx) -> Option<[u8; 4]> {
     match ctx.field("icmpv6", icmpv6::REST_OF_HEADER)? {
         Value::Bytes(b) => <[u8; 4]>::try_from(b.as_slice()).ok(),
@@ -100,9 +106,19 @@ impl LayerPlugin for Mld {
             // follow-up (per-record `LayerRecord`s) is the same kind of
             // gap 03's IPv6-extension-headers Tier-2 note already
             // documents for a different protocol.
-            let m = icmpv6_rest(ctx)
-                .map(|w| u16::from_be_bytes([w[2], w[3]]))
-                .unwrap_or(0);
+            let Some(word) = icmpv6_rest(ctx) else {
+                // No M means no honest record count to walk: fall back to
+                // the same "consume the message, don't subdivide it"
+                // shape as an unknown `msg_type` above, rather than
+                // reporting a zero-length header that would push every
+                // record out into opaque payload.
+                return Ok(ParsedLayer {
+                    header_len: bytes.len(),
+                    fields,
+                    hint: Hint::Terminal,
+                });
+            };
+            let m = u16::from_be_bytes([word[2], word[3]]);
 
             let mut first_multicast_addr = None;
             let mut first_num_sources = None;

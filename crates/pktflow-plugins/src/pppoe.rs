@@ -17,7 +17,7 @@
 
 use pktflow_core::{
     ByteReader, Canonicalize, Depth, FieldMap, FieldName, Hint, KeyField, LayerPlugin, ParseCtx,
-    ParseError, ParsedLayer, ProtocolName, RouteId, StreamIdentity, Value,
+    ParseError, ParsedLayer, ProtocolName, RollupKind, RollupSpec, RouteId, StreamIdentity, Value,
 };
 
 const VERSION: FieldName = "version";
@@ -41,11 +41,22 @@ static KEY: &[KeyField] = &[KeyField {
     a: SESSION_ID,
     b: None, // shared qualifier: one PPPoE session stream per session_id, the L2TPv3/VXLAN shape (06.5/11.5)
 }];
+static ROLLUPS: &[RollupSpec] = &[RollupSpec {
+    // The session's own lifecycle, as far as a stateless dissector can
+    // see it: PADS assigns the `session_id` this stream is keyed on, so
+    // that frame and every later PADT teardown land on the same stream as
+    // the Session-data frames between them. A set of {PADS, 0x00, PADT}
+    // says "negotiated, carried traffic, torn down"; a set of {0x00}
+    // alone says the capture began mid-session. `code` is `Structural`,
+    // so the rollup fills at every depth the stream itself exists at.
+    field: CODE,
+    kind: RollupKind::Accumulate,
+}];
 static IDENTITY: StreamIdentity = StreamIdentity {
     key: KEY,
     canonicalize: Canonicalize::EndpointSort,
     lifecycle: None,
-    rollups: &[],
+    rollups: ROLLUPS,
 };
 
 /// Discovery tags accumulated by the walk — best-effort, same "missing

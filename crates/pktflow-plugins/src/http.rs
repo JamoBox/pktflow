@@ -50,13 +50,18 @@ const METHODS: &[&str] = &[
 
 static KEY: &[KeyField] = &[KeyField { a: APP, b: None }];
 static ROLLUPS: &[RollupSpec] = &[
-    // The request-method mix over the session (GET/POST/...). `status_code`
-    // would be the response-side companion, but no single HTTP message
-    // carries both `method` and `status_code`, and the 09.1 kit (rule 3)
-    // requires every rollup field on every canonical sample — so
-    // `status_code` stays a per-packet Structural field, not a rollup.
+    // The request-method mix over the session (GET/POST/...).
     RollupSpec {
         field: METHOD,
+        kind: RollupKind::Accumulate,
+    },
+    // Its response-side companion: the status mix this session got back.
+    // No single HTTP message carries both `method` and `status_code`, but
+    // that is what a conditional rollup *is* (05.4) — the 09.1 kit checks
+    // rollup coverage against the union of a case's samples, so a
+    // request+response pair covers both.
+    RollupSpec {
+        field: STATUS_CODE,
         kind: RollupKind::Accumulate,
     },
     // The hosts this session talked to — the device-inventory signal, the

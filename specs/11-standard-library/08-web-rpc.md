@@ -22,7 +22,7 @@ request/status line and headers are parsed; the body is unparsed remainder.
 | h2c handshake | If the packet's bytes begin with HTTP/2's fixed 24-byte connection preface (`"PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n"`, RFC 9113 §3.4), `header_len` is just those 24 bytes and the hint is `ByProtocol("http2")` — a direct-by-name dispatch (VXLAN's pattern, 06.5) that avoids `http2` needing its own claimed route at all (see below) |
 | Hint | h2c preface → `ByProtocol("http2")`, as above; otherwise `Terminal` |
 | Identity | key `[{app, None}]`, one `http` child stream per TCP session |
-| Rollups | `Accumulate` on `method`; `Sample` on `host`. (`status_code` stays a per-packet `Structural` field, **not** a rollup: no single HTTP message carries both `method` and `status_code`, and the 09.1 kit's rule 3 requires every declared rollup field on every canonical good sample — so a rollup naming both cannot be validated. `method`+`host` co-occur on a request, the app-stream's canonical shape.) |
+| Rollups | `Accumulate` on `method`; `Sample` on `host`; `Accumulate` on `status_code` (the response mix the session got back — the natural companion to the request-method mix). No single HTTP message carries both `method` and `status_code`, which is what a **conditional rollup** is (05.4's "absent field on a given packet = no-op"). An earlier draft withheld `status_code` because the 09.1 kit's rule 3 then demanded every declared rollup field on *every* canonical sample; rule 3 now checks the union of a case's samples, so a request + response pair covers both |
 
 **http2** (RFC 9113) — reached only via `http`'s `ByProtocol` dispatch above, so it has no
 `claims()` of its own (avoiding a route collision with `http` on the same port). **Known,

@@ -26,7 +26,7 @@
 
 use pktflow_core::{
     ByteReader, Canonicalize, Depth, FieldMap, FieldName, Hint, KeyField, LayerPlugin, ParseCtx,
-    ParseError, ParsedLayer, ProtocolName, RouteId, StreamIdentity, Value,
+    ParseError, ParsedLayer, ProtocolName, RollupKind, RollupSpec, RouteId, StreamIdentity, Value,
 };
 
 const SPI: FieldName = "spi";
@@ -43,11 +43,29 @@ static KEY: &[KeyField] = &[KeyField {
     a: SPI,
     b: None, // shared qualifier: SPI is unidirectional (RFC 4302 §2.1)
 }];
+static ROLLUPS: &[RollupSpec] = &[
+    RollupSpec {
+        // ESP's stance on the same field (11.5), for the same reason: a
+        // coarse liveness/replay-window signal over the SA's lifetime, not
+        // an attempt at being a security tool. `Accumulate` would just
+        // overflow its 64-value cap on any real SA.
+        field: SEQUENCE,
+        kind: RollupKind::Sample,
+    },
+    RollupSpec {
+        // What this SA actually protected — AH's whole point over ESP is
+        // that `next_header` is cleartext, so the protected-protocol mix
+        // is readable per-SA. The `ipv4`/`ipv6` `protocol`/`next_header`
+        // rollup (06.3), one encapsulation down.
+        field: NEXT_HEADER,
+        kind: RollupKind::Accumulate,
+    },
+];
 static IDENTITY: StreamIdentity = StreamIdentity {
     key: KEY,
     canonicalize: Canonicalize::EndpointSort,
     lifecycle: None,
-    rollups: &[],
+    rollups: ROLLUPS,
 };
 
 pub struct Ah;
