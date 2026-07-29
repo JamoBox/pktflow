@@ -149,6 +149,15 @@ impl LayerPlugin for Stun {
             ));
         }
         let message_length = r.u16_be()?;
+        // RFC 8489 §5: every attribute is padded to a multiple of 4, so
+        // the length's low two bits are always zero. A cheap structural
+        // invariant on a plugin that claims a whole port — non-STUN bytes
+        // that happen to clear the magic-cookie check still fail here.
+        if message_length % 4 != 0 {
+            return Err(ParseError::Malformed(
+                "STUN message length is not a multiple of 4",
+            ));
+        }
         let magic_cookie = r.u32_be()?;
         if magic_cookie != MAGIC_COOKIE {
             return Err(ParseError::Malformed("STUN magic cookie mismatch"));

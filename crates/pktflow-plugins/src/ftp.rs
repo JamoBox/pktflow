@@ -85,10 +85,38 @@ fn parse_reply_code(line: &[u8]) -> Option<(u16, &[u8])> {
     Some((code, rest))
 }
 
-/// A command token: one or more ASCII alphabetic bytes, then `' '` or end.
-fn parse_command(line: &[u8]) -> Option<(&[u8], &[u8])> {
+/// RFC 959 §4.1's command set, plus the extensions a modern server
+/// actually speaks (RFC 2228 security, RFC 2389 `FEAT`/`OPTS`, RFC 2428
+/// EPRT/EPSV, RFC 3659 SIZE/MDTM/MLSD/MLST).
+///
+/// This is an **allow-list, not a shape test**, and that is the point:
+/// claiming `TcpPort(21)` routes *everything* on port 21 here, so
+/// accepting any alphabetic token as a command would report
+/// `command = "VSER"` for a corrupted line and invent a plausible-looking
+/// field out of bytes that aren't FTP at all. Declining is the correct
+/// outcome — counted and visible as a `PluginError` stop, no guessing
+/// (06.6's port-claim-honesty note). The cost is that a genuinely
+/// unlisted vendor command declines too; that is the right trade for a
+/// protocol whose command vocabulary is closed by its own RFC.
+const COMMANDS: &[&str] = &[
+    "USER", "PASS", "ACCT", "CWD", "CDUP", "SMNT", "QUIT", "REIN", "PORT", "PASV", "TYPE", "STRU",
+    "MODE", "RETR", "STOR", "STOU", "APPE", "ALLO", "REST", "RNFR", "RNTO", "ABOR", "DELE", "RMD",
+    "MKD", "PWD", "LIST", "NLST", "SITE", "SYST", "STAT", "HELP", "NOOP", "FEAT", "OPTS", "AUTH",
+    "ADAT", "PBSZ", "PROT", "CCC", "MIC", "CONF", "ENC", "EPRT", "EPSV", "SIZE", "MDTM", "MLSD",
+    "MLST", "LANG", "XPWD", "XCWD", "XMKD", "XRMD", "XCUP",
+];
+
+/// The command token and its argument, or `None` when the token is not a
+/// command this protocol defines (see [`COMMANDS`]).
+fn parse_command(line: &[u8]) -> Option<(String, &[u8])> {
     let end = line.iter().position(|&b| b == b' ').unwrap_or(line.len());
     if end == 0 || !line[..end].iter().all(u8::is_ascii_alphabetic) {
+        return None;
+    }
+    let mut upper = line[..end].to_vec();
+    upper.make_ascii_uppercase();
+    let command = String::from_utf8(upper).ok()?;
+    if !COMMANDS.contains(&command.as_str()) {
         return None;
     }
     let arg = if end < line.len() {
@@ -96,7 +124,7 @@ fn parse_command(line: &[u8]) -> Option<(&[u8], &[u8])> {
     } else {
         &line[end..]
     };
-    Some((&line[..end], arg))
+    Some((command, arg))
 }
 
 pub struct Ftp;
@@ -126,13 +154,10 @@ impl LayerPlugin for Ftp {
             if ctx.depth() >= Depth::Full {
                 fields.insert(ARG, Value::from(String::from_utf8_lossy(rest).as_ref()));
             }
-        } else if let Some((cmd, arg)) = parse_command(line) {
-            let mut upper = cmd.to_vec();
-            upper.make_ascii_uppercase();
-            let cmd_str = String::from_utf8_lossy(&upper).into_owned();
+        } else if let Some((command, arg)) = parse_command(line) {
             if ctx.depth() >= Depth::Structural {
                 fields.insert(IS_REQUEST, Value::Bool(true));
-                fields.insert(COMMAND, Value::from(cmd_str.as_str()));
+                fields.insert(COMMAND, Value::from(command.as_str()));
             }
             if ctx.depth() >= Depth::Full {
                 fields.insert(ARG, Value::from(String::from_utf8_lossy(arg).as_ref()));
@@ -292,6 +317,31 @@ mod tests {
                 "prefix of {n}/{} bytes must decline",
                 bytes.len()
             );
+        }
+    }
+
+    /// Port-claim honesty (06.6): claiming TCP 21 routes *everything* on
+    /// that port here, so a line that is shaped like a command but whose
+    /// verb RFC 959 never defines must decline rather than report a
+    /// fabricated `command`. Before the allow-list, a single corrupted
+    /// byte turned `USER` into a confidently-reported `VSER`.
+    #[test]
+    fn undefined_verb_declines_instead_of_fabricating_a_command() {
+        let m = meta(32);
+        for line in [
+            &b"VSER anonymous\r\n"[..],
+            &b"XYZZY something\r\n"[..],
+            &b"GET /index.html\r\n"[..],
+        ] {
+            assert!(
+                Ftp.parse(line, &ctx(Depth::Full, &m)).is_err(),
+                "{:?} must decline",
+                String::from_utf8_lossy(line)
+            );
+        }
+        // Extensions a real server speaks still parse.
+        for line in [&b"EPSV\r\n"[..], &b"FEAT\r\n"[..], &b"MLSD /pub\r\n"[..]] {
+            assert!(Ftp.parse(line, &ctx(Depth::Full, &m)).is_ok());
         }
     }
 }

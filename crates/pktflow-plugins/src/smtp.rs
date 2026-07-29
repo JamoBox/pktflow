@@ -64,9 +64,29 @@ fn parse_reply_code(line: &[u8]) -> Option<(u16, &[u8])> {
     Some((code, rest))
 }
 
-fn parse_command(line: &[u8]) -> Option<(&[u8], &[u8])> {
+/// RFC 5321 §4.1.1's command set plus the ubiquitous extensions
+/// (RFC 3207 STARTTLS, RFC 4954 AUTH, RFC 3030 BDAT).
+///
+/// An **allow-list, not a shape test** — see `ftp`'s COMMANDS for the full
+/// reasoning: claiming `TcpPort(25)` routes everything on port 25 here, and
+/// accepting any alphabetic token would invent `command = "FHLO"` out of a
+/// corrupted or non-SMTP line rather than declining honestly (06.6).
+const COMMANDS: &[&str] = &[
+    "HELO", "EHLO", "MAIL", "RCPT", "DATA", "RSET", "VRFY", "EXPN", "HELP", "NOOP", "QUIT",
+    "STARTTLS", "AUTH", "BDAT", "ETRN", "TURN", "SEND", "SOML", "SAML",
+];
+
+/// The command token and its argument, or `None` when the token is not a
+/// command this protocol defines (see [`COMMANDS`]).
+fn parse_command(line: &[u8]) -> Option<(String, &[u8])> {
     let end = line.iter().position(|&b| b == b' ').unwrap_or(line.len());
     if end == 0 || !line[..end].iter().all(u8::is_ascii_alphabetic) {
+        return None;
+    }
+    let mut upper = line[..end].to_vec();
+    upper.make_ascii_uppercase();
+    let command = String::from_utf8(upper).ok()?;
+    if !COMMANDS.contains(&command.as_str()) {
         return None;
     }
     let arg = if end < line.len() {
@@ -74,7 +94,7 @@ fn parse_command(line: &[u8]) -> Option<(&[u8], &[u8])> {
     } else {
         &line[end..]
     };
-    Some((&line[..end], arg))
+    Some((command, arg))
 }
 
 pub struct Smtp;
@@ -104,13 +124,10 @@ impl LayerPlugin for Smtp {
             if ctx.depth() >= Depth::Full {
                 fields.insert(ARG, Value::from(String::from_utf8_lossy(rest).as_ref()));
             }
-        } else if let Some((cmd, arg)) = parse_command(line) {
-            let mut upper = cmd.to_vec();
-            upper.make_ascii_uppercase();
-            let cmd_str = String::from_utf8_lossy(&upper).into_owned();
+        } else if let Some((command, arg)) = parse_command(line) {
             if ctx.depth() >= Depth::Structural {
                 fields.insert(IS_REQUEST, Value::Bool(true));
-                fields.insert(COMMAND, Value::from(cmd_str.as_str()));
+                fields.insert(COMMAND, Value::from(command.as_str()));
             }
             if ctx.depth() >= Depth::Full {
                 fields.insert(ARG, Value::from(String::from_utf8_lossy(arg).as_ref()));
@@ -246,6 +263,19 @@ mod tests {
                 "prefix of {n}/{} bytes must decline",
                 bytes.len()
             );
+        }
+    }
+
+    /// `ftp`'s port-claim-honesty case, same reasoning: a corrupted `EHLO`
+    /// used to be reported as a confident `command = "FHLO"`.
+    #[test]
+    fn undefined_verb_declines_instead_of_fabricating_a_command() {
+        let m = meta(32);
+        for line in [&b"FHLO client\r\n"[..], &b"XYZZY now\r\n"[..]] {
+            assert!(Smtp.parse(line, &ctx(Depth::Full, &m)).is_err());
+        }
+        for line in [&b"STARTTLS\r\n"[..], &b"AUTH LOGIN\r\n"[..]] {
+            assert!(Smtp.parse(line, &ctx(Depth::Full, &m)).is_ok());
         }
     }
 }

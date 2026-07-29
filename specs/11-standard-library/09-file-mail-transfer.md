@@ -19,6 +19,23 @@ single `Str`. Per D7, none of these parse the data that follows a transfer-initi
 (FTP's data channel, SMTP's `DATA` body, IMAP/POP3's message bodies) — that's payload, not
 header.
 
+**`command` is matched against a closed allow-list, not a token shape.** All four protocols
+define their command vocabulary in their own RFC, and all four claim a well-known port —
+which routes *everything* on that port to them (06.6's port-claim-honesty note). Accepting
+any alphabetic token as a command therefore invents a field: a single corrupted byte turns
+`USER` into a confidently-reported `command = "VSER"`, and non-FTP traffic on port 21 reports
+whatever its first word happens to be. Declining is the correct outcome — counted and visible
+as a `PluginError` stop, no guessing. The lists carry each RFC's core set plus the extensions
+a real deployment speaks (FTP: RFC 2228/2389/2428/3659; SMTP: STARTTLS, AUTH, BDAT; POP3:
+CAPA, STLS, AUTH); an unlisted vendor command declines, which is the accepted cost.
+
+IMAP is the one exception, and only in part: a **tagged** line's second token is a client
+command by grammar and is checked against the list, but **untagged** (`*`) server data has no
+closed vocabulary — it carries message counts, `CAPABILITY` lists, `FLAGS`, `SEARCH` results —
+so it keeps the permissive best-effort read. IMAP additionally validates the tag itself
+(alphanumeric, or `*`/`+`), since a mis-detected tag delimiter is what let a corrupted line
+report `tag = "A001!LOGIN"`, `command = "ALICE"`.
+
 **ftp** (RFC 959).
 
 | Item | Spec |
