@@ -7,7 +7,9 @@ is on screen*, not to capture size. Today the GUI path degrades on exactly these
 this task removes each measured bottleneck without weakening determinism (PRD §7), the D5
 single-writer model, or D2's eviction semantics.
 
-**Depends on:** 05 (aggregator), 07 (capture I/O), 08 (CLI/front-ends), 09 (bench harness).
+**Depends on:** 05 (aggregator), 07 (capture I/O), 08 (CLI), 09 (bench harness), and — for
+12.5 specifically — [13 (TUI/web front-ends)](../13-web-ui/README.md), whose base behavior
+12.5 extends rather than originates.
 **PRD:** §7 "Stateful memory discipline", §7 "Performance", §5 use cases · D2, D4, D5,
 **D16**, **D17** (both introduced by this task).
 

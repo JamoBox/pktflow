@@ -156,6 +156,9 @@ main > section.on { display: flex; }
   transition: color .12s, border-color .12s;
 }
 .toolbar .btn:hover, .toolbar select:hover { color: var(--ink); border-color: rgba(255,255,255,.25); }
+.toolbar .btn:disabled, .toolbar select:disabled, .toolbar input:disabled {
+  opacity: .4; cursor: not-allowed;
+}
 .toolbar .hint { color: var(--muted); font-size: 12px; margin-left: auto; }
 .range-controls {
   display: inline-flex; align-items: center; gap: 8px;
@@ -566,7 +569,7 @@ details.raw pre { font-family: var(--mono); font-size: 11.5px; background: var(-
       </span>
       <button class="btn" id="tlExpandAll">expand all</button>
       <button class="btn" id="tlCollapseAll">collapse all</button>
-      <span class="hint">drag or ←→ to scrub · space plays · matches the search on the Streams tab · click a lane to drill in</span>
+      <span class="hint" id="tlHint">drag or ←→ to scrub · space plays · matches the search on the Streams tab · click a lane to drill in</span>
     </div>
     <div class="tl-scroll" id="tlScroll"></div>
   </section>
@@ -708,6 +711,7 @@ async function refetch() {
     if (doc.windowed) { doc.streams = []; doc.roots = []; }
     S.windowed = !!doc.windowed;
     S.data = doc;
+    updateTimelineToolbar();
     if (S.windowed) winReset();
     updateTimeSpan();
     S.byId = new Map(doc.streams.map(s => [s.id, s]));
@@ -1513,7 +1517,31 @@ function fmtClock(ms) {
   const d = new Date(ms);
   return `${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}:${pad(d.getUTCSeconds())}.${pad(d.getUTCMilliseconds(), 3)}`;
 }
+/* 13.3: above the windowing gate there is no finer time resolution to
+   scrub to than the server's pre-binned lanes (D17.3) — the toolbar
+   must say so rather than staying interactive and inert. */
+function updateTimelineToolbar() {
+  const disabled = !!S.windowed;
+  for (const id of ["tlPlay", "tlScrub", "tlFilterMode", "tlRangeStartInput", "tlRangeEndInput"]) {
+    const ctl = $("#" + id);
+    if (ctl) ctl.disabled = disabled;
+  }
+  const hint = $("#tlHint");
+  if (hint) {
+    hint.textContent = disabled
+      ? "scrubbing is unavailable for this capture (windowed mode — too many streams for per-stream resolution) · click a lane to drill in"
+      : "drag or ←→ to scrub · space plays · matches the search on the Streams tab · click a lane to drill in";
+  }
+  if (disabled) {
+    stopPlay();
+    const gTime = $("#globalPlayheadTime");
+    if (gTime) gTime.textContent = "—";
+    const gActive = $("#globalPlayheadActive");
+    if (gActive) gActive.textContent = "";
+  }
+}
 function renderTimeline() {
+  updateTimelineToolbar();
   if (S.windowed) { renderWinTimeline(); return; }
   const host = $("#tlScroll");
   const scroll = host.scrollTop;
@@ -1628,6 +1656,11 @@ function renderTimeline() {
   updatePlayhead();
 }
 function updatePlayhead(skipFilterUpdate = false) {
+  // 13.3: TL.start/TL.end are only ever set by the full-mode branch of
+  // renderTimeline() — in windowed mode they'd still be their unset
+  // {0,1} defaults, so computing a "playhead time" here would show a
+  // bogus near-epoch-zero timestamp instead of nothing.
+  if (S.windowed) return;
   const scrub = $("#tlScrub");
   let f = scrub ? +scrub.value / 1000 : 1.0;
 
@@ -2211,7 +2244,7 @@ document.addEventListener("keydown", ev => {
   }
   // Timeline: arrows nudge the playhead, space toggles play (unless the
   // scrubber itself has focus — then its native arrow handling wins).
-  if (S.tab === "timeline" && !typing && document.activeElement !== $("#tlScrub") && S.data) {
+  if (S.tab === "timeline" && !typing && document.activeElement !== $("#tlScrub") && S.data && !S.windowed) {
     const scrub = $("#tlScrub");
     if (ev.key === "ArrowLeft" || ev.key === "ArrowRight") {
       stopPlay();

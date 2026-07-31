@@ -1,12 +1,15 @@
 # 12.5 — Web UI at scale
 
-> Task: [12 Large-capture scale](README.md) · Depends on: 12.4 · PRD: §5 use cases, §7
-> "Performance" · D17.3, D17.4
+> Task: [12 Large-capture scale](README.md) · Depends on: 12.4, [13.1–13.3](../13-web-ui/README.md)
+> · PRD: §5 use cases, §7 "Performance" · D17.3, D17.4
 
 ## Goal
 The embedded SPA renders a million-stream capture with a viewport-bounded working set:
 windowed data intake, virtualized rows, a canvas timeline, and visible progress while a
-big file is still being read.
+big file is still being read. This is a delta on top of [task 13](../13-web-ui/README.md)'s
+baseline SPA/API (that task retrofits the spec this one originally had nothing to extend);
+"as today" below means 13.1–13.3's specified behavior, not just whatever the code happened
+to do.
 
 ## Specification
 
@@ -57,7 +60,9 @@ window cache LRU-capped; no `JSON.parse` of a body > 1 MB in windowed mode.
       click opens its stream. *(The playhead/scrub interaction is full-mode-only for
       now — reworded from "scrubbing re-queries": with lanes already time-binned there
       is no finer resolution to re-query until a zoom interaction exists, which no
-      criterion promised.)*
+      criterion promised. [13.3](../13-web-ui/03-timeline-and-scrubbing.md) is the spec
+      for this descoping and requires the toolbar to say so instead of staying live and
+      inert — see its acceptance criteria for the fix this shipped without.)*
 - [x] During a large file read, the header shows live read progress (`READING N%` from
       the tick's `progress`, estimated from packet accounting against the file size) and
       counters advance; superseded windowed responses are discarded by per-reset epoch
