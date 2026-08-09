@@ -210,3 +210,10 @@ by these five benches, honestly:
 Compiled (not run) per PR via `cargo bench --no-run --workspace` — see `.github/workflows/ci.yml`.
 Run on a schedule with relative-delta tracking via `.github/workflows/bench.yml` (15%
 regression gate against the last scheduled run's baseline).
+
+**The scheduled job's regression gate is currently unreliable** — it compares each run
+against the previous run on a different hosted machine, so cross-machine variance reads as
+a code regression and the job alternates red/green on unchanged code. See
+[`regression-investigation.md`](regression-investigation.md) for the evidence and the
+proposed fixes; until those land, treat a red `Bench` run as a prompt to investigate, not
+as a regression.
