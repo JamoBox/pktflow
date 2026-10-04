@@ -3,6 +3,8 @@
 //! All protocol knowledge lives here: link, network, transport, tunnel, and
 //! application plugins, plus the registration list.
 
+#![allow(unknown_lints, clippy::chunks_exact_to_as_chunks)]
+
 use pktflow_core::Engine;
 
 pub mod ah;

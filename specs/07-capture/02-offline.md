@@ -9,15 +9,20 @@ with deterministic results.
 ## Specification
 
 ```rust
-pub struct FileSource { /* pcap::Capture<Offline> */ }
+pub struct FileSource { /* pkttap pure-Rust reader + optional pktbaffle BPF VM */ }
 impl FileSource {
     pub fn open(path: &Path) -> Result<FileSource, CaptureError>;
+    pub fn open_with_filter(path: &Path, filter: Option<&str>) -> Result<FileSource, CaptureError>;
 }
 impl PacketSource for FileSource { /* ... */ }
 ```
 
-- libpcap handles both container formats transparently (D1) — no hand-rolled file parsing.
-  `FileFormat` errors pass through libpcap's message plus the path.
+- `pkttap` handles both container formats (`.pcap` and `.pcapng`) transparently via pure-Rust
+  parsing (D1) — no external C library build or runtime dependency. `FileFormat` errors
+  pass through `pkttap`'s message plus the path.
+- **Offline BPF filtering:** supported via `pktbaffle`'s userspace software VM (`pktbaffle::Vm`).
+  BPF filter strings passed via `--filter` are compiled by `pktbaffle` and evaluated against
+  raw packet buffers during file replay, discarding non-matching packets before ingestion.
 - **Timestamps:** file-provided, converted to `SystemTime` in `PacketMeta`; the aggregator's
   packet-time clock (05.6) makes replay of old captures behave exactly as live processing
   would have — no "everything instantly idle-times-out" bug. Out-of-order timestamps (real
@@ -33,6 +38,7 @@ impl PacketSource for FileSource { /* ... */ }
 ## Acceptance criteria
 - [x] Fixture `.pcap` and `.pcapng` files (09.2) replay with exact packet counts, lens, and
       timestamps.
+- [x] Offline BPF filtering via `pktbaffle` VM matches expected packet subset during replay.
 - [x] Nonexistent / non-capture / zero-packet files produce clean `CaptureError`s and a
       clean empty run respectively.
 - [x] Out-of-order-timestamp fixture: all packets ingested, counter set, no panic.

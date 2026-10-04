@@ -1,51 +1,45 @@
 //! Offline replay (07.2): `.pcap` and `.pcapng` through the same
-//! `PacketSource` — libpcap handles both containers transparently (D1),
+//! `PacketSource` — pkttap handles both containers transparently,
 //! no hand-rolled file parsing.
-//!
-//! Multi-linktype pcapng note: libpcap presents one link type per read
-//! handle; a file whose interfaces genuinely mix DLTs surfaces as a
-//! libpcap read error (mapped to `Backend`), not a misparse.
 
 use std::path::Path;
-use std::time::{Duration, SystemTime};
 
-use pcap::{Capture, Offline};
 use pktflow_core::{LinkType, PacketMeta};
 
-use crate::error::CaptureError;
+use crate::error::{map_pkttap_error, CaptureError};
 use crate::source::{CaptureStats, PacketSource, RawPacket};
 
 pub struct FileSource {
-    capture: Capture<Offline>,
+    capture: pkttap::Capture,
     link_type: LinkType,
     delivered: u64,
 }
 
-/// libpcap timeval → `SystemTime`. File timestamps predate the epoch in
-/// some synthetic captures; clamp rather than panic.
-pub(crate) fn timeval_to_system_time(tv_sec: i64, tv_usec: i64) -> SystemTime {
-    let secs = u64::try_from(tv_sec).unwrap_or(0);
-    let micros = u64::try_from(tv_usec).unwrap_or(0);
-    SystemTime::UNIX_EPOCH + Duration::from_secs(secs) + Duration::from_micros(micros)
-}
-
-/// timeval field widths differ across platforms, hence the cast allows.
-#[allow(clippy::unnecessary_cast, clippy::useless_conversion)]
-pub(crate) fn header_meta(header: &pcap::PacketHeader, link_type: LinkType) -> PacketMeta {
-    PacketMeta {
-        timestamp: timeval_to_system_time(header.ts.tv_sec as i64, header.ts.tv_usec as i64),
-        caplen: header.caplen as usize,
-        origlen: header.len as usize,
-        link_type,
+pub(crate) fn to_core_link_type(lt: pkttap::LinkType) -> LinkType {
+    match lt {
+        pkttap::LinkType::Ethernet => LinkType::ETHERNET,
+        pkttap::LinkType::RawIp => LinkType::RAW,
+        pkttap::LinkType::LinuxSll => LinkType(113),
     }
 }
 
 impl FileSource {
     pub fn open(path: &Path) -> Result<FileSource, CaptureError> {
-        let capture = Capture::from_file(path)
-            .map_err(|e| CaptureError::FileFormat(format!("{}: {e}", path.display())))?;
-        let dlt = capture.get_datalink().0;
-        let link_type = LinkType(u16::try_from(dlt).unwrap_or(u16::MAX));
+        Self::open_with_filter(path, None)
+    }
+
+    pub fn open_with_filter(path: &Path, filter: Option<&str>) -> Result<FileSource, CaptureError> {
+        let mut builder = pkttap::Capture::from_file(path);
+        if let Some(f) = filter {
+            builder = builder.filter(f);
+        }
+        let capture = builder.open().map_err(|e| match e {
+            pkttap::Error::Io(ref io_err) => {
+                CaptureError::FileFormat(format!("{}: {io_err}", path.display()))
+            }
+            _ => map_pkttap_error(&path.display().to_string(), &e),
+        })?;
+        let link_type = to_core_link_type(capture.link_type());
         Ok(FileSource {
             capture,
             link_type,
@@ -56,17 +50,21 @@ impl FileSource {
 
 impl PacketSource for FileSource {
     fn next_packet(&mut self) -> Result<Option<RawPacket<'_>>, CaptureError> {
-        match self.capture.next_packet() {
-            Ok(packet) => {
+        match self.capture.next() {
+            Ok(Some(pkt)) => {
                 self.delivered += 1;
-                let meta = header_meta(packet.header, self.link_type);
                 Ok(Some(RawPacket {
-                    bytes: packet.data,
-                    meta,
+                    bytes: pkt.data(),
+                    meta: PacketMeta {
+                        timestamp: pkt.timestamp(),
+                        caplen: pkt.data().len(),
+                        origlen: pkt.orig_len() as usize,
+                        link_type: self.link_type,
+                    },
                 }))
             }
-            Err(pcap::Error::NoMorePackets) => Ok(None),
-            Err(e) => Err(CaptureError::FileFormat(e.to_string())),
+            Ok(None) => Ok(None),
+            Err(e) => Err(map_pkttap_error("file capture", &e)),
         }
     }
 
@@ -75,7 +73,6 @@ impl PacketSource for FileSource {
     }
 
     fn stats(&self) -> CaptureStats {
-        // libpcap has no kernel stats for files; received is ours.
         CaptureStats {
             received: self.delivered,
             dropped_kernel: 0,

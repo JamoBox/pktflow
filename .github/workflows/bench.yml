@@ -19,8 +19,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
-      - name: Install libpcap
-        run: sudo apt-get update && sudo apt-get install -y libpcap-dev
       - uses: Swatinem/rust-cache@v2
       - name: Restore previous baseline
         uses: actions/cache/restore@v4

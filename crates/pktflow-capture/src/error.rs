@@ -26,17 +26,28 @@ pub enum CaptureError {
     Backend(String),
 }
 
-/// Maps a libpcap error for an open/read on `subject` (device or path).
-pub(crate) fn map_pcap_error(subject: &str, err: &pcap::Error) -> CaptureError {
-    let text = err.to_string();
-    let lower = text.to_lowercase();
-    if lower.contains("permission") || lower.contains("not permitted") {
-        return CaptureError::PermissionDenied {
+/// Maps a pkttap error for an open/read on `subject` (device or path).
+pub fn map_pkttap_error(subject: &str, err: &pkttap::Error) -> CaptureError {
+    match err {
+        pkttap::Error::PermissionDenied => CaptureError::PermissionDenied {
             device: subject.to_string(),
-        };
+        },
+        pkttap::Error::Filter(e) => {
+            CaptureError::Backend(format!("BPF filter error on {subject}: {e}"))
+        }
+        pkttap::Error::Pcap(e) => CaptureError::FileFormat(format!("{subject}: {e}")),
+        pkttap::Error::Io(e) => CaptureError::Io(std::io::Error::new(e.kind(), e.to_string())),
+        pkttap::Error::Platform(msg) => {
+            let lower = msg.to_lowercase();
+            if lower.contains("no such device")
+                || lower.contains("doesn't exist")
+                || lower.contains("not found")
+            {
+                CaptureError::DeviceNotFound(subject.to_string())
+            } else {
+                CaptureError::Backend(format!("{subject}: {msg}"))
+            }
+        }
+        pkttap::Error::WouldBlock => CaptureError::Backend(format!("{subject}: would block")),
     }
-    if lower.contains("no such device") || lower.contains("doesn't exist") {
-        return CaptureError::DeviceNotFound(subject.to_string());
-    }
-    CaptureError::Backend(format!("{subject}: {text}"))
 }

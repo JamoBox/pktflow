@@ -8,9 +8,6 @@ use support::{assert_golden, dual_parent_fixture, gre_fixture, pktflow, tmp_pcap
 
 #[test]
 fn tree_view_matches_golden() {
-    if cfg!(windows) {
-        return; // Npcap SDK only on Windows CI
-    }
     let path = tmp_pcap("tree", &tree_fixture());
     let out = pktflow(&["streams", "-r", &path.to_string_lossy(), "--batch"]);
     assert_eq!(out.status.code(), Some(0));
@@ -20,9 +17,6 @@ fn tree_view_matches_golden() {
 
 #[test]
 fn flat_layer_view_matches_golden() {
-    if cfg!(windows) {
-        return;
-    }
     let path = tmp_pcap("flat", &tree_fixture());
     // --layer implies --batch (the live view is tree-only).
     let out = pktflow(&["streams", "-r", &path.to_string_lossy(), "--layer", "tcp"]);
@@ -36,9 +30,6 @@ fn flat_layer_view_matches_golden() {
 
 #[test]
 fn tunnel_fixture_renders_the_full_nested_chain() {
-    if cfg!(windows) {
-        return;
-    }
     let path = tmp_pcap("gre", &gre_fixture());
     let out = pktflow(&["streams", "-r", &path.to_string_lossy(), "--batch"]);
     assert_eq!(out.status.code(), Some(0));
@@ -60,9 +51,6 @@ fn tunnel_fixture_renders_the_full_nested_chain() {
 
 #[test]
 fn merged_fold_collapses_dual_parents() {
-    if cfg!(windows) {
-        return;
-    }
     let path = tmp_pcap("dual", &dual_parent_fixture());
     let p = path.to_string_lossy();
 
@@ -84,9 +72,6 @@ fn merged_fold_collapses_dual_parents() {
 
 #[test]
 fn watch_smoke_final_frame_matches_the_plain_tree() {
-    if cfg!(windows) {
-        return;
-    }
     let path = tmp_pcap("watch", &tree_fixture());
     let p = path.to_string_lossy();
 

@@ -68,12 +68,12 @@ fn write_pcapng(path: &Path, frames: &[(u32, Vec<u8>)]) {
     for (secs, frame) in frames {
         let padded = frame.len().div_ceil(4) * 4;
         let epb_len = (32 + padded) as u32;
-        let ts_micros = u64::from(*secs) * 1_000_000;
+        let ts_nanos = u64::from(*secs) * 1_000_000_000;
         out.extend_from_slice(&6u32.to_le_bytes());
         out.extend_from_slice(&epb_len.to_le_bytes());
         out.extend_from_slice(&0u32.to_le_bytes()); // interface 0
-        out.extend_from_slice(&((ts_micros >> 32) as u32).to_le_bytes());
-        out.extend_from_slice(&(ts_micros as u32).to_le_bytes());
+        out.extend_from_slice(&((ts_nanos >> 32) as u32).to_le_bytes());
+        out.extend_from_slice(&(ts_nanos as u32).to_le_bytes());
         out.extend_from_slice(&(frame.len() as u32).to_le_bytes());
         out.extend_from_slice(&(frame.len() as u32).to_le_bytes());
         out.extend_from_slice(frame);
@@ -101,10 +101,6 @@ fn replay_and_collect(path: &Path) -> Vec<(SystemTime, usize)> {
 }
 
 #[test]
-#[cfg_attr(
-    windows,
-    ignore = "requires the Npcap runtime, which CI installs only as an SDK"
-)]
 fn pcap_and_pcapng_replay_with_exact_counts_lens_and_timestamps() {
     let frames = fixture_frames();
     let expected: Vec<(SystemTime, usize)> = frames
@@ -129,10 +125,6 @@ fn pcap_and_pcapng_replay_with_exact_counts_lens_and_timestamps() {
 }
 
 #[test]
-#[cfg_attr(
-    windows,
-    ignore = "requires the Npcap runtime, which CI installs only as an SDK"
-)]
 fn bad_files_produce_clean_errors_and_empty_files_a_clean_run() {
     // Nonexistent.
     let missing = tmp("does-not-exist.pcap");
@@ -160,10 +152,6 @@ fn bad_files_produce_clean_errors_and_empty_files_a_clean_run() {
 }
 
 #[test]
-#[cfg_attr(
-    windows,
-    ignore = "requires the Npcap runtime, which CI installs only as an SDK"
-)]
 fn out_of_order_timestamps_all_ingest_with_the_counter_set() {
     let mut frames = fixture_frames();
     frames.swap(0, 2); // 102, 101, 100: two regressions
@@ -183,10 +171,6 @@ fn out_of_order_timestamps_all_ingest_with_the_counter_set() {
 }
 
 #[test]
-#[cfg_attr(
-    windows,
-    ignore = "requires the Npcap runtime, which CI installs only as an SDK"
-)]
 fn two_replays_are_deterministic() {
     let path = tmp("determinism.pcap");
     write_pcap(&path, &fixture_frames());
