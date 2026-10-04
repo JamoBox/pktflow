@@ -56,8 +56,11 @@ impl LiveSource {
         let mut builder = pkttap::Capture::live(device)
             .promiscuous(cfg.promiscuous)
             .snaplen(u32::try_from(cfg.snaplen).unwrap_or(65535))
-            .buffer_timeout(cfg.read_timeout)
-            .nonblocking(true);
+            .buffer_timeout(cfg.read_timeout);
+        #[cfg(not(windows))]
+        {
+            builder = builder.nonblocking(true);
+        }
         if let Some(bpf) = &cfg.bpf {
             builder = builder.filter(bpf.as_str());
         }
