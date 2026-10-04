@@ -6,7 +6,8 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
-pcap.workspace = true
+pkttap.workspace = true
+pktbaffle.workspace = true
 pktflow-core.workspace = true
 thiserror.workspace = true
 

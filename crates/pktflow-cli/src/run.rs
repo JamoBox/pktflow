@@ -89,12 +89,7 @@ fn open_source(
     stop: &StopFlags,
 ) -> Result<(Box<dyn PacketSource + Send>, &'static str, String), CliError> {
     if let Some(path) = &shared.input.read {
-        if shared.filter.is_some() {
-            return Err(CliError::Usage(
-                "-f/--filter applies to live capture (-i); filter files at capture time".into(),
-            ));
-        }
-        let src = FileSource::open(path)?;
+        let src = FileSource::open_with_filter(path, shared.filter.as_deref())?;
         let name = path.display().to_string();
         Ok((
             Box::new(StopWrap {

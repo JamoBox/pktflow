@@ -6,10 +6,14 @@ during spec design. Each is binding for v1 unless a spec explicitly supersedes i
 ---
 
 ## D1 — Language & capture backend
-**Rust** (2021 edition, stable toolchain) with the **`pcap` crate** binding libpcap (Linux)
-and Npcap (Windows). One backend covers live capture, offline `.pcap`/`.pcapng` replay, and
-interface enumeration on both target platforms. The capture dependency is isolated in the
-`pktflow-capture` crate so the core engine and aggregator stay pure-Rust and fuzzable.
+**Rust** (2021 edition, stable toolchain) with **`pkttap`** (0.4) for packet capture and
+**`pktbaffle`** (0.2 with `vm` feature) for BPF filtering. `pkttap` provides native
+AF_PACKET on Linux and BPF on macOS, dynamic loading of Npcap/WinPcap on Windows, a pure-Rust
+`.pcap`/`.pcapng` reader, and interface enumeration across target platforms without C library
+build-time dependencies. `pktbaffle` compiles standard BPF filter expressions and provides
+offline BPF filtering via its userspace software VM. Capture and filtering dependencies are
+isolated in the `pktflow-capture` crate so the core engine and aggregator stay pure-Rust and
+fuzzable.
 
 ## D2 — Stream lifetime & eviction
 Hybrid policy, configured per run (`AggregatorConfig`), with different defaults per mode:

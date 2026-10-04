@@ -8,9 +8,6 @@ use support::{pktflow, tmp_pcap, tree_fixture};
 
 #[test]
 fn where_narrows_the_tree_but_keeps_lineage() {
-    if cfg!(windows) {
-        return; // Npcap SDK only on Windows CI
-    }
     let path = tmp_pcap("where-tree", &tree_fixture());
     let out = pktflow(&[
         "streams",
@@ -33,9 +30,6 @@ fn where_narrows_the_tree_but_keeps_lineage() {
 
 #[test]
 fn where_filters_the_json_batch_envelope() {
-    if cfg!(windows) {
-        return;
-    }
     let path = tmp_pcap("where-json", &tree_fixture());
     let out = pktflow(&[
         "streams",
@@ -65,9 +59,6 @@ fn where_filters_the_json_batch_envelope() {
 
 #[test]
 fn bad_where_is_a_usage_error_before_any_output() {
-    if cfg!(windows) {
-        return;
-    }
     let path = tmp_pcap("where-bad", &tree_fixture());
     let out = pktflow(&[
         "streams",

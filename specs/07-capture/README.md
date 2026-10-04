@@ -1,8 +1,9 @@
 # Task 07 — Capture I/O
 
-**Goal:** `pktflow-capture`: the only crate touching libpcap/Npcap (D1). One source
-abstraction, two implementations (offline file, live device), plus interface enumeration —
-feeding borrowed packet buffers + `PacketMeta` into the engine/aggregator pipeline.
+**Goal:** `pktflow-capture`: the only crate touching pkttap and pktbaffle (D1). One source
+abstraction, two implementations (offline file with optional BPF filtering via pktbaffle VM,
+live device), plus interface enumeration — feeding borrowed packet buffers + `PacketMeta`
+into the engine/aggregator pipeline.
 
 **Depends on:** 00 (01.2 for `PacketMeta`). Parallel to 03–05. **Blocks:** 08.
 **PRD:** FR-22, FR-23, §7 cross-platform.
@@ -10,8 +11,8 @@ feeding borrowed packet buffers + `PacketMeta` into the engine/aggregator pipeli
 ## Sub-tasks
 
 - [x] [07.1 Source abstraction](01-source-abstraction.md) — `PacketSource`, DLT mapping
-- [x] [07.2 Offline replay](02-offline.md) — pcap/pcapng files (FR-22a)
-- [x] [07.3 Live capture & interfaces](03-live.md) — devices, listing, BPF (FR-22b, FR-23)
+- [x] [07.2 Offline replay](02-offline.md) — pcap/pcapng files (FR-22a) & offline BPF via pktbaffle VM
+- [x] [07.3 Live capture & interfaces](03-live.md) — devices, listing, BPF via pkttap/pktbaffle (FR-22b, FR-23)
 
 ## Definition of done
 
